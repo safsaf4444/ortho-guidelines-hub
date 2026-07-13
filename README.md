@@ -1,6 +1,10 @@
-# React + TypeScript + Vite
+# Orthopaedic Guidelines Hub
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+**Live app: https://safsaf4444.github.io/ortho-guidelines-hub/**
+
+A curated, mobile-friendly directory of current orthopaedic guidance for doctors — combining national guidance, specialist society guidance, and local pathways. A navigation tool and quick-reference hub for ward, on-call, and clinic use; not a replacement for source guidance or clinical judgement.
+
+Built with React + TypeScript + Vite, backed by Supabase (with automatic fallback to bundled static data when no database is configured).
 
 ## Supabase setup
 
