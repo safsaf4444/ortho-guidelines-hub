@@ -23,6 +23,22 @@ The app works without a database (falls back to static data), but to enable data
 
 `VITE_*` variables are exposed to the frontend bundle — only put the anon key there, never the service role key. `SUPABASE_SERVICE_ROLE_KEY` is read only by `scripts/seed.ts`.
 
+## Progressive Web App (PWA)
+
+The app is installable as a PWA. A service worker (via `vite-plugin-pwa`) caches the app shell so it loads quickly and can open without a network connection.
+
+**What is cached:** only the static app shell — the HTML, the compiled JS/CSS bundle (which includes the bundled guidance content), the icons, and the web manifest. No live or dynamic data and no cross-origin requests are cached; Google Fonts load from the network and fall back to system fonts when offline.
+
+**Not a full offline clinical app.** Because the guidance content is compiled into the cached bundle, it stays viewable offline — but this is a convenience cache, not a live clinical source. When offline, the app shows a banner reminding you that you are viewing a cached copy; always confirm against the live source guidance. This remains a navigation and quick-reference hub, not a substitute for source guidance or clinical judgement.
+
+**Installing:**
+
+- **Desktop (Chrome / Edge):** click the install icon in the address bar, or use the browser menu → *Install Orthopaedic Guidelines Hub*. It opens in its own window. (Firefox desktop does not offer install; the app still works in the browser tab.)
+- **Android (Chrome):** browser menu → *Install app* / *Add to Home screen*.
+- **iPhone / iPad (Safari):** there is no automatic prompt — tap the **Share** button, then *Add to Home Screen*.
+
+**How updates propagate:** the service worker uses `autoUpdate`. Each successful deploy produces newly hashed assets; when an installed or open app next loads, the new version is fetched and activated automatically in the background. Users get the latest content on their next visit or reload — there is no manual update step and no update prompt.
+
 Currently, two official plugins are available:
 
 - [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
