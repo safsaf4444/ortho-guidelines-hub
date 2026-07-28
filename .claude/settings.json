@@ -14,7 +14,14 @@
       "Bash(npx tsx *)",
       "Bash(rm scratch-status.ts)",
       "Bash(npx tsc *)",
-      "Bash(rm scratch-health.ts)"
+      "Bash(rm scratch-health.ts)",
+      "Bash(cat >> *)",
+      "Bash(npx vite *)",
+      "Bash(node \"C:\\\\Users\\\\safad\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-safad-OneDrive-Desktop-Building-Projects-NHS-projects-Ortho-guidelines-hub\\\\017bd5eb-5b30-4d75-9137-f83f24490eb0\\\\scratchpad\\\\check-pages.js\")",
+      "Bash(MSYS_NO_PATHCONV=1 npx vite build --base=/ortho-guidelines-hub/)"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\safad\\.claude\\projects\\c--Users-safad-OneDrive-Desktop-Building-Projects-NHS-projects-Ortho-guidelines-hub\\memory"
     ]
   }
 }
