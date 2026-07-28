@@ -1,5 +1,7 @@
 # Orthopaedic Guidelines Hub
 
+© 2026 Safa Paravakkal. All rights reserved. No licence is granted to reproduce or reuse this code or content structure without permission.
+
 **Live app: https://safsaf4444.github.io/ortho-guidelines-hub/**
 
 A curated, mobile-friendly directory of current orthopaedic guidance for doctors — combining national guidance, specialist society guidance, and local pathways. A navigation tool and quick-reference hub for ward, on-call, and clinic use; not a replacement for source guidance or clinical judgement.
