@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
-import { Search, ChevronDown, ExternalLink, Menu, X, TriangleAlert, Plus } from 'lucide-react'
+import { Search, ChevronDown, ExternalLink, Menu, X, TriangleAlert, Plus, WifiOff } from 'lucide-react'
 import { GUIDELINES_DATA, Guideline, GuidelineVersion } from './data/guidelines-data'
 import { guidelinesService } from './lib/guidelines-service'
 import { findDuplicateCandidates, pairKey, DuplicateCandidate } from './lib/duplicate-detection'
@@ -95,8 +95,27 @@ function sortSections(names: string[]): string[] {
   });
 }
 
+// Tracks connectivity so the UI can flag when the user is viewing the cached
+// (installed/offline) copy rather than a live-loaded page.
+function useOnlineStatus(): boolean {
+  const [online, setOnline] = useState(
+    typeof navigator === 'undefined' ? true : navigator.onLine
+  );
+  useEffect(() => {
+    const update = () => setOnline(navigator.onLine);
+    window.addEventListener('online', update);
+    window.addEventListener('offline', update);
+    return () => {
+      window.removeEventListener('online', update);
+      window.removeEventListener('offline', update);
+    };
+  }, []);
+  return online;
+}
+
 export default function App() {
   const [guidelines, setGuidelines] = useState<Guideline[]>(GUIDELINES_DATA);
+  const isOnline = useOnlineStatus();
 
   // Silently replace static data with DB data when Supabase is configured.
   // Falls back to GUIDELINES_DATA automatically — see guidelines-service.ts.
@@ -263,6 +282,14 @@ export default function App() {
           </div>
         </div>
       </header>
+
+      {/* Offline notice — honest signal that this is a cached copy, not live data */}
+      {!isOnline && (
+        <div className="bg-amber-50 border-b border-amber-200 px-5 py-1.5 flex items-center gap-2 text-[11px] text-amber-800 shrink-0">
+          <WifiOff className="w-3 h-3 shrink-0" />
+          <span>Offline — showing a cached copy. Always confirm against the live source guidance.</span>
+        </div>
+      )}
 
       {/* Body */}
       <div className="flex flex-1 overflow-hidden">
