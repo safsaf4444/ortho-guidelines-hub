@@ -37,8 +37,25 @@ if (!url || !key) {
 const supabase = createClient(url, key);
 
 async function seed() {
+  // Check if guidelines table is already populated
+  const { count, error: countError } = await supabase
+    .from('guidelines')
+    .select('id', { count: 'exact', head: true });
+
+  if (countError) {
+    console.error('\n❌ Could not check guidelines count:', countError.message);
+    process.exit(1);
+  }
+
+  if (count && count > 0) {
+    console.log(`\n⚠️  Supabase guidelines table already contains ${count} rows.`);
+    console.log(`🛡️  Seed cancelled to prevent introducing duplicate entries over verified data.`);
+    console.log(`💡 To update verified data, run: npm run upsert-verified (or npx tsx scripts/upsert-verified.ts)\n`);
+    return;
+  }
+
   const rows = GUIDELINES_DATA.map(toDbRow);
-  console.log(`Upserting ${rows.length} guidelines into Supabase…`);
+  console.log(`Upserting ${rows.length} static guidelines into empty Supabase table…`);
 
   const { error } = await supabase
     .from('guidelines')
