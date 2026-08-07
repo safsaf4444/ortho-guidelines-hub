@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo } from 'react'
-import { Search, ChevronDown, ExternalLink, Menu, X, TriangleAlert, Plus, WifiOff } from 'lucide-react'
+import { Search, ChevronDown, ExternalLink, Menu, X, TriangleAlert, Plus, WifiOff, Download, Database } from 'lucide-react'
 import { GUIDELINES_DATA, Guideline, GuidelineVersion } from './data/guidelines-data'
 import { guidelinesService } from './lib/guidelines-service'
+import { isSupabaseEnabled } from './lib/supabase'
 import { findDuplicateCandidates, pairKey, DuplicateCandidate } from './lib/duplicate-detection'
 import { computeMerge } from './lib/dedupe'
 import { cn } from './lib/utils'
@@ -198,7 +199,7 @@ export default function App() {
   };
 
   const persistGuideline = async (updated: Guideline, isNew: boolean) => {
-    // Optimistic update — reflects immediately, persists in background
+    // Update local state immediately
     setGuidelines(prev =>
       isNew ? [...prev, updated] : prev.map(g => g.id === updated.id ? updated : g)
     );
@@ -209,10 +210,21 @@ export default function App() {
         await guidelinesService.update(updated);
       }
     } catch (err) {
-      // guidelines-service already logs the raw Supabase error to console;
-      // this still shows locally-applied changes may not have saved.
-      console.error('[persistGuideline] Failed to persist guideline — local view may be ahead of the database:', err);
+      console.error('[persistGuideline] Failed to persist guideline to Supabase:', err);
+      const msg = err instanceof Error ? err.message : String(err);
+      alert(`⚠️ DATABASE SAVE WARNING:\n\nFailed to save to Supabase database!\n\nReason: ${msg}\n\nYour changes are visible in this browser tab for now, but will be lost if you refresh. Please check your Supabase connection.`);
     }
+  };
+
+  const handleExportJSON = () => {
+    const jsonStr = JSON.stringify(guidelines, null, 2);
+    const blob = new Blob([jsonStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `ortho-guidelines-export-${new Date().toISOString().split('T')[0]}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
   };
 
   const handleSave = (updated: Guideline) => {
@@ -266,11 +278,11 @@ export default function App() {
     <div className="flex flex-col h-screen overflow-hidden bg-white font-sans text-slate-800">
 
       {/* Header */}
-      <header className="h-[56px] bg-white border-b border-slate-200 flex items-center px-5 shrink-0 z-50">
-        <button className="md:hidden mr-3 text-slate-600" onClick={() => setIsSidebarOpen(!isSidebarOpen)}>
-          <Menu className="w-5 h-5" />
-        </button>
+      <header className="h-[56px] bg-white border-b border-slate-200 flex items-center justify-between px-5 shrink-0 z-50">
         <div className="flex items-center gap-3">
+          <button className="md:hidden text-slate-600" onClick={() => setIsSidebarOpen(!isSidebarOpen)}>
+            <Menu className="w-5 h-5" />
+          </button>
           <div className="bg-[#0F172A] text-white w-7 h-7 rounded flex items-center justify-center font-semibold text-sm shrink-0">
             O
           </div>
@@ -280,6 +292,32 @@ export default function App() {
               National guidance, grouped by topic — ward, on call, and clinic
             </span>
           </div>
+        </div>
+
+        <div className="flex items-center gap-3">
+          {/* Supabase connection badge */}
+          <div
+            title={isSupabaseEnabled ? "Connected to Supabase live database" : "Operating in static fallback mode"}
+            className={cn(
+              "hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border",
+              isSupabaseEnabled
+                ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                : "bg-amber-50 text-amber-700 border-amber-200"
+            )}
+          >
+            <Database className="w-3.5 h-3.5" />
+            <span>{isSupabaseEnabled ? "Supabase Live" : "Static Mode"}</span>
+          </div>
+
+          {/* Export JSON backup button */}
+          <button
+            onClick={handleExportJSON}
+            title="Download current guidelines as JSON backup"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-md transition-colors"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Export JSON</span>
+          </button>
         </div>
       </header>
 

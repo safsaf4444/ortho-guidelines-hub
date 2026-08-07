@@ -36,16 +36,16 @@ export const guidelinesService = {
     }
   },
 
-  /** Persist a new guideline. No-op when Supabase is not configured. */
+  /** Persist a new guideline to Supabase. Throws if Supabase is unconfigured or write fails. */
   async create(guideline: Guideline): Promise<void> {
-    if (!supabase) return;
+    if (!supabase) throw new Error('Supabase client is not initialized. Check your connection / environment variables.');
     const { error } = await supabase.from('guidelines').insert(toDbRow(guideline));
     if (error) throw asPersistError('create', error);
   },
 
-  /** Update an existing guideline. No-op when Supabase is not configured. */
+  /** Update an existing guideline in Supabase. Throws if Supabase is unconfigured or write fails. */
   async update(guideline: Guideline): Promise<void> {
-    if (!supabase) return;
+    if (!supabase) throw new Error('Supabase client is not initialized. Check your connection / environment variables.');
     const { error } = await supabase
       .from('guidelines')
       .update(toDbRow(guideline))
@@ -53,9 +53,9 @@ export const guidelinesService = {
     if (error) throw asPersistError('update', error);
   },
 
-  /** Permanently delete a guideline. No-op when Supabase is not configured. */
+  /** Permanently delete a guideline from Supabase. Throws if Supabase is unconfigured or write fails. */
   async remove(id: string): Promise<void> {
-    if (!supabase) return;
+    if (!supabase) throw new Error('Supabase client is not initialized. Check your connection / environment variables.');
     const { error } = await supabase.from('guidelines').delete().eq('id', id);
     if (error) throw asPersistError('delete', error);
   },
