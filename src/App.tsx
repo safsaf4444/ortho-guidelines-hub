@@ -3,7 +3,7 @@ import { Search, ChevronDown, ExternalLink, Menu, X, TriangleAlert, Plus, WifiOf
 import { GUIDELINES_DATA, Guideline, GuidelineVersion } from './data/guidelines-data'
 import { guidelinesService } from './lib/guidelines-service'
 import { isSupabaseEnabled } from './lib/supabase'
-import { findDuplicateCandidates, pairKey, DuplicateCandidate } from './lib/duplicate-detection'
+import { findDuplicateCandidates, countGuidelinesWithDuplicates, pairKey, DuplicateCandidate } from './lib/duplicate-detection'
 import { computeMerge } from './lib/dedupe'
 import { cn } from './lib/utils'
 
@@ -382,7 +382,7 @@ export default function App() {
                   "px-1.5 py-px rounded text-[11px] font-medium",
                   currentSection === DUPLICATES_VIEW ? "bg-white/20 text-white" : "bg-amber-100 text-amber-700"
                 )}>
-                  {duplicateCandidates.length}
+                  {countGuidelinesWithDuplicates(duplicateCandidates)}
                 </span>
               </button>
 
