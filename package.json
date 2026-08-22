@@ -8,7 +8,8 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "seed": "tsx scripts/seed.ts"
+    "seed": "tsx scripts/seed.ts",
+    "export-static": "tsx scripts/export-static.ts"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.3.0",
