@@ -51,6 +51,26 @@ sign-in, an editor UUID, editor-restricted write policies, and the
 editor-ownership model, the `WRITES_ENABLED` flag and the DB policies will be
 replaced with real per-editor gating.
 
+## Data remediation ordering
+
+`src/data/guidelines-data.ts` is **generated** from the live Supabase DB by
+`npm run export-static` — it must not be hand-edited into a divergent source of
+truth. Dead-link and other data fixes therefore land in the DB first, then flow
+back into the static fallback by regeneration.
+
+For the pending `supabase-data-remediation-batch1.sql` (seven safe mechanical
+dead-link fixes), the required order is:
+
+1. **Complete the read-only lockdown first** (see "Security — temporary
+   read-only lockdown" above) — writes must be locked down before running
+   remediation SQL.
+2. Run `supabase-data-remediation-batch1.sql` once, by hand, in the Supabase SQL
+   editor (it is transactional and fails closed on a precondition mismatch).
+3. Run `npm run export-static` to regenerate `src/data/guidelines-data.ts` from
+   the now-updated DB.
+4. Commit the regenerated static fallback in a **separate follow-up PR**.
+5. Rerun `npm run flag-dead-links` to confirm the fixed links now pass.
+
 ## Progressive Web App (PWA)
 
 The app is installable as a PWA. A service worker (via `vite-plugin-pwa`) caches the app shell so it loads quickly and can open without a network connection.

@@ -1,5 +1,6 @@
 {
   "_comment": "URLs/domains that automated checks cannot reach. Seeded from prior manual verification work. New entries are appended automatically by detect-changes.ts after 3 consecutive failed automated checks. Nothing here is auto-removed -- if a site starts working again, delete its entry by hand or just leave it (it's simply skipped going forward).",
+  "_girft_note": "GIRFT hosts (gettingitrightfirsttime.co.uk, girft-interactivepathways.org.uk) are skipped because automated requests to them are unreliable -- they return HTTP 403 to bots while loading normally in a browser. IMPORTANT: skipping here does NOT prove those URLs are permanently healthy; it only stops the automated dead-link checker from mis-reporting them as broken. GIRFT links still need occasional manual/browser review to confirm they resolve.",
   "domains": [
     {
       "domain": "orthopaedictrauma.org.uk",
@@ -12,6 +13,18 @@
       "reason": "Cloudflare bot-challenge blocks automated fetches -- confirmed manually in the prior verification pass. Domain confirmed via web search (official BASK site) -- double check this is the same domain used in your master sheet's BASK rows before relying on it.",
       "added": "2026-07-28",
       "source": "manual"
+    },
+    {
+      "domain": "gettingitrightfirsttime.co.uk",
+      "reason": "Returns HTTP 403 to automated requests across the board -- consistent bot-block, not dead. Confirmed in the 2026-08-22 dead-link audit: 46 GIRFT URLs (pathway PDFs, reports, and the pathways index) all 403'd to the checker while loading normally in a browser. Added to stop re-flagging GIRFT as broken; verify GIRFT links manually.",
+      "added": "2026-08-22",
+      "source": "audit"
+    },
+    {
+      "domain": "girft-interactivepathways.org.uk",
+      "reason": "GIRFT-family host serving interactive pathway pages; returned HTTP 403 to the automated checker in the 2026-08-22 audit (same bot-block behaviour as gettingitrightfirsttime.co.uk). Single sample this pass -- verify manually.",
+      "added": "2026-08-22",
+      "source": "audit"
     }
   ]
 }
