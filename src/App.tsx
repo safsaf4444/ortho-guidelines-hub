@@ -126,6 +126,10 @@ export default function App() {
   const [currentSection, setCurrentSection] = useState('All');
   const [searchQuery, setSearchQuery] = useState('');
   const [linkStatusFilter, setLinkStatusFilter] = useState('All');
+  // Sidebar navigation always filters by clinical section; this toggle only
+  // changes how the resulting cards are grouped/labelled in the main panel —
+  // same underlying data, no schema change, just a different lens on it.
+  const [groupBy, setGroupBy] = useState<'section' | 'provider'>('section');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
   const [editingGuideline, setEditingGuideline] = useState<Guideline | null>(null);
@@ -153,18 +157,32 @@ export default function App() {
     return true;
   });
 
-  // A guideline appears under its primary section AND every cross-listed
-  // section — one canonical record, shown wherever it's clinically relevant.
+  // Two lenses on the same filtered data, chosen by the groupBy toggle:
+  //  - 'section': a guideline appears under its primary section AND every
+  //    cross-listed section — one canonical record, shown wherever it's
+  //    clinically relevant. Sidebar filtering is unaffected either way.
+  //  - 'provider': grouped by issuing body/source instead, one bucket per
+  //    provider, no cross-listing (a guideline has exactly one source).
   const grouped: Record<string, Guideline[]> = {};
-  filteredData.forEach(g => {
-    const memberSections = [g.section, ...(g.crossListedIn ?? [])];
-    for (const sec of memberSections) {
-      if (!grouped[sec]) grouped[sec] = [];
-      grouped[sec].push(g);
-    }
-  });
+  if (groupBy === 'section') {
+    filteredData.forEach(g => {
+      const memberSections = [g.section, ...(g.crossListedIn ?? [])];
+      for (const sec of memberSections) {
+        if (!grouped[sec]) grouped[sec] = [];
+        grouped[sec].push(g);
+      }
+    });
+  } else {
+    filteredData.forEach(g => {
+      const key = g.source || 'Unspecified';
+      if (!grouped[key]) grouped[key] = [];
+      grouped[key].push(g);
+    });
+  }
 
-  const sortedSections = sortSections(Object.keys(grouped));
+  const sortedSections = groupBy === 'section'
+    ? sortSections(Object.keys(grouped))
+    : Object.keys(grouped).sort((a, b) => a.localeCompare(b));
 
   const toggleSection = (section: string) => {
     setCollapsedSections(prev => {
@@ -451,6 +469,31 @@ export default function App() {
                     <option value="All">All link statuses</option>
                     {LINK_STATUS_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                   </select>
+                  {/* Group-by toggle: same filtered data, different lens on the main panel.
+                      Sidebar section filtering is untouched — this only changes how the
+                      resulting cards are bucketed and labelled below. */}
+                  <div className="hidden md:flex items-center border border-slate-200 rounded overflow-hidden shrink-0">
+                    <button
+                      onClick={() => setGroupBy('section')}
+                      title="Group cards by clinical section"
+                      className={cn(
+                        "px-2.5 py-1.5 text-[12px] font-medium transition-colors",
+                        groupBy === 'section' ? "bg-[#0F172A] text-white" : "bg-white text-slate-600 hover:bg-slate-50"
+                      )}
+                    >
+                      By section
+                    </button>
+                    <button
+                      onClick={() => setGroupBy('provider')}
+                      title="Group cards by issuing provider/organisation"
+                      className={cn(
+                        "px-2.5 py-1.5 text-[12px] font-medium transition-colors border-l border-slate-200",
+                        groupBy === 'provider' ? "bg-[#0F172A] text-white" : "bg-white text-slate-600 hover:bg-slate-50"
+                      )}
+                    >
+                      By provider
+                    </button>
+                  </div>
                   <button
                     onClick={handleAddNew}
                     className="flex items-center gap-1 px-2.5 py-1.5 bg-[#0F172A] text-white rounded text-[12px] font-medium hover:bg-slate-800 transition-colors shrink-0"
@@ -482,6 +525,7 @@ export default function App() {
                   key={section}
                   section={section}
                   items={grouped[section]}
+                  groupBy={groupBy}
                   isCollapsed={collapsedSections.has(section)}
                   onToggleCollapse={() => toggleSection(section)}
                   onEdit={handleEdit}
@@ -509,16 +553,23 @@ export default function App() {
 // ─── Section Container ────────────────────────────────────────────────────────
 
 function SectionContainer({
-  section, items, isCollapsed, onToggleCollapse, onEdit, onQuickUpdate,
+  section, items, groupBy, isCollapsed, onToggleCollapse, onEdit, onQuickUpdate,
 }: {
   section: string;
   items: Guideline[];
+  groupBy: 'section' | 'provider';
   isCollapsed: boolean;
   onToggleCollapse: () => void;
   onEdit: (g: Guideline) => void;
   onQuickUpdate: (g: Guideline) => void;
 }) {
-  const subtitle = SECTION_SUBTITLES[section] || 'Clinical guidance';
+  // When grouped by section, `section` is a real clinical section with a
+  // known subtitle. When grouped by provider, `section` is actually a
+  // provider/source name — show a count instead of a clinical subtitle,
+  // since SECTION_SUBTITLES has no entry (and wouldn't be meaningful) for it.
+  const subtitle = groupBy === 'section'
+    ? (SECTION_SUBTITLES[section] || 'Clinical guidance')
+    : `${items.length} guideline${items.length === 1 ? '' : 's'}`;
 
   return (
     <div className="border border-slate-200 rounded-md mb-2.5 overflow-hidden bg-white">
