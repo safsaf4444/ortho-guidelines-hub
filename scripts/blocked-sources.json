@@ -1,0 +1,17 @@
+{
+  "_comment": "URLs/domains that automated checks cannot reach. Seeded from prior manual verification work. New entries are appended automatically by detect-changes.ts after 3 consecutive failed automated checks. Nothing here is auto-removed -- if a site starts working again, delete its entry by hand or just leave it (it's simply skipped going forward).",
+  "domains": [
+    {
+      "domain": "orthopaedictrauma.org.uk",
+      "reason": "HTTP 401 to automated requests -- confirmed manually in the prior verification pass. Domain confirmed via web search (official OTS site) -- double check this is the same domain used in your master sheet's OTS rows before relying on it.",
+      "added": "2026-07-28",
+      "source": "manual"
+    },
+    {
+      "domain": "bask.ac.uk",
+      "reason": "Cloudflare bot-challenge blocks automated fetches -- confirmed manually in the prior verification pass. Domain confirmed via web search (official BASK site) -- double check this is the same domain used in your master sheet's BASK rows before relying on it.",
+      "added": "2026-07-28",
+      "source": "manual"
+    }
+  ]
+}
