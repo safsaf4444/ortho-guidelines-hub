@@ -23,6 +23,34 @@ The app works without a database (falls back to static data), but to enable data
 
 `VITE_*` variables are exposed to the frontend bundle — only put the anon key there, never the service role key. `SUPABASE_SERVICE_ROLE_KEY` is read only by `scripts/seed.ts`.
 
+## Security — temporary read-only lockdown
+
+**Status: temporary read-only lockdown pending governance and editor-ownership
+decisions.** All decisions about who has editing access, ownership, and
+long-term maintenance are deliberately deferred until QI/governance direction is
+clearer.
+
+This closes the previous public-write exposure with the smallest possible change:
+
+- **Database:** `supabase-migration-readonly-lockdown.sql` enables Row Level
+  Security on `public.guidelines` with a single public read-only `SELECT`
+  policy and **no** insert/update/delete policies — so once run, nobody
+  (including the owner) can write through the public anon key / Data API / app.
+  The `service_role` key used by `scripts/*.ts` bypasses RLS, so seeding/export
+  scripts still work. *(This migration is run by hand, not by CI, and is not run
+  as part of this PR.)*
+- **App:** every write control (Add / Edit / Delete / Merge / link-verification
+  / changelog “Add note”) is hidden from everyone via the `WRITES_ENABLED`
+  flag in `src/App.tsx` (currently `false`). Browsing, search, filtering,
+  section/provider grouping, cross-references and the static fallback are
+  unchanged for all visitors.
+
+Explicitly **not** included yet (parked as a later follow-up): Supabase Auth
+sign-in, an editor UUID, editor-restricted write policies, and the
+`guideline_changelog` table/migration. When governance decides the
+editor-ownership model, the `WRITES_ENABLED` flag and the DB policies will be
+replaced with real per-editor gating.
+
 ## Progressive Web App (PWA)
 
 The app is installable as a PWA. A service worker (via `vite-plugin-pwa`) caches the app shell so it loads quickly and can open without a network connection.
