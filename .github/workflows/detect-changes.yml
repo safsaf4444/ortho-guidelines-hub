@@ -1,0 +1,42 @@
+name: Detect guideline changes
+
+on:
+  schedule:
+    # Every Monday at 06:00 UTC. Change this line to adjust frequency.
+    - cron: '0 6 * * 1'
+  workflow_dispatch: {} # lets you click "Run workflow" manually in the Actions tab
+
+permissions:
+  contents: write   # to commit the updated blocked-sources.json back to the repo
+  issues: write      # to open the "pending-guideline-update" issues
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run change detection
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: npx tsx scripts/detect-changes.ts
+
+      - name: Commit updated blocked-sources.json (if changed)
+        run: |
+          git config user.name "ortho-hub-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add scripts/blocked-sources.json
+          git diff --cached --quiet || git commit -m "chore: update blocked-sources.json from automated change check"
+          git push
