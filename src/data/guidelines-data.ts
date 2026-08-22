@@ -2384,23 +2384,6 @@ export const GUIDELINES_DATA: Guideline[] = [
     versions: []
   },
   {
-    id: 'bois-flagged',
-    section: 'Quick Reference',
-    topic: 'BOIS guidelines (site error)',
-    subGroup: 'Site error',
-    source: 'BOIS',
-    type: 'Specialist society guidance',
-    summary: 'British Orthopaedic Imaging Society (BOIS) produces guidance on imaging in orthopaedic practice. Site returned an error at last check. Guidance covers appropriate use of X-ray, CT, MRI, and ultrasound in orthopaedics.',
-    regionalVariation: false,
-    localOverlayNeeded: false,
-    notes: 'Site returning error. Retry at BOIS website or contact society directly.',
-    lastChecked: '2026-01-01',
-    status: 'Flagged',
-    priority: 'low',
-    sourceAccessStatus: 'broken',
-    versions: []
-  },
-  {
     id: 'bscos-flagged',
     section: 'Paediatrics',
     topic: 'BSCOS guidelines (login required)',
