@@ -11,6 +11,16 @@ import { cn } from './lib/utils'
 const DUPLICATES_VIEW = '__duplicates__';
 const CHANGELOG_VIEW = '__changelog__';
 
+// TEMPORARY READ-ONLY LOCKDOWN pending governance and editor-ownership decisions.
+// While this is false, every write control (Add / Edit / Delete / Merge /
+// link-verification / changelog "Add note") is hidden from everyone, matching the
+// database lockdown in supabase-migration-readonly-lockdown.sql (RLS on, no write
+// policy). Browsing, search, filtering, grouping and the static fallback are
+// unaffected. A future Auth/editor model will replace this flag with real
+// per-user gating. Typed as boolean so the (currently unreachable) write UI still
+// type-checks for that later change.
+const WRITES_ENABLED: boolean = false;
+
 const LINK_STATUS_OPTIONS: { value: NonNullable<Guideline['linkVerificationStatus']>; label: string }[] = [
   { value: 'unchecked', label: 'Unchecked' },
   { value: 'needs-review', label: 'Needs review' },
@@ -539,14 +549,16 @@ export default function App() {
                       By provider
                     </button>
                   </div>
-                  <button
-                    onClick={handleAddNew}
-                    className="flex items-center gap-1 px-2.5 py-1.5 bg-[#0F172A] text-white rounded text-[12px] font-medium hover:bg-slate-800 transition-colors shrink-0"
-                  >
-                    <Plus className="w-3 h-3" />
-                    <span className="hidden sm:inline">Add guideline</span>
-                    <span className="sm:hidden">Add</span>
-                  </button>
+                  {WRITES_ENABLED && (
+                    <button
+                      onClick={handleAddNew}
+                      className="flex items-center gap-1 px-2.5 py-1.5 bg-[#0F172A] text-white rounded text-[12px] font-medium hover:bg-slate-800 transition-colors shrink-0"
+                    >
+                      <Plus className="w-3 h-3" />
+                      <span className="hidden sm:inline">Add guideline</span>
+                      <span className="sm:hidden">Add</span>
+                    </button>
+                  )}
                 </div>
               </>
             )}
@@ -585,7 +597,7 @@ export default function App() {
         </main>
       </div>
 
-      {editingGuideline && (
+      {WRITES_ENABLED && editingGuideline && (
         <EditModal
           guideline={editingGuideline}
           onSave={handleSave}
@@ -756,26 +768,30 @@ function GuidelineCard({
                   {item.linkLastVerified && (
                     <span className="text-[10px] text-slate-400">verified {item.linkLastVerified}</span>
                   )}
-                  <select
-                    value={linkStatus}
-                    onClick={e => e.stopPropagation()}
-                    onChange={e => onQuickUpdate({
-                      ...item,
-                      linkVerificationStatus: e.target.value as Guideline['linkVerificationStatus'],
-                    })}
-                    className="text-[10px] border border-slate-200 rounded px-1 py-0.5 bg-white focus:outline-none"
-                  >
-                    {LINK_STATUS_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-                  </select>
-                  <button
-                    onClick={e => {
-                      e.stopPropagation();
-                      onQuickUpdate({ ...item, linkVerificationStatus: 'verified', linkLastVerified: todayISO() });
-                    }}
-                    className="text-[10px] text-slate-500 hover:text-slate-700 underline underline-offset-2"
-                  >
-                    Mark verified today
-                  </button>
+                  {WRITES_ENABLED && (
+                    <>
+                      <select
+                        value={linkStatus}
+                        onClick={e => e.stopPropagation()}
+                        onChange={e => onQuickUpdate({
+                          ...item,
+                          linkVerificationStatus: e.target.value as Guideline['linkVerificationStatus'],
+                        })}
+                        className="text-[10px] border border-slate-200 rounded px-1 py-0.5 bg-white focus:outline-none"
+                      >
+                        {LINK_STATUS_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                      </select>
+                      <button
+                        onClick={e => {
+                          e.stopPropagation();
+                          onQuickUpdate({ ...item, linkVerificationStatus: 'verified', linkLastVerified: todayISO() });
+                        }}
+                        className="text-[10px] text-slate-500 hover:text-slate-700 underline underline-offset-2"
+                      >
+                        Mark verified today
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
               <div className="flex flex-col">
@@ -850,12 +866,14 @@ function GuidelineCard({
               )}
               <span className="text-[10px] text-slate-400">ID: {item.id}</span>
             </div>
-            <button
-              onClick={e => { e.stopPropagation(); onEdit(item); }}
-              className="px-2 py-0.5 text-[10px] font-medium border border-slate-200 rounded text-slate-400 hover:bg-slate-50 hover:text-slate-600 transition-colors"
-            >
-              Edit
-            </button>
+            {WRITES_ENABLED && (
+              <button
+                onClick={e => { e.stopPropagation(); onEdit(item); }}
+                className="px-2 py-0.5 text-[10px] font-medium border border-slate-200 rounded text-slate-400 hover:bg-slate-50 hover:text-slate-600 transition-colors"
+              >
+                Edit
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -930,25 +948,27 @@ function CardChangelog({ guidelineId }: { guidelineId: string }) {
         </ul>
       )}
 
-      <div className="flex items-center gap-1.5">
-        <input
-          type="text"
-          value={text}
-          onChange={e => setText(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addNote(); } }}
-          onClick={e => e.stopPropagation()}
-          placeholder="Add a note…"
-          className="flex-1 min-w-0 px-2 py-1 border border-slate-200 rounded text-[11px] bg-white focus:outline-none focus:ring-1 focus:ring-slate-300"
-        />
-        <button
-          onClick={e => { e.stopPropagation(); addNote(); }}
-          disabled={saving || !text.trim()}
-          className="flex items-center gap-1 px-2 py-1 text-[11px] font-medium border border-slate-200 rounded text-slate-600 hover:bg-slate-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
-        >
-          <Plus className="w-3 h-3" />
-          Add note
-        </button>
-      </div>
+      {WRITES_ENABLED && (
+        <div className="flex items-center gap-1.5">
+          <input
+            type="text"
+            value={text}
+            onChange={e => setText(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addNote(); } }}
+            onClick={e => e.stopPropagation()}
+            placeholder="Add a note…"
+            className="flex-1 min-w-0 px-2 py-1 border border-slate-200 rounded text-[11px] bg-white focus:outline-none focus:ring-1 focus:ring-slate-300"
+          />
+          <button
+            onClick={e => { e.stopPropagation(); addNote(); }}
+            disabled={saving || !text.trim()}
+            className="flex items-center gap-1 px-2 py-1 text-[11px] font-medium border border-slate-200 rounded text-slate-600 hover:bg-slate-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+          >
+            <Plus className="w-3 h-3" />
+            Add note
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -1345,12 +1365,14 @@ function DuplicatePairCard({
             </span>
           ))}
         </div>
-        <button
-          onClick={() => onDismiss(a, b)}
-          className="text-[10px] text-slate-400 hover:text-slate-600 shrink-0 underline underline-offset-2"
-        >
-          Keep both — dismiss
-        </button>
+        {WRITES_ENABLED && (
+          <button
+            onClick={() => onDismiss(a, b)}
+            className="text-[10px] text-slate-400 hover:text-slate-600 shrink-0 underline underline-offset-2"
+          >
+            Keep both — dismiss
+          </button>
+        )}
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-2">
@@ -1370,45 +1392,49 @@ function DuplicatePairCard({
               <span className="text-[10px] text-slate-400">
                 {g.section} · {g.source} · {g.status}{g.archived ? ' · archived' : ''} · {g.versions.length} link{g.versions.length === 1 ? '' : 's'}
               </span>
-              <div className="flex items-center gap-2 mt-1">
-                <button
-                  onClick={() => onOpen(g)}
-                  className="text-[10px] text-slate-500 hover:text-slate-700 underline underline-offset-2"
-                >
-                  Open
-                </button>
-                {!isCanonical && (
+              {WRITES_ENABLED && (
+                <div className="flex items-center gap-2 mt-1">
                   <button
-                    onClick={() => setCanonicalId(g.id)}
+                    onClick={() => onOpen(g)}
                     className="text-[10px] text-slate-500 hover:text-slate-700 underline underline-offset-2"
                   >
-                    Use as canonical
+                    Open
                   </button>
-                )}
-              </div>
+                  {!isCanonical && (
+                    <button
+                      onClick={() => setCanonicalId(g.id)}
+                      className="text-[10px] text-slate-500 hover:text-slate-700 underline underline-offset-2"
+                    >
+                      Use as canonical
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           );
         })}
       </div>
 
-      <div className="flex items-center gap-2 pt-2 border-t border-slate-100 flex-wrap">
-        <button
-          onClick={handleMerge}
-          className="px-2.5 py-1 bg-[#0F172A] text-white rounded text-[11px] font-medium hover:bg-slate-800 transition-colors"
-        >
-          Merge into "{canonical.topic}"
-        </button>
-        <button
-          onClick={handleDeleteDuplicate}
-          className="px-2.5 py-1 border border-red-200 text-red-600 rounded text-[11px] font-medium hover:bg-red-50 transition-colors"
-        >
-          Delete "{duplicate.topic}" without merging
-        </button>
-        <span className="text-[10px] text-slate-400 ml-auto">
-          {newVersionCount > 0 ? `+${newVersionCount} link${newVersionCount === 1 ? '' : 's'}` : 'no new links'}
-          {newSections.length > 0 ? ` · adds ${newSections.join(', ')}` : ''}
-        </span>
-      </div>
+      {WRITES_ENABLED && (
+        <div className="flex items-center gap-2 pt-2 border-t border-slate-100 flex-wrap">
+          <button
+            onClick={handleMerge}
+            className="px-2.5 py-1 bg-[#0F172A] text-white rounded text-[11px] font-medium hover:bg-slate-800 transition-colors"
+          >
+            Merge into "{canonical.topic}"
+          </button>
+          <button
+            onClick={handleDeleteDuplicate}
+            className="px-2.5 py-1 border border-red-200 text-red-600 rounded text-[11px] font-medium hover:bg-red-50 transition-colors"
+          >
+            Delete "{duplicate.topic}" without merging
+          </button>
+          <span className="text-[10px] text-slate-400 ml-auto">
+            {newVersionCount > 0 ? `+${newVersionCount} link${newVersionCount === 1 ? '' : 's'}` : 'no new links'}
+            {newSections.length > 0 ? ` · adds ${newSections.join(', ')}` : ''}
+          </span>
+        </div>
+      )}
     </div>
   );
 }
