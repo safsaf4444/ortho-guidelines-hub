@@ -79,10 +79,13 @@ Branch: `feature/data-verify-and-automation` (off `main`). No merge, no deploy.
   git identity. (Two later data-tooling commits, `438e818` and `f86a09d`, were
   made via the GitHub web editor — author "Safa S.", committer "GitHub".)
 
-- **Step 4 (regenerate static file from DB) — NOT started; needs a decision.**
-  There is **no existing DB→static-file generator** in the repo. `scripts/` only
-  has static→DB (`seed`), JSON→DB (`upsert-verified`), and `dedupe-db`. The app's
-  "Export JSON" button downloads current data as a JSON file — not the
-  `guidelines-data.ts` TypeScript module. Regenerating the static file from the
-  231 DB rows therefore means **building new tooling**, which was flagged for your
-  approval before proceeding.
+- **Step 4 (regenerate static file from DB) — DONE.** Added
+  `scripts/export-static.ts` + `npm run export-static`: it pulls all rows from
+  Supabase, maps them through the existing `toGuideline()`, and rewrites
+  `src/data/guidelines-data.ts` (type definitions preserved; array replaced).
+  Ran once — the static file went from 127 hand-curated entries to **231**
+  DB-derived entries, so the public static site now matches the verified DB. The
+  file carries an "AUTO-GENERATED — do not hand-edit" banner; future content
+  changes go in the DB then `npm run export-static`. (One residual "BOIS" string
+  remains — the self-referential editor note in `bajis-professional-resources`,
+  item 3 above — it is DB content, not a source label.)
