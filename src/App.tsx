@@ -1,13 +1,15 @@
 import { useState, useEffect, useMemo } from 'react'
-import { Search, ChevronDown, ExternalLink, Menu, X, TriangleAlert, Plus, WifiOff, Download, Database } from 'lucide-react'
+import { Search, ChevronDown, ExternalLink, Menu, X, TriangleAlert, Plus, WifiOff, Download, Database, History } from 'lucide-react'
 import { GUIDELINES_DATA, Guideline, GuidelineVersion } from './data/guidelines-data'
 import { guidelinesService } from './lib/guidelines-service'
+import { changelogService, type ChangelogEntry } from './lib/changelog-service'
 import { isSupabaseEnabled } from './lib/supabase'
 import { findDuplicateCandidates, countGuidelinesWithDuplicates, pairKey, DuplicateCandidate } from './lib/duplicate-detection'
 import { computeMerge } from './lib/dedupe'
 import { cn } from './lib/utils'
 
 const DUPLICATES_VIEW = '__duplicates__';
+const CHANGELOG_VIEW = '__changelog__';
 
 const LINK_STATUS_OPTIONS: { value: NonNullable<Guideline['linkVerificationStatus']>; label: string }[] = [
   { value: 'unchecked', label: 'Unchecked' },
@@ -94,6 +96,32 @@ function sortSections(names: string[]): string[] {
     if (ib !== -1) return 1;
     return a.localeCompare(b);
   });
+}
+
+// "Also published by" (Feature 3): the real co-badging signal in this dataset
+// lives inside a single row's `source` string (e.g. "GIRFT / BHS / BOA",
+// "BOA (BOASt) with BOFAS"), NOT across separate records — 0 topics appear
+// under more than one distinct source. So we surface the co-publishers by
+// parsing the source field, splitting only on " / " and " with " at paren depth
+// 0. We deliberately do NOT split on "&", "and", or "," because those occur
+// inside single society names (e.g. "BAJIS (Bone & Joint Infection Society)",
+// "NHFD (RCP / FFFAP)").
+function splitPublishers(source: string): string[] {
+  const out: string[] = [];
+  let buf = '';
+  let depth = 0;
+  for (let i = 0; i < source.length; i++) {
+    const ch = source[i];
+    if (ch === '(') { depth++; buf += ch; continue; }
+    if (ch === ')') { depth = Math.max(0, depth - 1); buf += ch; continue; }
+    if (depth === 0) {
+      if (ch === '/' && source[i - 1] === ' ' && source[i + 1] === ' ') { out.push(buf); buf = ''; continue; }
+      if (source.slice(i).toLowerCase().startsWith(' with ')) { out.push(buf); buf = ''; i += ' with '.length - 1; continue; }
+    }
+    buf += ch;
+  }
+  out.push(buf);
+  return out.map(p => p.trim()).filter(Boolean);
 }
 
 // Tracks connectivity so the UI can flag when the user is viewing the cached
@@ -404,6 +432,19 @@ export default function App() {
                 </span>
               </button>
 
+              <button
+                onClick={() => { setCurrentSection(CHANGELOG_VIEW); setIsSidebarOpen(false); }}
+                className={cn(
+                  "flex items-center gap-1.5 px-2.5 py-1.5 rounded transition-colors",
+                  currentSection === CHANGELOG_VIEW
+                    ? "bg-[#0F172A] text-white"
+                    : "text-slate-600 hover:bg-slate-50"
+                )}
+              >
+                <History className="w-3 h-3 shrink-0" />
+                <span className="text-[12px] font-medium">Changelog</span>
+              </button>
+
               {sections.map(section => {
                 const count = guidelines.filter(
                   g => g.section === section || (g.crossListedIn ?? []).includes(section)
@@ -444,6 +485,10 @@ export default function App() {
             {currentSection === DUPLICATES_VIEW ? (
               <span className="text-[11px] text-slate-400">
                 Heuristic matches only — nothing is merged or deleted automatically.
+              </span>
+            ) : currentSection === CHANGELOG_VIEW ? (
+              <span className="text-[11px] text-slate-400">
+                Full edit history across all guidelines, newest first. Append-only — notes can't be edited or deleted.
               </span>
             ) : (
               <>
@@ -517,6 +562,8 @@ export default function App() {
                 onMerge={handleMergeDuplicates}
                 onDeleteOne={g => handleDelete(g.id)}
               />
+            ) : currentSection === CHANGELOG_VIEW ? (
+              <ChangelogPanel guidelines={guidelines} />
             ) : sortedSections.length === 0 ? (
               <p className="text-[12px] text-slate-400 mt-3">No guidelines found.</p>
             ) : (
@@ -525,6 +572,7 @@ export default function App() {
                   key={section}
                   section={section}
                   items={grouped[section]}
+                  allGuidelines={guidelines}
                   groupBy={groupBy}
                   isCollapsed={collapsedSections.has(section)}
                   onToggleCollapse={() => toggleSection(section)}
@@ -553,10 +601,11 @@ export default function App() {
 // ─── Section Container ────────────────────────────────────────────────────────
 
 function SectionContainer({
-  section, items, groupBy, isCollapsed, onToggleCollapse, onEdit, onQuickUpdate,
+  section, items, allGuidelines, groupBy, isCollapsed, onToggleCollapse, onEdit, onQuickUpdate,
 }: {
   section: string;
   items: Guideline[];
+  allGuidelines: Guideline[];
   groupBy: 'section' | 'provider';
   isCollapsed: boolean;
   onToggleCollapse: () => void;
@@ -591,7 +640,7 @@ function SectionContainer({
         <div className="px-3.5 pb-3.5 flex flex-col gap-1.5 border-t border-slate-100">
           <div className="h-1.5" />
           {items.map(g => (
-            <GuidelineCard key={g.id} item={g} sectionContext={section} onEdit={onEdit} onQuickUpdate={onQuickUpdate} />
+            <GuidelineCard key={g.id} item={g} sectionContext={section} allGuidelines={allGuidelines} onEdit={onEdit} onQuickUpdate={onQuickUpdate} />
           ))}
         </div>
       )}
@@ -602,10 +651,11 @@ function SectionContainer({
 // ─── Guideline Card ───────────────────────────────────────────────────────────
 
 function GuidelineCard({
-  item, sectionContext, onEdit, onQuickUpdate,
+  item, sectionContext, allGuidelines, onEdit, onQuickUpdate,
 }: {
   item: Guideline;
   sectionContext: string;
+  allGuidelines: Guideline[];
   onEdit: (g: Guideline) => void;
   onQuickUpdate: (g: Guideline) => void;
 }) {
@@ -614,6 +664,22 @@ function GuidelineCard({
   // avoids e.g. showing "also in Trauma" while already inside the Trauma list.
   const otherSections = [item.section, ...(item.crossListedIn ?? [])].filter(s => s !== sectionContext);
   const linkStatus = item.linkVerificationStatus ?? 'unchecked';
+
+  // Feature 3a — "Related in [section]": other guidelines that are members of
+  // this card's primary clinical section (by primary section or cross-listing),
+  // excluding itself, capped at 5. Computed live, nothing stored.
+  const related = useMemo(() => {
+    const inSection = (g: Guideline) =>
+      g.section === item.section || (g.crossListedIn ?? []).includes(item.section);
+    return allGuidelines.filter(g => g.id !== item.id && inSection(g)).slice(0, 5);
+  }, [allGuidelines, item.id, item.section]);
+
+  // Feature 3b — "Also published by": co-badging societies parsed from this
+  // row's own source string (the only real signal for it — see splitPublishers).
+  const alsoPublishedBy = useMemo(() => {
+    const pubs = splitPublishers(item.source);
+    return pubs.length > 1 ? pubs.slice(1) : [];
+  }, [item.source]);
 
   return (
     <div className="border border-slate-200 rounded overflow-hidden bg-white">
@@ -742,6 +808,41 @@ function GuidelineCard({
             <p className="text-[11px] text-slate-400 italic mb-1.5">{item.notes}</p>
           )}
 
+          {/* Feature 3 — cross-references, computed live from existing data */}
+          {alsoPublishedBy.length > 0 && (
+            <div className="mb-1.5">
+              <div className="text-[9px] font-semibold text-slate-400 uppercase tracking-widest mb-0.5">
+                Also published by
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {alsoPublishedBy.map(p => (
+                  <span key={p} className="text-[10px] text-slate-500 border border-slate-200 rounded px-1.5 py-px">
+                    {p}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {related.length > 0 && (
+            <div className="mb-1.5">
+              <div className="text-[9px] font-semibold text-slate-400 uppercase tracking-widest mb-0.5">
+                Related in {item.section}
+              </div>
+              <div className="flex flex-col gap-px">
+                {related.map(r => (
+                  <span key={r.id} className="text-[11px] text-slate-600 truncate">
+                    · {r.topic} <span className="text-slate-400">— {r.source}</span>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Feature 2 — append-only changelog for this guideline. Mounts (and
+              fetches) only when the card is expanded. */}
+          <CardChangelog guidelineId={item.id} />
+
           <div className="flex justify-between items-center pt-1 border-t border-slate-100">
             <div className="flex items-center gap-2.5">
               {item.lastChecked && (
@@ -758,6 +859,146 @@ function GuidelineCard({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── Changelog (Feature 2) ────────────────────────────────────────────────────
+
+function fmtTimestamp(iso: string): string {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+// Append-only note history for a single guideline, shown inside the expanded
+// card. Fetches on mount (i.e. when the card expands). In static/offline mode
+// the service returns [] for reads and throws on write (surfaced via alert).
+function CardChangelog({ guidelineId }: { guidelineId: string }) {
+  const [entries, setEntries] = useState<ChangelogEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [text, setText] = useState('');
+  const [saving, setSaving] = useState(false);
+  const MAX_INLINE = 3;
+
+  useEffect(() => {
+    let active = true;
+    changelogService.listForGuideline(guidelineId)
+      .then(e => { if (active) setEntries(e); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [guidelineId]);
+
+  const addNote = async () => {
+    const trimmed = text.trim();
+    if (!trimmed || saving) return;
+    setSaving(true);
+    try {
+      const created = await changelogService.create({ guidelineId, description: trimmed });
+      setEntries(prev => [created, ...prev]);
+      setText('');
+    } catch (err) {
+      alert(`Could not add note.\n\n${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="mb-1.5 border-t border-slate-100 pt-1.5">
+      <div className="text-[9px] font-semibold text-slate-400 uppercase tracking-widest mb-1">
+        Changelog
+      </div>
+
+      {loading ? (
+        <p className="text-[11px] text-slate-400">Loading…</p>
+      ) : entries.length === 0 ? (
+        <p className="text-[11px] text-slate-400">No notes yet.</p>
+      ) : (
+        <ul className="flex flex-col gap-0.5 mb-1.5">
+          {entries.slice(0, MAX_INLINE).map(e => (
+            <li key={e.id} className="text-[11px] text-slate-600 flex gap-2">
+              <span className="text-slate-400 shrink-0 tabular-nums">{fmtTimestamp(e.createdAt)}</span>
+              <span className="whitespace-pre-line">{e.description}</span>
+            </li>
+          ))}
+          {entries.length > MAX_INLINE && (
+            <li className="text-[10px] text-slate-400">
+              +{entries.length - MAX_INLINE} more — see the Changelog view.
+            </li>
+          )}
+        </ul>
+      )}
+
+      <div className="flex items-center gap-1.5">
+        <input
+          type="text"
+          value={text}
+          onChange={e => setText(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addNote(); } }}
+          onClick={e => e.stopPropagation()}
+          placeholder="Add a note…"
+          className="flex-1 min-w-0 px-2 py-1 border border-slate-200 rounded text-[11px] bg-white focus:outline-none focus:ring-1 focus:ring-slate-300"
+        />
+        <button
+          onClick={e => { e.stopPropagation(); addNote(); }}
+          disabled={saving || !text.trim()}
+          className="flex items-center gap-1 px-2 py-1 text-[11px] font-medium border border-slate-200 rounded text-slate-600 hover:bg-slate-50 transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+        >
+          <Plus className="w-3 h-3" />
+          Add note
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Project-wide edit history, newest first — reuses the full-width special-view
+// pattern (like DuplicatesPanel), toggled from the sidebar.
+function ChangelogPanel({ guidelines }: { guidelines: Guideline[] }) {
+  const [entries, setEntries] = useState<ChangelogEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    changelogService.listAll()
+      .then(e => { if (active) setEntries(e); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, []);
+
+  const guidelineById = useMemo(() => {
+    const m = new Map<string, Guideline>();
+    guidelines.forEach(g => m.set(g.id, g));
+    return m;
+  }, [guidelines]);
+
+  if (loading) return <p className="text-[12px] text-slate-400 mt-3">Loading changelog…</p>;
+  if (entries.length === 0) {
+    return (
+      <p className="text-[12px] text-slate-400 mt-3">
+        No changelog entries yet{isSupabaseEnabled ? '' : ' — the live database isn’t connected, so notes are unavailable in static mode'}.
+      </p>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-1.5 mt-3">
+      {entries.map(e => {
+        const g = guidelineById.get(e.guidelineId);
+        return (
+          <div key={e.id} className="border border-slate-200 rounded-md bg-white px-3 py-2">
+            <div className="flex justify-between items-start gap-2 flex-wrap">
+              <span className="text-[12px] font-medium text-slate-800">{g ? g.topic : e.guidelineId}</span>
+              <span className="text-[10px] text-slate-400 shrink-0 tabular-nums">{fmtTimestamp(e.createdAt)}</span>
+            </div>
+            <p className="text-[12px] text-slate-600 whitespace-pre-line mt-0.5">{e.description}</p>
+            <div className="text-[10px] text-slate-400 mt-1">
+              {g ? `${g.section} · ${g.source}` : 'guideline not in current view'} · ID: {e.guidelineId}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }

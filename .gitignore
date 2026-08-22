@@ -25,3 +25,6 @@ dist-ssr
 
 # Local Supabase data backups (production data dumps — keep local, never commit)
 backups/
+
+# Generated dead-link reports (scripts/flag-dead-links.ts) — keep local
+reports/
