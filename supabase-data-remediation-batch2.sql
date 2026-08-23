@@ -24,7 +24,7 @@
 -- Wrapped in a transaction; a failed precondition raises and rolls everything
 -- back (fail closed) so a drifted DB is never half-updated.
 --
--- ─── TWO DEVIATIONS FROM THE ORIGINAL BRIEF — READ BEFORE RUNNING ───────────
+-- ─── TWO DEVIATIONS FROM THE ORIGINAL BRIEF — CONFIRMED BY SAFA 2026-08-23 ──
 -- For `bssh-hand-trauma-app` and `boa-bgs-blue-book`, the PRIMARY link is
 -- already correct and live. It is the FALLBACK that is dead. Applying the
 -- literal instruction ("correct the path segment" / "use the BGS-hosted
@@ -72,7 +72,7 @@ set versions = jsonb_set(versions, '{0,url}',
       to_jsonb('https://www.england.nhs.uk/wp-content/uploads/2026/03/PRN02348-26-27-nhs-payment-scheme-pay-award-annex-c-best-practice-tariffs.pdf'::text)),
     link_last_verified = date '2026-08-23',
     link_verification_notes = coalesce(link_verification_notes, '') ||
-      ' | 2026-08-23 remediation: dead primary (HTTP 404) replaced. NHS England republished the 2026/27 NHS Payment Scheme in August 2026 as a pay-award update, prefixing every annexe filename with PRN02348-...-pay-award-. New Annex C URL confirmed HTTP 200. CAUTION: this is still a dated wp-content/uploads path and will break again at the next republication — consider promoting the publication landing page to primary.'
+      ' | 2026-08-23 remediation: dead primary (HTTP 404) replaced. NHS England republished the 2026/27 NHS Payment Scheme in August 2026 as a pay-award update, prefixing every annexe filename with PRN02348-...-pay-award-. New Annex C URL confirmed HTTP 200. CAUTION: this is still a dated wp-content/uploads path and will break again at the next republication. Reviewed 2026-08-23: the direct PDF was deliberately RETAINED as primary (with the evergreen /pay-syst/ hub as fallback) so users land on the document itself — expect to re-point this link at each annual republication.'
 where id = 'bpt-fragility-hip-femur-fracture'
   and versions->0->>'url' = 'https://www.england.nhs.uk/wp-content/uploads/2026/03/26-27NHSPS-Annex-C-Best-practice-tariffs.pdf';
 
