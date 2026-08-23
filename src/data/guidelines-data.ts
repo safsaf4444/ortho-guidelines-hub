@@ -177,7 +177,7 @@ export const GUIDELINES_DATA: Guideline[] = [
     ],
     "linkVerificationStatus": "verified",
     "linkLastVerified": "2026-08-22",
-    "linkVerificationNotes": "URL confirmed in FFFAP resources site navigation; KPI structure confirmed in the NOGG 2024 guideline Section 12. | 2026-08-22 remediation: primary and web-portal URLs updated from obsolete rcplondon.ac.uk / fffap.org.uk paths to the current RCP FFFAP FLS-DB page (HTTP 200 confirmed).",
+    "linkVerificationNotes": "URL confirmed in FFFAP resources site navigation; KPI structure confirmed in the NOGG 2024 guideline Section 12. | 2026-08-22 remediation: primary and web-portal URLs updated from obsolete rcplondon.ac.uk / fffap.org.uk paths to the current RCP FFFAP FLS-DB page (HTTP 200 confirmed). | 2026-08-23 cleanup: collapsed duplicate version URLs. Removed \"FLS-DB web portal\" (byte-identical to \"Current\" after the 2026-08-22 RCP remediation — RCP consolidated the portal into the audit page) and \"FFFAP FLS resources\" (byte-identical to \"Fallback / index page\"; a pre-existing duplicate, not introduced by Batch 1). No destination lost: both distinct live URLs are retained.",
     "versions": [
       {
         "url": "https://www.rcp.ac.uk/improving-care/national-clinical-audits/falls-and-fragility-fracture-audit-programme-fffap/fracture-liaison-service-database-fls-db/",
@@ -186,14 +186,6 @@ export const GUIDELINES_DATA: Guideline[] = [
       {
         "url": "https://nhfd.co.uk/FFFAP/Resources.nsf/pages/FLS",
         "label": "Fallback / index page"
-      },
-      {
-        "url": "https://nhfd.co.uk/FFFAP/Resources.nsf/pages/FLS",
-        "label": "FFFAP FLS resources"
-      },
-      {
-        "url": "https://www.rcp.ac.uk/improving-care/national-clinical-audits/falls-and-fragility-fracture-audit-programme-fffap/fracture-liaison-service-database-fls-db/",
-        "label": "FLS-DB web portal"
       }
     ]
   },
@@ -473,15 +465,11 @@ export const GUIDELINES_DATA: Guideline[] = [
     ],
     "linkVerificationStatus": "verified",
     "linkLastVerified": "2026-08-06",
-    "linkVerificationNotes": "FIXED 29/07/2026: the Royal Osteoporosis Society has restructured its entire site since the last audit pass - the old URL (theros.org.uk/healthcare-professionals/...) still resolves but redirects to a new canonical path (theros.org.uk/for-healthcare-professionals/...). The page itself has also changed content: it now lists 4 items (Hip fracture toolkit, FLS Implementation Toolkit, Medicine support for patients, Clinical publications and resources), not the 5 toolkits (which used to include separate DXA quality and Vertebral fracture toolkits) recorded in the prior audit. Primary URL updated to the canonical path; all 4 current items added as direct links. Topic corrected from '5 toolkits' to reflect the current 4.",
+    "linkVerificationNotes": "FIXED 29/07/2026: the Royal Osteoporosis Society has restructured its entire site since the last audit pass - the old URL (theros.org.uk/healthcare-professionals/...) still resolves but redirects to a new canonical path (theros.org.uk/for-healthcare-professionals/...). The page itself has also changed content: it now lists 4 items (Hip fracture toolkit, FLS Implementation Toolkit, Medicine support for patients, Clinical publications and resources), not the 5 toolkits (which used to include separate DXA quality and Vertebral fracture toolkits) recorded in the prior audit. Primary URL updated to the canonical path; all 4 current items added as direct links. Topic corrected from '5 toolkits' to reflect the current 4. | 2026-08-23 cleanup: removed the \"Fallback / index page\" version entry, whose URL was byte-identical to \"Current\" (the clinical quality toolkits index) and therefore offered no fallback. The four specific toolkit links on this row are untouched.",
     "versions": [
       {
         "url": "https://theros.org.uk/for-healthcare-professionals/clinical-quality-hub/clinical-quality-toolkits/",
         "label": "Current"
-      },
-      {
-        "url": "https://theros.org.uk/for-healthcare-professionals/clinical-quality-hub/clinical-quality-toolkits/",
-        "label": "Fallback / index page"
       },
       {
         "url": "https://theros.org.uk/for-healthcare-professionals/clinical-quality-hub/clinical-quality-toolkits/hip-fracture-toolkit/",
@@ -1112,7 +1100,7 @@ export const GUIDELINES_DATA: Guideline[] = [
     ],
     "linkVerificationStatus": "verified",
     "linkLastVerified": "2026-08-06",
-    "linkVerificationNotes": "Specialty page and BOA GIRFT page verified.",
+    "linkVerificationNotes": "Specialty page and BOA GIRFT page verified. | 2026-08-23 cleanup: removed the \"BOA implementation guidance\" version entry, whose URL was byte-identical to \"Fallback / index page\" (both https://www.boa.ac.uk/standards-guidance/getting-it-right-first-time.html). The BOA page does serve as the implementation guidance, so the label is recorded here rather than kept as a duplicate link.",
     "versions": [
       {
         "url": "https://gettingitrightfirsttime.co.uk/surgical_specialties/orthopaedic-surgery/",
@@ -1121,10 +1109,6 @@ export const GUIDELINES_DATA: Guideline[] = [
       {
         "url": "https://www.boa.ac.uk/standards-guidance/getting-it-right-first-time.html",
         "label": "Fallback / index page"
-      },
-      {
-        "url": "https://www.boa.ac.uk/standards-guidance/getting-it-right-first-time.html",
-        "label": "BOA implementation guidance"
       }
     ]
   },
@@ -3523,11 +3507,11 @@ export const GUIDELINES_DATA: Guideline[] = [
       "Emergencies"
     ],
     "linkVerificationStatus": "verified",
-    "linkLastVerified": "2026-08-06",
-    "linkVerificationNotes": "PDF URL listed on the BOOS official Guidelines page; hosted on britishsarcomagroup.org.uk.",
+    "linkLastVerified": "2026-08-23",
+    "linkVerificationNotes": "PDF URL listed on the BOOS official Guidelines page; hosted on britishsarcomagroup.org.uk. | 2026-08-23 remediation: dead primary (HTTP 404) replaced. Same document, same filename, re-uploaded by British Sarcoma Group under a new WordPress date folder (2019/01 -> 2026/02). New URL confirmed HTTP 200.",
     "versions": [
       {
-        "url": "https://britishsarcomagroup.org.uk/wp-content/uploads/2019/01/BSG-guidance-for-ultrasound-screening-of-soft-tissue-masses-in-the-trunk-and-extremity-FINAL-Jan-2019.pdf",
+        "url": "https://britishsarcomagroup.org.uk/wp-content/uploads/2026/02/BSG-guidance-for-ultrasound-screening-of-soft-tissue-masses-in-the-trunk-and-extremity-FINAL-Jan-2019.pdf",
         "label": "January 2019"
       },
       {
@@ -4961,15 +4945,15 @@ export const GUIDELINES_DATA: Guideline[] = [
       "Emergencies"
     ],
     "linkVerificationStatus": "verified",
-    "linkLastVerified": "2026-08-06",
-    "linkVerificationNotes": "URL from BSSH official Guidelines & Resources navigation.",
+    "linkLastVerified": "2026-08-23",
+    "linkVerificationNotes": "URL from BSSH official Guidelines & Resources navigation. | 2026-08-23 remediation: dead fallback (bssh.ac.uk/professionals/hand_trauma_app.aspx, HTTP 404 — BSSH moved the page up one level). The primary already pointed at the correct live URL, so the fallback was repointed at the BSSH Guidelines & Resources index (HTTP 200) rather than duplicating the primary.",
     "versions": [
       {
         "url": "https://www.bssh.ac.uk/hand_trauma_app.aspx",
         "label": "Current"
       },
       {
-        "url": "https://www.bssh.ac.uk/professionals/hand_trauma_app.aspx",
+        "url": "https://www.bssh.ac.uk/professionals/guidelines.aspx",
         "label": "Fallback / index page"
       }
     ]
@@ -6752,15 +6736,15 @@ export const GUIDELINES_DATA: Guideline[] = [
       "Older Adult"
     ],
     "linkVerificationStatus": "verified",
-    "linkLastVerified": "2026-08-06",
-    "linkVerificationNotes": "URL cited and verified within the GIRFT Adult Orthopaedic Trauma report (footnote 12).",
+    "linkLastVerified": "2026-08-23",
+    "linkVerificationNotes": "URL cited and verified within the GIRFT Adult Orthopaedic Trauma report (footnote 12). | 2026-08-23 remediation: dead fallback (boa.ac.uk/wp-content/uploads/2014/12/blue_book.pdf, HTTP 404 — BOA no longer hosts a copy). The primary already pointed at the live BGS-hosted PDF, so the fallback was repointed at the BGS Blue Book landing page (HTTP 200) rather than duplicating the primary. The Blue Book is a joint BOA/BGS document, so a BGS host is consistent with this row's stated source.",
     "versions": [
       {
         "url": "https://www.bgs.org.uk/sites/default/files/content/attachment/2018-05-02/Blue%20Book%20on%20fragility%20fracture%20care.pdf",
         "label": "2007"
       },
       {
-        "url": "https://www.boa.ac.uk/wp-content/uploads/2014/12/blue_book.pdf",
+        "url": "https://www.bgs.org.uk/care-of-patients-with-fragility-fracture-blue-book",
         "label": "Fallback / index page"
       }
     ]
@@ -6880,15 +6864,15 @@ export const GUIDELINES_DATA: Guideline[] = [
       "Service & Commissioning"
     ],
     "linkVerificationStatus": "verified",
-    "linkLastVerified": "2026-08-06",
-    "linkVerificationNotes": "STALE-YEAR RISK RESOLVED 29/07/2026: fetched the FY2026/27 NHS Payment Scheme Annex C: Guidance on best practice tariffs directly (published by NHS England 2026); Section 14 'Fragility hip and femur fracture' confirmed present (pp.60-62), with full current BPT criteria (36-hour time to surgery, geriatrician assessment within 72h, 4AT screening, etc). Primary URL updated to this current document; the FY2025/26 Annex B page previously used is now superseded and moved to Additional Version Links.",
+    "linkLastVerified": "2026-08-23",
+    "linkVerificationNotes": "STALE-YEAR RISK RESOLVED 29/07/2026: fetched the FY2026/27 NHS Payment Scheme Annex C: Guidance on best practice tariffs directly (published by NHS England 2026); Section 14 'Fragility hip and femur fracture' confirmed present (pp.60-62), with full current BPT criteria (36-hour time to surgery, geriatrician assessment within 72h, 4AT screening, etc). Primary URL updated to this current document; the FY2025/26 Annex B page previously used is now superseded and moved to Additional Version Links. | 2026-08-23 remediation: dead primary (HTTP 404) replaced. NHS England republished the 2026/27 NHS Payment Scheme in August 2026 as a pay-award update, prefixing every annexe filename with PRN02348-...-pay-award-. New Annex C URL confirmed HTTP 200. CAUTION: this is still a dated wp-content/uploads path and will break again at the next republication. Reviewed 2026-08-23: the direct PDF was deliberately RETAINED as primary (with the evergreen /pay-syst/ hub as fallback) so users land on the document itself — expect to re-point this link at each annual republication. | 2026-08-23 remediation: dead fallback (england.nhs.uk/publication/nhs-payment-scheme/, HTTP 404) replaced with the evergreen NHS Payment Scheme hub (HTTP 200), deliberately chosen over the year-stamped 2026/27 page so it does not rot annually.",
     "versions": [
       {
-        "url": "https://www.england.nhs.uk/wp-content/uploads/2026/03/26-27NHSPS-Annex-C-Best-practice-tariffs.pdf",
+        "url": "https://www.england.nhs.uk/wp-content/uploads/2026/03/PRN02348-26-27-nhs-payment-scheme-pay-award-annex-c-best-practice-tariffs.pdf",
         "label": "FY2026/27 NHS Payment Scheme, Annex C, Section 14 (pp.60-62) - current"
       },
       {
-        "url": "https://www.england.nhs.uk/publication/nhs-payment-scheme/",
+        "url": "https://www.england.nhs.uk/pay-syst/nhs-payment-scheme/",
         "label": "Fallback / index page"
       },
       {
