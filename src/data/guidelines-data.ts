@@ -1,6 +1,6 @@
 // AUTO-GENERATED from the Supabase `guidelines` table by scripts/export-static.ts.
 // Do not edit by hand — change the database and run `npm run export-static`.
-// Generated: 2026-08-22 — 231 records.
+// Generated: 2026-08-23 — 231 records.
 
 export type GuidelineVersion = {
   label: string;
@@ -176,11 +176,11 @@ export const GUIDELINES_DATA: Guideline[] = [
       "Service & Commissioning"
     ],
     "linkVerificationStatus": "verified",
-    "linkLastVerified": "2026-08-06",
-    "linkVerificationNotes": "URL confirmed in FFFAP resources site navigation; KPI structure confirmed in the NOGG 2024 guideline Section 12.",
+    "linkLastVerified": "2026-08-22",
+    "linkVerificationNotes": "URL confirmed in FFFAP resources site navigation; KPI structure confirmed in the NOGG 2024 guideline Section 12. | 2026-08-22 remediation: primary and web-portal URLs updated from obsolete rcplondon.ac.uk / fffap.org.uk paths to the current RCP FFFAP FLS-DB page (HTTP 200 confirmed).",
     "versions": [
       {
-        "url": "https://www.rcplondon.ac.uk/projects/fracture-liaison-service-database-fls-db",
+        "url": "https://www.rcp.ac.uk/improving-care/national-clinical-audits/falls-and-fragility-fracture-audit-programme-fffap/fracture-liaison-service-database-fls-db/",
         "label": "Current"
       },
       {
@@ -192,7 +192,7 @@ export const GUIDELINES_DATA: Guideline[] = [
         "label": "FFFAP FLS resources"
       },
       {
-        "url": "https://www.fffap.org.uk/fls/web/",
+        "url": "https://www.rcp.ac.uk/improving-care/national-clinical-audits/falls-and-fragility-fracture-audit-programme-fffap/fracture-liaison-service-database-fls-db/",
         "label": "FLS-DB web portal"
       }
     ]
@@ -246,15 +246,15 @@ export const GUIDELINES_DATA: Guideline[] = [
       "Service & Commissioning"
     ],
     "linkVerificationStatus": "verified",
-    "linkLastVerified": "2026-08-06",
-    "linkVerificationNotes": "URL confirmed in FFFAP resources site navigation.",
+    "linkLastVerified": "2026-08-22",
+    "linkVerificationNotes": "URL confirmed in FFFAP resources site navigation. | 2026-08-22 remediation: obsolete fffap.org.uk/naif fallback updated to the current RCP FFFAP NAIF page (HTTP 200 confirmed).",
     "versions": [
       {
         "url": "https://nhfd.co.uk/FFFAP/Resources.nsf/pages/NAIF",
         "label": "Current"
       },
       {
-        "url": "https://www.fffap.org.uk/naif/web/",
+        "url": "https://www.rcp.ac.uk/improving-care/national-clinical-audits/falls-and-fragility-fracture-audit-programme-fffap/national-audit-of-inpatient-falls-naif/",
         "label": "Fallback / index page"
       }
     ]
@@ -847,11 +847,11 @@ export const GUIDELINES_DATA: Guideline[] = [
       "Service & Commissioning"
     ],
     "linkVerificationStatus": "verified",
-    "linkLastVerified": "2026-08-06",
-    "linkVerificationNotes": "URL from the BESS official Primary & Intermediate Care Guidelines page.",
+    "linkLastVerified": "2026-08-22",
+    "linkVerificationNotes": "URL from the BESS official Primary & Intermediate Care Guidelines page. | 2026-08-22 remediation: dead primary (bess.ac.uk download path, HTTP 404) replaced with the canonical AoMRC EBI List 2 guidance PDF on ebi.aomrc.org.uk (HTTP 200 confirmed).",
     "versions": [
       {
-        "url": "https://bess.ac.uk/download/1421/primary-intermediate-care-guidelines/6559/ebi-list-2-guidance.pdf",
+        "url": "https://ebi.aomrc.org.uk/wp-content/uploads/2024/01/EBI_list2_guidance_no_coding_0923.pdf",
         "label": "2021"
       },
       {
@@ -1037,8 +1037,8 @@ export const GUIDELINES_DATA: Guideline[] = [
       "Service & Commissioning"
     ],
     "linkVerificationStatus": "verified",
-    "linkLastVerified": "2026-08-06",
-    "linkVerificationNotes": "List 1 and List 2 PDF URLs verified on ebi.aomrc.org.uk. List 3 exists (May 2023) but its canonical URL is NOT confirmed. | UPDATED 29/07/2026: this row is the programme-level overview only. All 17 individual Musculoskeletal/Spine EBI intervention guidelines now have their own dedicated rows (IDs prefixed 'ebi-') with direct deep links to each specific guideline, its recommendation and its references - not just this front-page link. This mirrors the same fix applied here; the other ~44 EBI interventions outside Musculoskeletal/Spine (Breast, Cardiovascular, Child health, ENT, Eyes, GI, Haematology, Kidney/urology, Pre-op assessment, Skin/soft tissue, Women's health) have NOT yet been individually expanded - flag if you want those pulled out too.",
+    "linkLastVerified": "2026-08-22",
+    "linkVerificationNotes": "List 1 and List 2 PDF URLs verified on ebi.aomrc.org.uk. List 3 exists (May 2023) but its canonical URL is NOT confirmed. | UPDATED 29/07/2026: this row is the programme-level overview only. All 17 individual Musculoskeletal/Spine EBI intervention guidelines now have their own dedicated rows (IDs prefixed 'ebi-') with direct deep links to each specific guideline, its recommendation and its references - not just this front-page link. This mirrors the same fix applied here; the other ~44 EBI interventions outside Musculoskeletal/Spine (Breast, Cardiovascular, Child health, ENT, Eyes, GI, Haematology, Kidney/urology, Pre-op assessment, Skin/soft tissue, Women's health) have NOT yet been individually expanded - flag if you want those pulled out too. | 2026-08-22 remediation: removed the redundant dead BESS List 2 shoulder-guidance link (HTTP 404); canonical AoMRC List 2 PDF already present.",
     "versions": [
       {
         "url": "https://ebi.aomrc.org.uk/",
@@ -1059,10 +1059,6 @@ export const GUIDELINES_DATA: Guideline[] = [
       {
         "url": "https://www.boa.ac.uk/resource/nhs-england-evidence-based-interventions-publication-and-response-from-the-boa.html",
         "label": "BOA response"
-      },
-      {
-        "url": "https://bess.ac.uk/download/1421/primary-intermediate-care-guidelines/6559/ebi-list-2-guidance.pdf",
-        "label": "BESS EBI List 2 shoulder guidance"
       }
     ]
   },
@@ -1760,8 +1756,8 @@ export const GUIDELINES_DATA: Guideline[] = [
       "Trauma"
     ],
     "linkVerificationStatus": "verified",
-    "linkLastVerified": "2026-08-06",
-    "linkVerificationNotes": "AUDIT 29/07/2026: Topic states '12 booklets, 2011-2025' but only the single most recent PDF (2025 Sheffield) is linked. The other 11 Round Table booklets were NOT individually located this pass.",
+    "linkLastVerified": "2026-08-22",
+    "linkVerificationNotes": "AUDIT 29/07/2026: Topic states '12 booklets, 2011-2025' but only the single most recent PDF (2025 Sheffield) is linked. The other 11 Round Table booklets were NOT individually located this pass. | 2026-08-22 remediation: removed a placeholder version link whose URL was an unfilled template (Round Table - YYYY - CITY.pdf, HTTP 404). Its label had listed the not-yet-located booklets: 2024 Cambridge, 2023 Stratford, 2019 Krakow, 2018 Belfast, 2017 Cardiff, 2016 Munich, 2015 Edinburgh, 2014 Budapest, 2013 Barcelona, 2012 Paris, 2011 Padova.",
     "versions": [
       {
         "url": "https://www.bofas.org.uk/Portals/0/RoundTable_Booklets/Round%20Table%20-%202025%20-%20Sheffield.pdf",
@@ -1770,10 +1766,6 @@ export const GUIDELINES_DATA: Guideline[] = [
       {
         "url": "https://www.bofas.org.uk/clinician/research/bofas-publications",
         "label": "Fallback / index page"
-      },
-      {
-        "url": "https://www.bofas.org.uk/Portals/0/RoundTable_Booklets/Round%20Table%20-%20YYYY%20-%20CITY.pdf",
-        "label": "2024 Cambridge, 2023 Stratford, 2019 Krakow, 2018 Belfast, 2017 Cardiff, 2016 Munich, 2015 Edinburgh, 2014 Budapest, 2013 Barcelona, 2012 Paris, 2011 Padova - all at"
       }
     ]
   },
@@ -1896,11 +1888,11 @@ export const GUIDELINES_DATA: Guideline[] = [
       "Service & Commissioning"
     ],
     "linkVerificationStatus": "verified",
-    "linkLastVerified": "2026-08-06",
-    "linkVerificationNotes": "URL from the BOFAS official publications page.",
+    "linkLastVerified": "2026-08-22",
+    "linkVerificationNotes": "URL from the BOFAS official publications page. | 2026-08-22 remediation: dead primary (BOFAS Portals path, non-breaking-space encoding, HTTP 404) replaced with the verified BOA-hosted copy (HTTP 200 confirmed).",
     "versions": [
       {
-        "url": "https://www.bofas.org.uk/Portals/0/Position%20Statements/BOFAS%20Flatfoot%20Commissioning%20guidelines%20%20.pdf",
+        "url": "https://www.boa.ac.uk/static/83bf469d-2c6f-470b-a6ffc7f0fda8eada/acquired%20adult%20flatfoot%20deformity.pdf",
         "label": "Undated"
       },
       {
@@ -3160,16 +3152,12 @@ export const GUIDELINES_DATA: Guideline[] = [
       "Elective"
     ],
     "linkVerificationStatus": "verified",
-    "linkLastVerified": "2026-08-06",
-    "linkVerificationNotes": "Content-verified - full Professional Resources page fetched and read; no original BAJIS guidelines exist.",
+    "linkLastVerified": "2026-08-22",
+    "linkVerificationNotes": "Content-verified - full Professional Resources page fetched and read; no original BAJIS guidelines exist. | 2026-08-22 remediation: removed the dead 'Fallback / index page' link (bajis.org/guidelines, HTTP 404); working primary preserved.",
     "versions": [
       {
         "url": "https://bajis.org/index.php/professional-resources/",
         "label": "Updated March 2026"
-      },
-      {
-        "url": "https://bajis.org/guidelines",
-        "label": "Fallback / index page"
       },
       {
         "url": "https://www.e-lfh.org.uk/programmes/guidelines-for-the-management-and-treatment-of-periprosthetic-joint-infection-programme/",
