@@ -25,6 +25,12 @@
       "reason": "GIRFT-family host serving interactive pathway pages; returned HTTP 403 to the automated checker in the 2026-08-22 audit (same bot-block behaviour as gettingitrightfirsttime.co.uk). Single sample this pass -- verify manually.",
       "added": "2026-08-22",
       "source": "audit"
+    },
+    {
+      "domain": "baskonline.com",
+      "reason": "Known WAF/bot blocker",
+      "added": "2026-08-24",
+      "source": "BASK"
     }
   ]
 }
