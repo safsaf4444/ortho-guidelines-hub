@@ -20,7 +20,10 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          # Node 22: the Supabase realtime client needs native WebSocket support.
+          # On Node 20 the run fails with "Node.js 20 detected without native
+          # WebSocket support".
+          node-version: '22'
 
       - name: Install dependencies
         run: npm install
