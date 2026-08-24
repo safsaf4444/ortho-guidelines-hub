@@ -85,12 +85,6 @@ function getBlockedDomains(): Set<string> {
       .map((d: { domain: string }) => d.domain?.toLowerCase())
       .filter(Boolean);
 
-    // Known alias gap: the blocked list records BASK as 'bask.ac.uk', but the
-    // catalogue's BASK rows actually live on 'baskonline.com'. Added here so this
-    // pipeline does not inherit that blind spot. The underlying JSON is NOT
-    // modified — fixing it there is a separate, deliberate decision.
-    if (!domains.includes('baskonline.com')) domains.push('baskonline.com');
-
     return new Set(domains);
   } catch (err) {
     console.warn('[Sync] Could not read blocked-sources.json:', err);
