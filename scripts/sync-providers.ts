@@ -135,6 +135,13 @@ export const BOAAdapter: ProviderAdapter = {
     const results: DiscoveredGuideline[] = [];
     const seen = new Set<string>();
 
+    // Nav/chrome link text that is not a guideline title. The BOASt index carries
+    // an aggregate "Download and read the full guidelines for BOA Standards
+    // (BOASts / SpecS) here" link that points at a bundle, not a single standard.
+    // Matched as a case-insensitive substring so trailing wording can change
+    // without silently reintroducing the noise.
+    const NOISE_TOPIC_PHRASES = ['download and read the full guidelines'];
+
     $("a[href*='asset']").each((_, el) => {
       const link = $(el);
       const rawHref = link.attr('href')?.trim();
@@ -142,6 +149,9 @@ export const BOAAdapter: ProviderAdapter = {
       const topic = link.text().replace(/\s+/g, ' ').trim();
 
       if (!rawHref || !topic) return;
+
+      const topicLower = topic.toLowerCase();
+      if (NOISE_TOPIC_PHRASES.some(p => topicLower.includes(p))) return;
 
       const fullUrl = rawHref.startsWith('http')
         ? rawHref
