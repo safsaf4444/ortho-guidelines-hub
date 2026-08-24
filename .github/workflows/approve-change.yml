@@ -25,7 +25,11 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          # Node 22, matching detect-changes.yml. scripts/approve-change.ts uses
+          # the same @supabase/supabase-js client, whose realtime component needs
+          # native WebSocket support; on Node 20 that failed with "Node.js 20
+          # detected without native WebSocket support" (detect-changes run #1).
+          node-version: '22'
 
       - name: Install dependencies
         run: npm install
