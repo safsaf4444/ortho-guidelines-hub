@@ -1,0 +1,39 @@
+name: Scheduled Guideline & Provider Sync
+
+on:
+  schedule:
+    # Runs every Sunday at 02:00 UTC
+    - cron: '0 2 * * 0'
+  workflow_dispatch:
+
+# Read-only by design: this pipeline discovers and reports, it never writes back
+# to the repo. Declared explicitly so the intent survives any change to the
+# repository-level default permissions.
+permissions:
+  contents: read
+
+jobs:
+  sync-check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run Provider Sync Probe (Dry-run)
+        run: npx tsx scripts/sync-providers.ts
+        
+      - name: Upload Candidate Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: sync-candidates
+          path: candidates.json
