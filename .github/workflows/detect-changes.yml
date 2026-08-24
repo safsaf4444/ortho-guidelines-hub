@@ -4,7 +4,18 @@ on:
   schedule:
     # Every Monday at 06:00 UTC. Change this line to adjust frequency.
     - cron: '0 6 * * 1'
-  workflow_dispatch: {} # lets you click "Run workflow" manually in the Actions tab
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: >-
+          Verification mode. When true, the run fetches and compares source
+          content and logs every change it WOULD act on, but performs no
+          external writes at all: no GitHub issues, no Supabase updates, and no
+          commit/push of blocked-sources.json. Leave true unless you
+          deliberately want this manual run to modify production data.
+        type: boolean
+        default: true
+        required: false
 
 permissions:
   contents: write   # to commit the updated blocked-sources.json back to the repo
@@ -34,9 +45,16 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+          # Empty on the schedule trigger (the input does not exist there), which
+          # the script treats as false — so scheduled runs keep writing exactly
+          # as before. Only a manual dispatch can set this to true.
+          DRY_RUN: ${{ inputs.dry_run }}
         run: npx tsx scripts/detect-changes.ts
 
+      # Skipped entirely on a dry-run dispatch. On the schedule trigger
+      # inputs.dry_run is null, so `!= true` holds and the step runs as before.
       - name: Commit updated blocked-sources.json (if changed)
+        if: ${{ inputs.dry_run != true }}
         run: |
           git config user.name "ortho-hub-bot"
           git config user.email "actions@users.noreply.github.com"

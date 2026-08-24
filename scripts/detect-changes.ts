@@ -33,6 +33,19 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN!;
 const GITHUB_REPOSITORY = process.env.GITHUB_REPOSITORY!; // "owner/repo"
 
+/**
+ * Verification mode. Set by the workflow from its `dry_run` dispatch input.
+ *
+ * Only the exact string "true" (case-insensitive) enables it. The schedule
+ * trigger has no such input, so DRY_RUN arrives empty and this is false —
+ * scheduled runs keep their existing write behaviour unchanged.
+ *
+ * When enabled, the run still fetches and compares every source and logs each
+ * change it would have acted on, but performs NO external writes: no GitHub
+ * issue, no Supabase update, no blocked-sources.json write.
+ */
+const DRY_RUN = /^true$/i.test(process.env.DRY_RUN ?? '');
+
 const BLOCKED_SOURCES_PATH = path.join(process.cwd(), 'scripts', 'blocked-sources.json');
 const FAIL_STREAK_PATH = path.join(process.cwd(), 'scripts', '.fail-streak-cache.json'); // transient, gitignored is fine
 const FAILS_BEFORE_BLOCKING = 3;
@@ -179,7 +192,21 @@ async function openIssue(row: GuidelineRow, url: string, oldHash: string | null,
 // ---- main ----------------------------------------------------------------
 
 async function main() {
-  await ensureLabelExists();
+  if (DRY_RUN) {
+    console.log(
+      '=== DRY RUN — verification mode ===\n' +
+        'Sources are fetched and compared as normal. No GitHub label, no GitHub\n' +
+        'issue, no Supabase update and no blocked-sources.json write will occur.\n'
+    );
+  }
+
+  // Creates the "pending-guideline-update" label via POST /labels when absent,
+  // so it is a GitHub write and is skipped in dry-run.
+  if (DRY_RUN) {
+    console.log('[dry-run] label check/creation SKIPPED.');
+  } else {
+    await ensureLabelExists();
+  }
 
   const blocked = loadJson<{ domains: { domain: string }[] }>(BLOCKED_SOURCES_PATH, { domains: [] });
   const blockedDomains = new Set(
@@ -235,7 +262,14 @@ async function main() {
 
         if (oldHash && oldHash !== newHash) {
           changed++;
-          await openIssue(row, url, oldHash, newHash);
+          if (DRY_RUN) {
+            console.log(
+              `  [dry-run] change detected, issue NOT created: [${row.id}] ${url}\n` +
+                `            ${oldHash.slice(0, 12)} -> ${newHash.slice(0, 12)}`
+            );
+          } else {
+            await openIssue(row, url, oldHash, newHash);
+          }
         }
 
         newHashes[url] = newHash;
@@ -259,15 +293,26 @@ async function main() {
     }
 
     if (rowTouched) {
-      await supabase
-        .from('guidelines')
-        .update({ content_hashes: newHashes, last_change_check: new Date().toISOString().slice(0, 10) })
-        .eq('id', row.id);
+      if (DRY_RUN) {
+        console.log(`  [dry-run] Supabase update SKIPPED for row ${row.id} (content_hashes, last_change_check)`);
+      } else {
+        await supabase
+          .from('guidelines')
+          .update({ content_hashes: newHashes, last_change_check: new Date().toISOString().slice(0, 10) })
+          .eq('id', row.id);
+      }
     }
   }
 
-  saveJson(BLOCKED_SOURCES_PATH, blocked);
-  saveJson(FAIL_STREAK_PATH, failStreaks);
+  if (DRY_RUN) {
+    console.log(
+      `[dry-run] blocked-sources.json write SKIPPED (${newlyBlocked} domain(s) would have been added).`
+    );
+    console.log('[dry-run] fail-streak cache write SKIPPED.');
+  } else {
+    saveJson(BLOCKED_SOURCES_PATH, blocked);
+    saveJson(FAIL_STREAK_PATH, failStreaks);
+  }
 
   console.log(
     `Done. Checked ${checked} URLs. ${changed} change(s) flagged for approval. ` +
