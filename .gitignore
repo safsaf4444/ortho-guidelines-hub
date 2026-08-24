@@ -28,3 +28,7 @@ backups/
 
 # Generated dead-link reports (scripts/flag-dead-links.ts) — keep local
 reports/
+
+# Generated provider-sync staging output (scripts/sync-providers.ts) — regenerated
+# each run and uploaded as a CI artifact, so it is never committed.
+candidates.json
