@@ -1,66 +1,70 @@
 /**
  * scripts/flag-dead-links.ts
  * ──────────────────────────
- * Standalone, manually-run dead-link report for the Orthopaedic Guidelines Hub.
+ * Standalone dead-link report for the Orthopaedic Guidelines Hub. Runs by hand
+ * (`npm run flag-dead-links`) or weekly via .github/workflows/dead-link-check.yml.
  *
  * What it does:
- *   1. Pulls every guideline from Supabase and checks every URL in its
- *      `versions[]` array with a lightweight HTTP *status* check (HEAD, falling
- *      back to GET) — it does NOT download/hash page content. This is
- *      deliberately lighter-weight than scripts/detect-changes.ts, which fetches
- *      full page text to detect content changes.
- *   2. Classifies each URL as:
- *        - OK            → 2xx/3xx response
- *        - DEAD          → 404/500-class, timeout, or DNS/connection failure
- *        - KNOWN-BLOCKED → its domain is already in scripts/blocked-sources.json
- *          (e.g. OTS/BASK) — reported separately as "known-blocked, not
- *          necessarily dead" so a bot-challenge/401 isn't re-flagged as broken.
- *   3. Prints a console summary (OK / dead / known-blocked counts) and writes a
- *      timestamped CSV report to reports/.
+ *   1. Reads every guideline from the STATIC dataset (src/data/guidelines-data.ts)
+ *      and checks every URL in its `versions[]` array with a lightweight HTTP
+ *      *status* check (HEAD, falling back to GET). It does NOT download/hash page
+ *      content — that is scripts/detect-changes.ts's job.
+ *   2. Classifies each URL into one of the verdicts below.
+ *   3. Prints a console summary and writes a timestamped CSV to reports/.
  *
- * It writes NOTHING to the database and changes NO UI — it's a report Safa runs
- * by hand before an editorial cleanup pass.
+ * ─── READ-ONLY BY CONSTRUCTION ──────────────────────────────────────────────
+ * There is NO Supabase client in this file and no credentials are read, so the
+ * checker cannot reach the database even by accident. The single filesystem
+ * write is the CSV under reports/, which is gitignored. It never modifies
+ * scripts/blocked-sources.json, guideline data, any git-tracked file, GitHub, or
+ * Supabase.
  *
- * Run:  npm run flag-dead-links
- * Requires .env.local: VITE_SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY (or anon).
+ * Data source note: the static dataset is regenerated from the database by
+ * `npm run export-static`, so it mirrors Supabase without needing secrets. If a
+ * report looks stale, re-run export-static first.
  *
- * NOTE: the fetch/timeout/hostname helpers here intentionally mirror the ones in
- * scripts/detect-changes.ts rather than importing them — that module runs its
- * `main()` on import and reads env at module load, and it's out of scope to
- * modify. Re-implementing the few small helpers is safer than triggering its
- * side effects.
+ * Verdicts:
+ *   OK             2xx or 3xx
+ *   CLIENT_ERROR   4xx, except 401/403/429
+ *   SERVER_ERROR   5xx
+ *   TIMEOUT        request aborted on the timeout
+ *   DNS_FAILURE    DNS/connection-level failure
+ *   BLOCKED_WAF    401/403/429, or a recognisable WAF/bot-challenge response.
+ *                  Reported separately because a bot-block is NOT proof the link
+ *                  is dead — GIRFT and baskonline.com both load fine in a browser.
+ *   KNOWN_BLOCKED  domain already listed in scripts/blocked-sources.json; short
+ *                  circuited with NO request made.
+ *
+ * Politeness: requests to the same hostname are spaced by at least
+ * MIN_HOST_GAP_MS. One retry (after RETRY_DELAY_MS) is made for TIMEOUT,
+ * DNS_FAILURE and SERVER_ERROR only — never for 4xx, and never for a WAF block,
+ * where retrying makes the block worse.
+ *
+ * Exit code is 0 even when dead links are found: this is a report, not a gate.
  */
-import { config } from 'dotenv';
-import { resolve, join } from 'path';
+import { join } from 'path';
 import { readFileSync, existsSync, mkdirSync, writeFileSync } from 'fs';
+import { pathToFileURL } from 'url';
 
-config({ path: resolve(process.cwd(), '.env.local') });
-config({ path: resolve(process.cwd(), '.env') });
-
-import { createClient } from '@supabase/supabase-js';
-
-const url = process.env.VITE_SUPABASE_URL;
-const key = process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.VITE_SUPABASE_ANON_KEY;
-
-if (!url || !key) {
-  console.error(
-    '\n❌ Missing environment variables.\n' +
-      'Set VITE_SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (or VITE_SUPABASE_ANON_KEY) in .env.local\n',
-  );
-  process.exit(1);
-}
-
-const supabase = createClient(url, key);
+import { GUIDELINES_DATA } from '../src/data/guidelines-data';
 
 const BLOCKED_SOURCES_PATH = join(process.cwd(), 'scripts', 'blocked-sources.json');
 const REPORTS_DIR = join(process.cwd(), 'reports');
 const FETCH_TIMEOUT_MS = 15_000;
+const MIN_HOST_GAP_MS = 1_000;
+const RETRY_DELAY_MS = 2_000;
+const MAX_ATTEMPTS = 2; // one initial attempt + at most one retry
 
-type VersionLink = { label?: string; url?: string; date?: string };
-type GuidelineRow = { id: string; topic: string; source: string; versions: VersionLink[] | null };
+export type Verdict =
+  | 'OK'
+  | 'CLIENT_ERROR'
+  | 'SERVER_ERROR'
+  | 'TIMEOUT'
+  | 'DNS_FAILURE'
+  | 'BLOCKED_WAF'
+  | 'KNOWN_BLOCKED';
 
-type Verdict = 'OK' | 'DEAD' | 'KNOWN-BLOCKED';
-interface Result {
+export interface Result {
   id: string;
   topic: string;
   source: string;
@@ -68,12 +72,14 @@ interface Result {
   url: string;
   domain: string;
   verdict: Verdict;
-  detail: string; // HTTP status or failure reason
+  httpStatus: string; // numeric status, or '' when no response was received
+  detail: string;
+  attempts: number;
 }
 
-// ── helpers (mirrored from detect-changes.ts, see note above) ────────────────
+// ── pure helpers ─────────────────────────────────────────────────────────────
 
-function hostnameOf(u: string): string | null {
+export function hostnameOf(u: string): string | null {
   try {
     return new URL(u).hostname.replace(/^www\./, '');
   } catch {
@@ -81,115 +87,273 @@ function hostnameOf(u: string): string | null {
   }
 }
 
-async function statusCheck(u: string, timeoutMs: number): Promise<{ ok: boolean; detail: string }> {
-  const headers = {
-    'User-Agent':
-      'Mozilla/5.0 (compatible; OrthoGuidelinesHubBot/1.0; +https://safsaf4444.github.io/ortho-guidelines-hub/)',
-  };
+/** 401/403/429 are treated as WAF/bot blocks rather than plain client errors. */
+const WAF_STATUSES = new Set([401, 403, 429]);
 
-  const attempt = async (method: 'HEAD' | 'GET'): Promise<Response> => {
+/**
+ * Recognises a WAF/bot challenge from response headers. Only consulted for
+ * error statuses — a 200 served through Cloudflare is just a normal page, and
+ * most of these providers sit behind a CDN.
+ */
+export function looksLikeWaf(status: number, headers?: Headers): boolean {
+  if (WAF_STATUSES.has(status)) return true;
+  if (status < 400 || !headers) return false;
+  // Cloudflare returns 503 for its "Just a moment…" interstitial.
+  if (headers.get('cf-ray')) return true;
+  const server = (headers.get('server') ?? '').toLowerCase();
+  if (server.includes('cloudflare') || server.includes('akamai')) return true;
+  if (headers.get('x-sucuri-id') || headers.get('x-akamai-transformed')) return true;
+  return false;
+}
+
+export function classifyHttpStatus(status: number, headers?: Headers): Verdict {
+  if (status >= 200 && status < 400) return 'OK';
+  if (looksLikeWaf(status, headers)) return 'BLOCKED_WAF';
+  if (status >= 500) return 'SERVER_ERROR';
+  if (status >= 400) return 'CLIENT_ERROR';
+  return 'CLIENT_ERROR';
+}
+
+/** Only transient classes are retried. 4xx and WAF blocks never are. */
+export function isRetryableVerdict(v: Verdict): boolean {
+  return v === 'TIMEOUT' || v === 'DNS_FAILURE' || v === 'SERVER_ERROR';
+}
+
+export function csvCell(v: string): string {
+  // Standard CSV quoting: wrap in quotes and double any embedded quotes.
+  return `"${String(v).replace(/"/g, '""')}"`;
+}
+
+export const sleep = (ms: number): Promise<void> =>
+  new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Enforces a minimum gap between requests to the same hostname. Different hosts
+ * are unaffected by each other, so a slow provider cannot stall the whole sweep.
+ */
+export class HostRateLimiter {
+  private last = new Map<string, number>();
+
+  constructor(
+    private readonly minGapMs: number = MIN_HOST_GAP_MS,
+    private readonly now: () => number = () => Date.now(),
+    private readonly wait: (ms: number) => Promise<void> = sleep,
+  ) {}
+
+  async acquire(host: string): Promise<number> {
+    const prev = this.last.get(host);
+    const t = this.now();
+    let waited = 0;
+    if (prev !== undefined) {
+      const due = prev + this.minGapMs;
+      if (due > t) {
+        waited = due - t;
+        await this.wait(waited);
+      }
+    }
+    this.last.set(host, this.now());
+    return waited;
+  }
+}
+
+// ── URL check ────────────────────────────────────────────────────────────────
+
+export type Fetcher = (url: string, init: RequestInit) => Promise<Response>;
+
+export interface CheckDeps {
+  fetchImpl?: Fetcher;
+  waitImpl?: (ms: number) => Promise<void>;
+  timeoutMs?: number;
+}
+
+export interface CheckOutcome {
+  verdict: Verdict;
+  httpStatus: string;
+  detail: string;
+  attempts: number;
+}
+
+const USER_AGENT =
+  'Mozilla/5.0 (compatible; OrthoGuidelinesHubBot/1.0; +https://safsaf4444.github.io/ortho-guidelines-hub/)';
+
+/**
+ * Single attempt: HEAD first, falling back to GET when a server mishandles HEAD.
+ * Returns a verdict plus the raw status/detail for the report.
+ */
+async function attemptOnce(url: string, deps: Required<Pick<CheckDeps, 'fetchImpl' | 'timeoutMs'>>): Promise<CheckOutcome> {
+  const { fetchImpl, timeoutMs } = deps;
+  const headers = { 'User-Agent': USER_AGENT };
+
+  const run = async (method: 'HEAD' | 'GET'): Promise<Response> => {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      return await fetch(u, { method, headers, redirect: 'follow', signal: controller.signal });
+      return await fetchImpl(url, { method, headers, redirect: 'follow', signal: controller.signal });
     } finally {
       clearTimeout(timer);
     }
   };
 
   try {
-    let res = await attempt('HEAD');
-    // Some servers reject/mishandle HEAD (405/501, or a 4xx that a GET wouldn't
-    // give) — fall back to a GET before calling a link dead.
+    let res = await run('HEAD');
+    // Some servers reject/mishandle HEAD (405/501, or a 4xx a GET would not
+    // give) — fall back to GET before calling a link broken.
     if (res.status === 405 || res.status === 501 || (res.status >= 400 && res.status !== 404)) {
-      res = await attempt('GET');
+      res = await run('GET');
     }
-    return { ok: res.ok || (res.status >= 300 && res.status < 400), detail: `HTTP ${res.status}` };
+    const verdict = classifyHttpStatus(res.status, res.headers);
+    return { verdict, httpStatus: String(res.status), detail: `HTTP ${res.status}`, attempts: 1 };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    // AbortError → timeout; everything else here is DNS/connection-level.
-    const reason = /abort/i.test(msg) ? `timeout (>${timeoutMs}ms)` : `network/DNS: ${msg}`;
-    return { ok: false, detail: reason };
+    // AbortError → our timeout fired; anything else here is DNS/connection level.
+    if (/abort/i.test(msg)) {
+      return { verdict: 'TIMEOUT', httpStatus: '', detail: `timeout (>${timeoutMs}ms)`, attempts: 1 };
+    }
+    return { verdict: 'DNS_FAILURE', httpStatus: '', detail: `network/DNS: ${msg}`, attempts: 1 };
   }
 }
 
-function csvCell(v: string): string {
-  // Standard CSV quoting: wrap in quotes and double any embedded quotes.
-  return `"${String(v).replace(/"/g, '""')}"`;
+/** Runs attemptOnce, retrying at most once for transient failures. */
+export async function checkUrl(url: string, deps: CheckDeps = {}): Promise<CheckOutcome> {
+  const resolved = {
+    fetchImpl: deps.fetchImpl ?? ((u: string, init: RequestInit) => fetch(u, init)),
+    timeoutMs: deps.timeoutMs ?? FETCH_TIMEOUT_MS,
+  };
+  const wait = deps.waitImpl ?? sleep;
+
+  let out = await attemptOnce(url, resolved);
+  if (isRetryableVerdict(out.verdict) && MAX_ATTEMPTS > 1) {
+    await wait(RETRY_DELAY_MS);
+    const retry = await attemptOnce(url, resolved);
+    out = { ...retry, attempts: 2, detail: `${retry.detail} (after 1 retry; first: ${out.detail})` };
+  }
+  return out;
 }
 
-// ── main ──────────────────────────────────────────────────────────────────────
+// ── blocked domains (read-only) ──────────────────────────────────────────────
+
+export function loadBlockedDomains(): Set<string> {
+  if (!existsSync(BLOCKED_SOURCES_PATH)) {
+    console.warn('⚠️  scripts/blocked-sources.json not found — known-blocked short circuit is DISABLED.');
+    return new Set();
+  }
+  const raw = JSON.parse(readFileSync(BLOCKED_SOURCES_PATH, 'utf-8')) as {
+    domains?: { domain: string }[];
+  };
+  return new Set(
+    (raw.domains ?? []).map((d) => d.domain).filter((d) => d && !d.startsWith('PLACEHOLDER')),
+  );
+}
+
+// ── report ───────────────────────────────────────────────────────────────────
+
+export function buildCsv(results: Result[]): string {
+  const header = [
+    'guideline_id', 'topic', 'source', 'link_label', 'url', 'domain',
+    'verdict', 'http_status', 'detail', 'attempts',
+  ];
+  const lines = [header.join(',')];
+  for (const r of results) {
+    lines.push(
+      [r.id, r.topic, r.source, r.label, r.url, r.domain, r.verdict, r.httpStatus, r.detail, String(r.attempts)]
+        .map(csvCell)
+        .join(','),
+    );
+  }
+  return lines.join('\n') + '\n';
+}
+
+const ALL_VERDICTS: Verdict[] = [
+  'OK', 'CLIENT_ERROR', 'SERVER_ERROR', 'TIMEOUT', 'DNS_FAILURE', 'BLOCKED_WAF', 'KNOWN_BLOCKED',
+];
+
+export function tally(results: Result[]): Record<Verdict, number> {
+  const t = Object.fromEntries(ALL_VERDICTS.map((v) => [v, 0])) as Record<Verdict, number>;
+  for (const r of results) t[r.verdict]++;
+  return t;
+}
+
+// ── main ─────────────────────────────────────────────────────────────────────
 
 async function main() {
-  const blockedRaw = existsSync(BLOCKED_SOURCES_PATH)
-    ? (JSON.parse(readFileSync(BLOCKED_SOURCES_PATH, 'utf-8')) as { domains?: { domain: string }[] })
-    : { domains: [] };
-  const blockedDomains = new Set(
-    (blockedRaw.domains ?? []).map((d) => d.domain).filter((d) => d && !d.startsWith('PLACEHOLDER')),
-  );
+  const blockedDomains = loadBlockedDomains();
 
-  console.log('\n📥  Fetching guidelines from Supabase…');
-  const { data, error } = await supabase.from('guidelines').select('id, topic, source, versions');
-  if (error) {
-    console.error('❌ Failed to read guidelines table:', error.message);
-    process.exit(1);
-  }
-  const rows = (data as GuidelineRow[]) ?? [];
-  console.log(`✅  ${rows.length} guidelines. Checking URLs…\n`);
+  console.log(`\n📥  Loaded ${GUIDELINES_DATA.length} guidelines from the static dataset (no database access).`);
+  console.log(`▪  ${blockedDomains.size} known-blocked domain(s) will be short-circuited without a request.`);
+  console.log(`⏱  Minimum ${MIN_HOST_GAP_MS}ms between requests to the same host; 1 retry for transient failures.\n`);
 
+  const limiter = new HostRateLimiter();
   const results: Result[] = [];
-  for (const row of rows) {
-    const urls = (row.versions ?? [])
+
+  for (const row of GUIDELINES_DATA) {
+    const links = (row.versions ?? [])
       .map((v) => ({ label: v.label ?? '', url: v.url ?? '' }))
       .filter((v) => v.url && v.url !== '#');
 
-    for (const { label, url: link } of urls) {
-      const domain = hostnameOf(link) ?? '';
+    for (const { label, url } of links) {
+      const domain = hostnameOf(url) ?? '';
+      const base = { id: row.id, topic: row.topic, source: row.source, label, url, domain };
 
       if (domain && blockedDomains.has(domain)) {
-        results.push({ id: row.id, topic: row.topic, source: row.source, label, url: link, domain, verdict: 'KNOWN-BLOCKED', detail: 'domain in blocked-sources.json' });
+        results.push({
+          ...base,
+          verdict: 'KNOWN_BLOCKED',
+          httpStatus: '',
+          detail: 'domain in blocked-sources.json — no request made',
+          attempts: 0,
+        });
         process.stdout.write('▪');
         continue;
       }
 
-      const { ok, detail } = await statusCheck(link, FETCH_TIMEOUT_MS);
-      results.push({ id: row.id, topic: row.topic, source: row.source, label, url: link, domain, verdict: ok ? 'OK' : 'DEAD', detail });
-      process.stdout.write(ok ? '.' : '✗');
+      if (domain) await limiter.acquire(domain);
+      const outcome = await checkUrl(url);
+      results.push({ ...base, ...outcome });
+      process.stdout.write(outcome.verdict === 'OK' ? '.' : outcome.verdict === 'BLOCKED_WAF' ? 'w' : '✗');
     }
   }
   process.stdout.write('\n');
 
-  const ok = results.filter((r) => r.verdict === 'OK');
-  const dead = results.filter((r) => r.verdict === 'DEAD');
-  const blocked = results.filter((r) => r.verdict === 'KNOWN-BLOCKED');
-
-  // ── CSV report ──
+  // ── CSV report (the only file this script writes; reports/ is gitignored) ──
   if (!existsSync(REPORTS_DIR)) mkdirSync(REPORTS_DIR, { recursive: true });
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const csvPath = join(REPORTS_DIR, `dead-links-${stamp}.csv`);
-  const header = ['guideline_id', 'topic', 'source', 'link_label', 'url', 'domain', 'verdict', 'detail'];
-  const lines = [header.join(',')];
-  for (const r of results) {
-    lines.push([r.id, r.topic, r.source, r.label, r.url, r.domain, r.verdict, r.detail].map(csvCell).join(','));
-  }
-  writeFileSync(csvPath, lines.join('\n') + '\n', 'utf-8');
+  writeFileSync(csvPath, buildCsv(results), 'utf-8');
 
-  // ── console summary ──
+  const t = tally(results);
   console.log('\n──────── Dead-link report ────────');
   console.log(`  Total URLs checked : ${results.length}`);
-  console.log(`  ✅ OK              : ${ok.length}`);
-  console.log(`  ✗  DEAD            : ${dead.length}`);
-  console.log(`  ▪  KNOWN-BLOCKED   : ${blocked.length}  (not necessarily dead — skipped by design)`);
+  for (const v of ALL_VERDICTS) console.log(`  ${v.padEnd(14)} : ${t[v]}`);
   console.log(`  CSV report         : ${csvPath}`);
 
-  if (dead.length > 0) {
-    console.log('\n  Dead links:');
-    for (const r of dead) console.log(`   - [${r.id}] ${r.detail}  ${r.url}`);
+  const problems = results.filter(
+    (r) => r.verdict === 'CLIENT_ERROR' || r.verdict === 'SERVER_ERROR' || r.verdict === 'TIMEOUT' || r.verdict === 'DNS_FAILURE',
+  );
+  if (problems.length > 0) {
+    console.log('\n  Unreachable links:');
+    for (const r of problems) console.log(`   - [${r.id}] ${r.verdict} ${r.detail}  ${r.url}`);
+  }
+
+  const waf = results.filter((r) => r.verdict === 'BLOCKED_WAF');
+  if (waf.length > 0) {
+    console.log('\n  WAF/bot-blocked (NOT proof the link is dead — verify in a browser):');
+    for (const r of waf) console.log(`   - [${r.id}] ${r.detail}  ${r.url}`);
   }
   console.log('');
+  // Deliberately no non-zero exit: finding dead links is a reportable result,
+  // not a build failure.
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+// ESM-safe entrypoint guard. Without this, importing any helper from this module
+// (e.g. from a test) would start a full live sweep — the exact hazard called out
+// in scripts/detect-changes.ts.
+const isMain = process.argv[1]
+  ? import.meta.url === pathToFileURL(process.argv[1]).href
+  : false;
+
+if (isMain) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

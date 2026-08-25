@@ -1,0 +1,48 @@
+name: Weekly dead-link check
+
+on:
+  schedule:
+    # Every Wednesday at 03:00 UTC. Deliberately offset from the other two
+    # scheduled jobs (detect-changes Mon 06:00, guideline-sync Sun 02:00) so the
+    # same provider hosts are never hit by two workflows at once.
+    - cron: '0 3 * * 3'
+  workflow_dispatch:
+
+# Read-only by design. The checker reads the static dataset, needs no secrets,
+# and writes only a CSV under reports/ (gitignored). Declared explicitly so the
+# intent survives any change to the repository-level default permissions.
+permissions:
+  contents: read
+
+jobs:
+  dead-link-check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          # Kept in step with the other workflows.
+          node-version: 22
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # No `env:` block: this checker reads no secrets and opens no database
+      # connection. Finding dead links is a reportable result, not a failure —
+      # the script exits 0 regardless, so the job stays green.
+      - name: Run dead-link check
+        run: npm run flag-dead-links
+
+      - name: Upload dead-link report
+        # Still upload when a previous step fails, so a partial report is not lost.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dead-link-report
+          path: reports/dead-links-*.csv
+          if-no-files-found: warn
