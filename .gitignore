@@ -32,3 +32,7 @@ reports/
 # Generated provider-sync staging output (scripts/sync-providers.ts) — regenerated
 # each run and uploaded as a CI artifact, so it is never committed.
 candidates.json
+
+# Transient baseline extracted from git history by scripts/tests/equivalence.test.ts.
+# Deleted by the test in a finally; listed here as a safety net if the process dies.
+scripts/.equivalence-baseline.ts

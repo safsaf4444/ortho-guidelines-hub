@@ -34,6 +34,20 @@
  * This is a THIRD overlapping checker alongside scripts/flag-dead-links.ts and
  * scripts/detect-changes.ts. It does not replace or merge with either. How the
  * three relate long-term is an open decision, deliberately not resolved here.
+ *
+ * ─── PHASE 1 OF THE UNIFIED INGESTION CONTRACT ──────────────────────────────
+ *
+ * As of phase 1 this script ALSO emits its unmatched items in the shared
+ * `IngestionCandidate` shape from scripts/lib/ingestion.ts, so that the three
+ * checkers above can eventually be reviewed in one place. It is the first and
+ * so far ONLY producer of that shape; detect-changes.ts and flag-dead-links.ts
+ * are untouched and still emit their own formats.
+ *
+ * Discovery, filtering, and matching behaviour are UNCHANGED — the candidate
+ * records are an additional view over exactly the same items that previously
+ * landed in `newCandidates`, which is still present for backward compatibility.
+ * Everything emitted uses changeReason NEW_GUIDELINE and reviewStatus 'pending';
+ * this script has no approval path and still writes nothing but candidates.json.
  */
 import fs from 'fs';
 import path from 'path';
@@ -41,29 +55,53 @@ import { pathToFileURL } from 'url';
 import * as cheerio from 'cheerio';
 import RssParser from 'rss-parser';
 import { GUIDELINES_DATA, type Guideline } from '../src/data/guidelines-data';
+import {
+  CANDIDATE_SCHEMA_VERSION,
+  makeCandidateId,
+  normaliseCandidateUrl,
+  summariseReport,
+  type CandidateReport,
+  type ChangeReason,
+  type IngestionCandidate,
+  type PipelineId,
+} from './lib/ingestion';
+import type {
+  DiscoveredGuideline,
+  DiscoveredItem,
+  ProviderAdapter,
+} from './lib/provider-adapter';
 
 // ─── Interfaces ─────────────────────────────────────────────────────────────
+// The adapter contract now lives in scripts/lib/provider-adapter.ts so a second
+// adapter can be written against it without reaching into this file. Re-exported
+// here under the original names so existing importers are unaffected.
 
-export interface DiscoveredGuideline {
-  topic: string;
-  source: string;
-  summary?: string;
-  versions: { label: string; url: string; date?: string }[];
-}
+export type {
+  DiscoveredGuideline,
+  DiscoveredItem,
+  DiscoveredVersionLink,
+  ProviderAdapter,
+  ProviderIdentity,
+} from './lib/provider-adapter';
 
-export interface ProviderAdapter {
-  name: string;
-  sourceTag: string;
-  fetchCandidates(): Promise<DiscoveredGuideline[]>;
-}
-
-export interface DiffReport {
-  adapter: string;
-  totalDiscovered: number;
-  matchedExisting: number;
-  skippedBlocked: number;
+/**
+ * This adapter's run, in the shared contract shape, PLUS the pre-phase-1
+ * `newCandidates` field.
+ *
+ * `newCandidates` and `candidates` describe the same items in two formats and
+ * are always the same length — the former is the raw provider record as this
+ * script has always emitted it, the latter is the unified review record. It is
+ * kept so any existing reader of candidates.json keeps working unchanged.
+ */
+export interface DiffReport extends CandidateReport {
+  /** @deprecated Superseded by `candidates`; retained for output compatibility. */
   newCandidates: DiscoveredGuideline[];
 }
+
+const PIPELINE: PipelineId = 'sync-providers';
+
+/** Everything this script emits is a not-yet-in-the-catalogue discovery. */
+const CHANGE_REASON: ChangeReason = 'NEW_GUIDELINE';
 
 const OUTPUT_PATH = path.join(process.cwd(), 'candidates.json');
 
@@ -110,6 +148,56 @@ function isBlocked(url: string, blocked: Set<string>): boolean {
 // ─── Adapters ────────────────────────────────────────────────────────────────
 
 /**
+ * Pure DOM parse of a BOASt index page.
+ *
+ * Split out of `BOAAdapter.fetchCandidates` so the parsing rules can be tested
+ * offline against fixture HTML — previously they were only reachable by making
+ * a live request to boa.ac.uk. Behaviour is unchanged: same selector, same
+ * noise filter, same dedupe, same whitespace handling, same URL resolution,
+ * same result order. `baseUrl` receives exactly the URL that was fetched, which
+ * is what the inline version used to resolve relative hrefs against.
+ */
+export function parseBoaIndex(html: string, baseUrl: string): DiscoveredItem[] {
+  const $ = cheerio.load(html);
+  const results: DiscoveredItem[] = [];
+  const seen = new Set<string>();
+
+  // Nav/chrome link text that is not a guideline title. The BOASt index carries
+  // an aggregate "Download and read the full guidelines for BOA Standards
+  // (BOASts / SpecS) here" link that points at a bundle, not a single standard.
+  // Matched as a case-insensitive substring so trailing wording can change
+  // without silently reintroducing the noise.
+  const NOISE_TOPIC_PHRASES = ['download and read the full guidelines'];
+
+  $("a[href*='asset']").each((_, el) => {
+    const link = $(el);
+    const rawHref = link.attr('href')?.trim();
+    // Verbatim link text, whitespace-collapsed only. No rewriting.
+    const topic = link.text().replace(/\s+/g, ' ').trim();
+
+    if (!rawHref || !topic) return;
+
+    const topicLower = topic.toLowerCase();
+    if (NOISE_TOPIC_PHRASES.some(p => topicLower.includes(p))) return;
+
+    const fullUrl = rawHref.startsWith('http')
+      ? rawHref
+      : new URL(rawHref, baseUrl).href;
+
+    if (seen.has(fullUrl)) return;
+    seen.add(fullUrl);
+
+    results.push({
+      topic,
+      source: 'BOA',
+      versions: [{ label: 'BOASt PDF', url: fullUrl }],
+    });
+  });
+
+  return results;
+}
+
+/**
  * Pilot 1: DOM scraper for BOA (BOASt guidelines).
  *
  * Index page verified 2026-08-24: /standards-guidance/boasts.html yields 44
@@ -120,7 +208,7 @@ function isBlocked(url: string, blocked: Set<string>): boolean {
 export const BOAAdapter: ProviderAdapter = {
   name: 'British Orthopaedic Association (BOASt)',
   sourceTag: 'BOA',
-  async fetchCandidates(): Promise<DiscoveredGuideline[]> {
+  async fetchCandidates(): Promise<DiscoveredItem[]> {
     const targetUrl = 'https://www.boa.ac.uk/standards-guidance/boasts.html';
     const res = await fetch(targetUrl, {
       headers: {
@@ -131,43 +219,7 @@ export const BOAAdapter: ProviderAdapter = {
     if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${targetUrl}`);
 
     const html = await res.text();
-    const $ = cheerio.load(html);
-    const results: DiscoveredGuideline[] = [];
-    const seen = new Set<string>();
-
-    // Nav/chrome link text that is not a guideline title. The BOASt index carries
-    // an aggregate "Download and read the full guidelines for BOA Standards
-    // (BOASts / SpecS) here" link that points at a bundle, not a single standard.
-    // Matched as a case-insensitive substring so trailing wording can change
-    // without silently reintroducing the noise.
-    const NOISE_TOPIC_PHRASES = ['download and read the full guidelines'];
-
-    $("a[href*='asset']").each((_, el) => {
-      const link = $(el);
-      const rawHref = link.attr('href')?.trim();
-      // Verbatim link text, whitespace-collapsed only. No rewriting.
-      const topic = link.text().replace(/\s+/g, ' ').trim();
-
-      if (!rawHref || !topic) return;
-
-      const topicLower = topic.toLowerCase();
-      if (NOISE_TOPIC_PHRASES.some(p => topicLower.includes(p))) return;
-
-      const fullUrl = rawHref.startsWith('http')
-        ? rawHref
-        : new URL(rawHref, targetUrl).href;
-
-      if (seen.has(fullUrl)) return;
-      seen.add(fullUrl);
-
-      results.push({
-        topic,
-        source: 'BOA',
-        versions: [{ label: 'BOASt PDF', url: fullUrl }],
-      });
-    });
-
-    return results;
+    return parseBoaIndex(html, targetUrl);
   },
 };
 
@@ -212,15 +264,63 @@ function loadExistingUrlMap(guidelines: Guideline[]): Map<string, Guideline> {
   for (const g of guidelines) {
     for (const v of g.versions) {
       if (v.url && v.url !== '#') {
-        const normalised = v.url.toLowerCase().trim().replace(/\/+$/, '');
-        urlMap.set(normalised, g);
+        urlMap.set(normaliseCandidateUrl(v.url), g);
       }
     }
   }
   return urlMap;
 }
 
-const normaliseUrl = (u: string) => u.toLowerCase().trim().replace(/\/+$/, '');
+// NB: `normaliseCandidateUrl` from the shared contract replaces the two
+// identical inline normalisers this file used to carry (index build + lookup).
+// The implementation is byte-for-byte the same rule — lowercase, trim, strip
+// trailing slashes — so matching behaviour is unchanged. It is imported rather
+// than redeclared so that the match key and the candidate ID cannot drift apart.
+
+// ─── Candidate Mapping ───────────────────────────────────────────────────────
+
+/**
+ * Project a discovered provider item into the unified review record.
+ *
+ * Purely a re-shaping step: no field is invented, rewritten, or enriched. The
+ * `versions[]` URLs are carried through exactly as discovered; only
+ * `primaryUrl` is normalised, because that is the matching/identity key.
+ */
+function toIngestionCandidate(
+  item: DiscoveredGuideline,
+  adapter: ProviderAdapter,
+  discoveredAt: string,
+): IngestionCandidate {
+  const primaryUrl = normaliseCandidateUrl(item.versions[0].url);
+
+  return {
+    candidateId: makeCandidateId({
+      pipeline: PIPELINE,
+      provider: adapter.sourceTag,
+      changeReason: CHANGE_REASON,
+      primaryUrl,
+    }),
+    pipeline: PIPELINE,
+    provider: adapter.sourceTag,
+    providerName: adapter.name,
+    topic: item.topic,
+    ...(item.summary ? { summary: item.summary } : {}),
+    versions: item.versions.map(v => ({
+      label: v.label,
+      url: v.url,
+      ...(v.date ? { date: v.date } : {}),
+    })),
+    primaryUrl,
+    changeReason: CHANGE_REASON,
+    reviewStatus: 'pending',
+    discoveredAt,
+    // NEW_GUIDELINE means nothing in the catalogue matched, by definition.
+    matchedGuidelineId: null,
+    // Reserved; deliberately not populated in phase 1. See scripts/lib/ingestion.ts.
+    providerRef: null,
+    notes: `Discovered on the ${adapter.name} index. No matching URL in the static catalogue.`,
+  };
+}
 
 // ─── Diff Engine ─────────────────────────────────────────────────────────────
 
@@ -235,40 +335,78 @@ export async function runDryRun(adapters: ProviderAdapter[]): Promise<DiffReport
 
   for (const adapter of adapters) {
     console.log(`[Sync] Running adapter: ${adapter.name}...`);
+    const generatedAt = new Date().toISOString();
+
     try {
-      const candidates = await adapter.fetchCandidates();
+      const discovered = await adapter.fetchCandidates();
       let matchedCount = 0;
       let skippedBlocked = 0;
       const newCandidates: DiscoveredGuideline[] = [];
+      const candidates: IngestionCandidate[] = [];
 
-      for (const item of candidates) {
+      for (const item of discovered) {
         const url = item.versions[0].url;
         if (isBlocked(url, blocked)) {
           skippedBlocked++;
           continue;
         }
-        if (existingUrlMap.has(normaliseUrl(url))) {
+        if (existingUrlMap.has(normaliseCandidateUrl(url))) {
           matchedCount++;
         } else {
           newCandidates.push(item);
+          candidates.push(toIngestionCandidate(item, adapter, generatedAt));
         }
       }
 
-      reports.push({
+      const report: DiffReport = {
+        pipeline: PIPELINE,
         adapter: adapter.name,
-        totalDiscovered: candidates.length,
+        provider: adapter.sourceTag,
+        generatedAt,
+        totalDiscovered: discovered.length,
         matchedExisting: matchedCount,
         skippedBlocked,
+        candidates,
         newCandidates,
-      });
+      };
+
+      // Coverage assertion: discovered must equal matched + blocked + candidates.
+      // A shortfall here means items were dropped somewhere in the loop above,
+      // which is exactly the class of silent undercount this project has already
+      // been bitten by. Surfaced loudly, but never fatal — this is a read-only
+      // report and losing the remaining adapters would be the worse outcome.
+      const coverage = summariseReport(report);
+      if (!coverage.balanced) {
+        console.warn(
+          `  ! COVERAGE MISMATCH for ${adapter.name}: ${report.totalDiscovered} discovered but ` +
+            `${coverage.accountedFor} accounted for (${coverage.unaccountedFor} unaccounted).`,
+        );
+      }
+
+      reports.push(report);
 
       console.log(
-        `  ✓ Found ${candidates.length} items ` +
+        `  ✓ Found ${discovered.length} items ` +
           `(${matchedCount} matched in catalogue, ${newCandidates.length} new/unmatched` +
           `${skippedBlocked ? `, ${skippedBlocked} skipped as blocked-domain` : ''})`,
       );
     } catch (err) {
+      // Previously an adapter failure left NO trace in candidates.json — the run
+      // simply reported one fewer adapter. Record it instead, so a zero-candidate
+      // artifact can be told apart from a failed sweep.
       console.error(`  ✗ Failed running adapter ${adapter.name}:`, err);
+      reports.push({
+        pipeline: PIPELINE,
+        adapter: adapter.name,
+        provider: adapter.sourceTag,
+        generatedAt,
+        totalDiscovered: 0,
+        matchedExisting: 0,
+        skippedBlocked: 0,
+        candidates: [],
+        newCandidates: [],
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 
@@ -298,27 +436,38 @@ if (isMain) {
     console.log('\n=== Summary Report ===');
     for (const r of reports) {
       console.log(`\nAdapter: ${r.adapter}`);
+      if (r.error) {
+        console.log(`  - ADAPTER FAILED: ${r.error}`);
+        continue;
+      }
       console.log(`  - Total items discovered: ${r.totalDiscovered}`);
       console.log(`  - Already in catalogue:   ${r.matchedExisting}`);
       console.log(`  - Skipped (blocked host): ${r.skippedBlocked}`);
-      console.log(`  - New / unmatched:        ${r.newCandidates.length}`);
-      if (r.newCandidates.length > 0) {
+      console.log(`  - New / unmatched:        ${r.candidates.length}`);
+      if (r.candidates.length > 0) {
         console.log('  - Sample unmatched candidates (first 3):');
-        r.newCandidates.slice(0, 3).forEach(c => {
-          console.log(`     • "${c.topic}" -> ${c.versions[0].url}`);
+        r.candidates.slice(0, 3).forEach(c => {
+          console.log(`     • [${c.candidateId}] "${c.topic}" -> ${c.versions[0].url}`);
         });
       }
     }
 
-    // Staging output for human review. This is the ONLY file the script writes.
+    const totalCandidates = reports.reduce((n, r) => n + r.candidates.length, 0);
+
+    // Staging output for human review. This is the ONLY file the script writes,
+    // and it is gitignored. Nothing downstream consumes it automatically.
     const payload = {
+      schemaVersion: CANDIDATE_SCHEMA_VERSION,
       generatedAt: new Date().toISOString(),
-      note: 'STAGING ONLY — candidates for human review. Nothing here has been written to Supabase or to src/data/guidelines-data.ts.',
+      note:
+        'STAGING ONLY — candidates for human review, all reviewStatus "pending". Nothing here ' +
+        'has been written to Supabase, to src/data/guidelines-data.ts, or to GitHub.',
       existingGuidelineCount: GUIDELINES_DATA.length,
+      totalCandidates,
       reports,
     };
     fs.writeFileSync(OUTPUT_PATH, JSON.stringify(payload, null, 2), 'utf-8');
-    console.log(`\nWrote staging file: ${OUTPUT_PATH}`);
+    console.log(`\nWrote staging file: ${OUTPUT_PATH} (${totalCandidates} candidate(s), schema v${CANDIDATE_SCHEMA_VERSION})`);
     console.log('Dry run complete. No database writes and no changes to guidelines-data.ts.');
   })();
 }
