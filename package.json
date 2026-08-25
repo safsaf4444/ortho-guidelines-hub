@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "seed": "tsx scripts/seed.ts",
     "export-static": "tsx scripts/export-static.ts",
-    "flag-dead-links": "tsx scripts/flag-dead-links.ts"
+    "flag-dead-links": "tsx scripts/flag-dead-links.ts",
+    "test:offline": "tsx scripts/tests/ingestion.test.ts && tsx scripts/tests/boa-adapter.test.ts && tsx scripts/tests/equivalence.test.ts"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.3.0",
