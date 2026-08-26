@@ -347,12 +347,11 @@ export function parseBofasPublicationsIndex(html: string, baseUrl: string): Disc
 }
 
 /**
- * SER-6 feasibility pilot: DOM scraper for BOFAS Position Statements /
- * Publications only.
+ * SER-6: DOM scraper for BOFAS Position Statements / Publications only.
  *
- * NOT registered in the default adapter list below — this is a feasibility
- * build for review, not a decision to run it live. Wire it into `adapters`
- * once the parsing rules and candidate output have been reviewed.
+ * Registered in the default adapter list below after feasibility review.
+ * Scope stays deliberately narrow — Round Table booklets and the Hyperbook
+ * are not covered; see parseBofasPublicationsIndex's doc comment above.
  */
 export const BOFASAdapter: ProviderAdapter = {
   name: 'British Orthopaedic Foot & Ankle Society (BOFAS)',
@@ -579,7 +578,13 @@ if (isMain) {
     // BESS is intentionally absent too: its only feed is general site content
     // (events/fellowships/member posts), not guidance — see BSGAdapter's doc
     // comment above for the 2026-08-26 finding.
-    const adapters: ProviderAdapter[] = [BOAAdapter, BSGAdapter];
+    // BOFASAdapter is scoped to the Publications index only (SER-6) — Round
+    // Table booklets and the Hyperbook are deliberately not covered, see its
+    // doc comment above. Discovered candidates (including UK-FALCON, an audit
+    // report rather than clinical guidance) land in candidates.json as
+    // reviewStatus 'pending' like everything else this pipeline finds —
+    // nothing here writes to the catalogue.
+    const adapters: ProviderAdapter[] = [BOAAdapter, BSGAdapter, BOFASAdapter];
 
     const reports = await runDryRun(adapters);
 
