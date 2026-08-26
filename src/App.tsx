@@ -8,6 +8,9 @@ import { findDuplicateCandidates, countGuidelinesWithDuplicates, pairKey, Duplic
 import { computeMerge } from './lib/dedupe'
 import { cn } from './lib/utils'
 import ReviewDashboard from './components/ReviewDashboard'
+import EditorAuthControl from './components/EditorAuthControl'
+import { useEditorAuth } from './lib/auth'
+import { canWrite, writeBlockedReason } from './lib/write-access'
 
 const DUPLICATES_VIEW = '__duplicates__';
 const CHANGELOG_VIEW = '__changelog__';
@@ -18,9 +21,11 @@ const REVIEW_QUEUE_VIEW = '__review-queue__';
 // link-verification / changelog "Add note") is hidden from everyone, matching the
 // database lockdown in supabase-migration-readonly-lockdown.sql (RLS on, no write
 // policy). Browsing, search, filtering, grouping and the static fallback are
-// unaffected. A future Auth/editor model will replace this flag with real
-// per-user gating. Typed as boolean so the (currently unreachable) write UI still
-// type-checks for that later change.
+// unaffected. Kept false for the whole of this branch — magic-link sign-in and
+// the editor allowlist (src/lib/auth.ts, src/lib/editor-allowlist.ts) are being
+// PREPARED here, not turned on. Even once flipped true, a write control also
+// requires isEditor — see src/lib/write-access.ts. Typed as boolean so the
+// (currently unreachable) write UI still type-checks for that later change.
 const WRITES_ENABLED: boolean = false;
 
 const LINK_STATUS_OPTIONS: { value: NonNullable<Guideline['linkVerificationStatus']>; label: string }[] = [
@@ -240,6 +245,10 @@ function useOnlineStatus(): boolean {
 export default function App() {
   const [guidelines, setGuidelines] = useState<Guideline[]>(GUIDELINES_DATA);
   const isOnline = useOnlineStatus();
+  // P0 write-lockdown, layer 2: even once WRITES_ENABLED flips true, a write
+  // control also requires isEditor. See src/lib/write-access.ts.
+  const editorAuth = useEditorAuth();
+  const isEditor = editorAuth.isEditor;
 
   // Silently replace static data with DB data when Supabase is configured.
   // Falls back to GUIDELINES_DATA automatically — see guidelines-service.ts.
@@ -353,9 +362,9 @@ export default function App() {
   const persistGuideline = async (updated: Guideline, isNew: boolean) => {
     // Read-only lockdown enforced at the source, not just by hiding the Save
     // button: even if something calls this directly, it must not reach
-    // Supabase while WRITES_ENABLED is false.
-    if (!WRITES_ENABLED) {
-      console.warn('[persistGuideline] Ignored — WRITES_ENABLED is false. No local or database change made.');
+    // Supabase unless both WRITES_ENABLED and isEditor hold.
+    if (!canWrite(WRITES_ENABLED, isEditor)) {
+      console.warn(`[persistGuideline] Ignored — ${writeBlockedReason(WRITES_ENABLED, isEditor)} No local or database change made.`);
       return;
     }
     // Update local state immediately
@@ -408,8 +417,8 @@ export default function App() {
   // Non-optimistic: wait for the server delete to succeed before the UI
   // claims the record is gone, so a failed call never leaves a false state.
   const handleDelete = async (id: string) => {
-    if (!WRITES_ENABLED) {
-      console.warn('[handleDelete] Ignored — WRITES_ENABLED is false. No database change made.');
+    if (!canWrite(WRITES_ENABLED, isEditor)) {
+      console.warn(`[handleDelete] Ignored — ${writeBlockedReason(WRITES_ENABLED, isEditor)} No database change made.`);
       return;
     }
     try {
@@ -471,6 +480,12 @@ export default function App() {
             <Database className="w-3.5 h-3.5" />
             <span>{isSupabaseEnabled ? "Supabase Live" : "Static Mode"}</span>
           </div>
+
+          {/* Editor sign-in/out — only meaningful when a live DB backend
+              exists. Signing in reports isEditor to the UI; it does not by
+              itself enable any write control (WRITES_ENABLED must also be
+              true — see src/lib/write-access.ts). */}
+          {isSupabaseEnabled && <EditorAuthControl auth={editorAuth} />}
 
           {/* Review Staged Guidelines — read-only manual review tool. Visible to
               everyone: it's a review surface, not a publication or admin
@@ -677,7 +692,7 @@ export default function App() {
                       By provider
                     </button>
                   </div>
-                  {WRITES_ENABLED && (
+                  {WRITES_ENABLED && isEditor && (
                     <button
                       onClick={handleAddNew}
                       className="flex items-center gap-1 px-2.5 py-1.5 bg-[#0F172A] text-white rounded text-[12px] font-medium hover:bg-slate-800 transition-colors shrink-0"
@@ -697,6 +712,7 @@ export default function App() {
             {currentSection === DUPLICATES_VIEW ? (
               <DuplicatesPanel
                 candidates={duplicateCandidates}
+                isEditor={isEditor}
                 onOpen={handleEdit}
                 onDismiss={handleDismissDuplicate}
                 onMerge={handleMergeDuplicates}
@@ -716,6 +732,7 @@ export default function App() {
                   items={grouped[section]}
                   allGuidelines={guidelines}
                   groupBy={groupBy}
+                  isEditor={isEditor}
                   isCollapsed={collapsedSections.has(section)}
                   onToggleCollapse={() => toggleSection(section)}
                   onEdit={handleEdit}
@@ -730,12 +747,13 @@ export default function App() {
       {/* Reachable regardless of WRITES_ENABLED — the read-only Pending Review
           UI opens this modal for prefilled manual review (see
           handleReviewCandidate). Save/Delete are gated inside EditModal
-          itself, and persistGuideline/handleDelete refuse to write while
-          WRITES_ENABLED is false — this outer condition is not the write
-          boundary. */}
+          itself, and persistGuideline/handleDelete refuse to write unless
+          canWrite(WRITES_ENABLED, isEditor) — this outer condition is not the
+          write boundary. */}
       {editingGuideline && (
         <EditModal
           guideline={editingGuideline}
+          isEditor={isEditor}
           onSave={handleSave}
           onClose={() => setEditingGuideline(null)}
           onDelete={handleDelete}
@@ -749,12 +767,13 @@ export default function App() {
 // ─── Section Container ────────────────────────────────────────────────────────
 
 function SectionContainer({
-  section, items, allGuidelines, groupBy, isCollapsed, onToggleCollapse, onEdit, onQuickUpdate,
+  section, items, allGuidelines, groupBy, isEditor, isCollapsed, onToggleCollapse, onEdit, onQuickUpdate,
 }: {
   section: string;
   items: Guideline[];
   allGuidelines: Guideline[];
   groupBy: 'section' | 'provider';
+  isEditor: boolean;
   isCollapsed: boolean;
   onToggleCollapse: () => void;
   onEdit: (g: Guideline) => void;
@@ -788,7 +807,7 @@ function SectionContainer({
         <div className="px-3.5 pb-3.5 flex flex-col gap-1.5 border-t border-slate-100">
           <div className="h-1.5" />
           {items.map(g => (
-            <GuidelineCard key={g.id} item={g} sectionContext={section} allGuidelines={allGuidelines} onEdit={onEdit} onQuickUpdate={onQuickUpdate} />
+            <GuidelineCard key={g.id} item={g} sectionContext={section} allGuidelines={allGuidelines} isEditor={isEditor} onEdit={onEdit} onQuickUpdate={onQuickUpdate} />
           ))}
         </div>
       )}
@@ -799,11 +818,12 @@ function SectionContainer({
 // ─── Guideline Card ───────────────────────────────────────────────────────────
 
 function GuidelineCard({
-  item, sectionContext, allGuidelines, onEdit, onQuickUpdate,
+  item, sectionContext, allGuidelines, isEditor, onEdit, onQuickUpdate,
 }: {
   item: Guideline;
   sectionContext: string;
   allGuidelines: Guideline[];
+  isEditor: boolean;
   onEdit: (g: Guideline) => void;
   onQuickUpdate: (g: Guideline) => void;
 }) {
@@ -904,7 +924,7 @@ function GuidelineCard({
                   {item.linkLastVerified && (
                     <span className="text-[10px] text-slate-400">verified {item.linkLastVerified}</span>
                   )}
-                  {WRITES_ENABLED && (
+                  {WRITES_ENABLED && isEditor && (
                     <>
                       <select
                         value={linkStatus}
@@ -993,7 +1013,7 @@ function GuidelineCard({
 
           {/* Feature 2 — append-only changelog for this guideline. Mounts (and
               fetches) only when the card is expanded. */}
-          <CardChangelog guidelineId={item.id} />
+          <CardChangelog guidelineId={item.id} isEditor={isEditor} />
 
           <div className="flex justify-between items-center pt-1 border-t border-slate-100">
             <div className="flex items-center gap-2.5">
@@ -1002,7 +1022,7 @@ function GuidelineCard({
               )}
               <span className="text-[10px] text-slate-400">ID: {item.id}</span>
             </div>
-            {WRITES_ENABLED && (
+            {WRITES_ENABLED && isEditor && (
               <button
                 onClick={e => { e.stopPropagation(); onEdit(item); }}
                 className="px-2 py-0.5 text-[10px] font-medium border border-slate-200 rounded text-slate-400 hover:bg-slate-50 hover:text-slate-600 transition-colors"
@@ -1028,7 +1048,7 @@ function fmtTimestamp(iso: string): string {
 // Append-only note history for a single guideline, shown inside the expanded
 // card. Fetches on mount (i.e. when the card expands). In static/offline mode
 // the service returns [] for reads and throws on write (surfaced via alert).
-function CardChangelog({ guidelineId }: { guidelineId: string }) {
+function CardChangelog({ guidelineId, isEditor }: { guidelineId: string; isEditor: boolean }) {
   const [entries, setEntries] = useState<ChangelogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [text, setText] = useState('');
@@ -1044,6 +1064,12 @@ function CardChangelog({ guidelineId }: { guidelineId: string }) {
   }, [guidelineId]);
 
   const addNote = async () => {
+    // Source-level guard, not just the hidden input below — see
+    // src/lib/write-access.ts.
+    if (!canWrite(WRITES_ENABLED, isEditor)) {
+      console.warn(`[CardChangelog] Ignored — ${writeBlockedReason(WRITES_ENABLED, isEditor)} No note added.`);
+      return;
+    }
     const trimmed = text.trim();
     if (!trimmed || saving) return;
     setSaving(true);
@@ -1084,7 +1110,7 @@ function CardChangelog({ guidelineId }: { guidelineId: string }) {
         </ul>
       )}
 
-      {WRITES_ENABLED && (
+      {WRITES_ENABLED && isEditor && (
         <div className="flex items-center gap-1.5">
           <input
             type="text"
@@ -1162,9 +1188,10 @@ function ChangelogPanel({ guidelines }: { guidelines: Guideline[] }) {
 // ─── Edit Modal ───────────────────────────────────────────────────────────────
 
 function EditModal({
-  guideline, onSave, onClose, onDelete, isNew,
+  guideline, isEditor, onSave, onClose, onDelete, isNew,
 }: {
   guideline: Guideline;
+  isEditor: boolean;
   onSave: (g: Guideline) => void;
   onClose: () => void;
   onDelete: (id: string) => void;
@@ -1174,6 +1201,9 @@ function EditModal({
     ...guideline,
     versions: guideline.versions.map(v => ({ ...v })),
   });
+
+  const writable = canWrite(WRITES_ENABLED, isEditor);
+  const blockedReason = writeBlockedReason(WRITES_ENABLED, isEditor);
 
   const set = <K extends keyof Guideline>(key: K, value: Guideline[K]) =>
     setForm(prev => ({ ...prev, [key]: value }));
@@ -1386,17 +1416,17 @@ function EditModal({
         </div>
 
         {/* Footer */}
-        {!WRITES_ENABLED && (
+        {!writable && blockedReason && (
           <div className="px-4 py-2 bg-amber-50 border-t border-amber-200 text-[11px] text-amber-800 shrink-0">
-            Read-only mode — publication is disabled. This form is for review and prefill only; nothing typed here can be saved.
+            {blockedReason} This form is for review and prefill only; nothing typed here can be saved.
           </div>
         )}
         <div className="flex justify-between items-center gap-2 px-4 py-2.5 border-t border-slate-200 shrink-0">
           <div>
-            {/* Delete is a write action too — same WRITES_ENABLED gate as Save.
-                The actual write boundary is in handleDelete/persistGuideline
-                (App.tsx); hiding it here is the UI-convenience layer only. */}
-            {WRITES_ENABLED && !isNew && (
+            {/* Delete is a write action too — same gate as Save. The actual
+                write boundary is in handleDelete/persistGuideline (App.tsx);
+                hiding it here is the UI-convenience layer only. */}
+            {writable && !isNew && (
               <button
                 onClick={() => {
                   if (window.confirm(`Delete "${form.topic}"? This permanently removes it from the catalogue and cannot be undone.`)) {
@@ -1411,7 +1441,7 @@ function EditModal({
             )}
           </div>
           <div className="flex gap-2">
-            {WRITES_ENABLED ? (
+            {writable ? (
               <button onClick={() => onSave(form)}
                 className="bg-[#0F172A] text-white py-1.5 px-4 rounded text-[12px] font-medium hover:bg-slate-800 transition-colors">
                 Save Guideline
@@ -1419,7 +1449,7 @@ function EditModal({
             ) : (
               <button
                 disabled
-                title="Read-only mode — publication is disabled"
+                title={blockedReason ?? 'Read-only mode — publication is disabled'}
                 className="bg-slate-200 text-slate-400 py-1.5 px-4 rounded text-[12px] font-medium cursor-not-allowed"
               >
                 Save Guideline
@@ -1443,9 +1473,10 @@ function EditModal({
 // Nothing here runs automatically or in bulk.
 
 function DuplicatesPanel({
-  candidates, onOpen, onDismiss, onMerge, onDeleteOne,
+  candidates, isEditor, onOpen, onDismiss, onMerge, onDeleteOne,
 }: {
   candidates: DuplicateCandidate[];
+  isEditor: boolean;
   onOpen: (g: Guideline) => void;
   onDismiss: (a: Guideline, b: Guideline) => void;
   onMerge: (canonical: Guideline, duplicate: Guideline) => void;
@@ -1461,6 +1492,7 @@ function DuplicatesPanel({
         <DuplicatePairCard
           key={`${c.a.id}::${c.b.id}`}
           candidate={c}
+          isEditor={isEditor}
           onOpen={onOpen}
           onDismiss={onDismiss}
           onMerge={onMerge}
@@ -1472,9 +1504,10 @@ function DuplicatesPanel({
 }
 
 function DuplicatePairCard({
-  candidate, onOpen, onDismiss, onMerge, onDeleteOne,
+  candidate, isEditor, onOpen, onDismiss, onMerge, onDeleteOne,
 }: {
   candidate: DuplicateCandidate;
+  isEditor: boolean;
   onOpen: (g: Guideline) => void;
   onDismiss: (a: Guideline, b: Guideline) => void;
   onMerge: (canonical: Guideline, duplicate: Guideline) => void;
@@ -1519,7 +1552,7 @@ function DuplicatePairCard({
             </span>
           ))}
         </div>
-        {WRITES_ENABLED && (
+        {WRITES_ENABLED && isEditor && (
           <button
             onClick={() => onDismiss(a, b)}
             className="text-[10px] text-slate-400 hover:text-slate-600 shrink-0 underline underline-offset-2"
@@ -1546,7 +1579,7 @@ function DuplicatePairCard({
               <span className="text-[10px] text-slate-400">
                 {g.section} · {g.source} · {g.status}{g.archived ? ' · archived' : ''} · {g.versions.length} link{g.versions.length === 1 ? '' : 's'}
               </span>
-              {WRITES_ENABLED && (
+              {WRITES_ENABLED && isEditor && (
                 <div className="flex items-center gap-2 mt-1">
                   <button
                     onClick={() => onOpen(g)}
@@ -1569,7 +1602,7 @@ function DuplicatePairCard({
         })}
       </div>
 
-      {WRITES_ENABLED && (
+      {WRITES_ENABLED && isEditor && (
         <div className="flex items-center gap-2 pt-2 border-t border-slate-100 flex-wrap">
           <button
             onClick={handleMerge}

@@ -23,33 +23,34 @@ The app works without a database (falls back to static data), but to enable data
 
 `VITE_*` variables are exposed to the frontend bundle — only put the anon key there, never the service role key. `SUPABASE_SERVICE_ROLE_KEY` is read only by `scripts/seed.ts`.
 
-## Security — temporary read-only lockdown
+## Security — current status
 
-**Status: temporary read-only lockdown pending governance and editor-ownership
-decisions.** All decisions about who has editing access, ownership, and
-long-term maintenance are deliberately deferred until QI/governance direction is
-clearer.
+**Status: read-only in production; magic-link editor sign-in prepared but not
+switched on.**
 
-This closes the previous public-write exposure with the smallest possible change:
-
-- **Database:** `supabase-migration-readonly-lockdown.sql` enables Row Level
-  Security on `public.guidelines` with a single public read-only `SELECT`
-  policy and **no** insert/update/delete policies — so once run, nobody
-  (including the owner) can write through the public anon key / Data API / app.
-  The `service_role` key used by `scripts/*.ts` bypasses RLS, so seeding/export
-  scripts still work. *(This migration is run by hand, not by CI, and is not run
-  as part of this PR.)*
-- **App:** every write control (Add / Edit / Delete / Merge / link-verification
-  / changelog “Add note”) is hidden from everyone via the `WRITES_ENABLED`
-  flag in `src/App.tsx` (currently `false`). Browsing, search, filtering,
-  section/provider grouping, cross-references and the static fallback are
+- **Database, already live:** `supabase-migration-readonly-lockdown.sql` has
+  been run — `public.guidelines` has RLS enabled with a single public
+  read-only `SELECT` policy and no insert/update/delete policy, so nobody
+  (including the owner) can currently write through the public anon key /
+  Data API / app. The `service_role` key used by `scripts/*.ts` bypasses RLS,
+  so seeding/export/approve-change scripts keep working.
+- **Database, not yet run:** `supabase-migration-add-editor-writes-and-changelog.sql`
+  adds an editor-only write policy on `guidelines` and creates an
+  editor-only-readable `guideline_changelog`. It is additive to the migration
+  above, not a replacement, and is run by hand — see
+  [SECURITY.md](SECURITY.md) for the full manual prerequisite list
+  (configuring the Supabase Auth redirect URL, the initial editor's magic-link
+  sign-in, running the migration, setting `VITE_EDITOR_UUIDS`, and flipping
+  `WRITES_ENABLED`).
+- **App, prepared in this branch:** `src/lib/auth.ts` (magic-link sign-in via
+  `signInWithOtp`, session restore, sign-out), `src/lib/editor-allowlist.ts`
+  (explicit UUID allowlist, fails closed with no config), and every write
+  control gated `WRITES_ENABLED && isEditor && ...`. Neither condition alone
+  reveals a write control, and RLS denies the write server-side regardless of
+  either. `WRITES_ENABLED` stays hardcoded `false` throughout this branch.
+  Browsing, search, filtering, section/provider grouping, cross-references,
+  the read-only Pending Review dashboard, and the static fallback are
   unchanged for all visitors.
-
-Explicitly **not** included yet (parked as a later follow-up): Supabase Auth
-sign-in, an editor UUID, editor-restricted write policies, and the
-`guideline_changelog` table/migration. When governance decides the
-editor-ownership model, the `WRITES_ENABLED` flag and the DB policies will be
-replaced with real per-editor gating.
 
 ## Data remediation ordering
 
