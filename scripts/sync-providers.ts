@@ -224,6 +224,78 @@ export const BOAAdapter: ProviderAdapter = {
 };
 
 /**
+ * Pure DOM parse of the BSG "Guidelines & Resources" index page.
+ *
+ * Split out of `BSGAdapter.fetchCandidates` for the same reason as
+ * `parseBoaIndex`: offline-testable against fixture HTML.
+ *
+ * Each guideline on the page is a Divi "promo" module: a `div.et_pb_promo`
+ * containing an `h2.et_pb_module_header` (the title) and an
+ * `a.et_pb_promo_button[href]` (the document link, either a BSG-hosted PDF or
+ * an external journal/society page). This selector was verified against the
+ * live page 2026-08-26 to match exactly the 9 guidance/consensus documents in
+ * the "BSG Clinical Guidelines" and "Other Resources" sections — no news,
+ * event, or membership content on the page carries this class combination.
+ * Externally-hosted documents (ESMO, RPS consensus papers, the Desmoid Tumor
+ * Research Foundation paper) are intentionally included as BSG-curated
+ * evidence; the existing exact-URL matching in `loadExistingUrlMap` /
+ * `runDryRun` is what prevents duplicates for anything already catalogued.
+ */
+export function parseBsgIndex(html: string, baseUrl: string): DiscoveredItem[] {
+  const $ = cheerio.load(html);
+  const results: DiscoveredItem[] = [];
+  const seen = new Set<string>();
+
+  $('div.et_pb_promo').each((_, el) => {
+    const module = $(el);
+    const topic = module.find('h2.et_pb_module_header').first().text().replace(/\s+/g, ' ').trim();
+    const rawHref = module.find('a.et_pb_promo_button[href]').first().attr('href')?.trim();
+
+    if (!rawHref || !topic) return;
+
+    const fullUrl = rawHref.startsWith('http') ? rawHref : new URL(rawHref, baseUrl).href;
+
+    if (seen.has(fullUrl)) return;
+    seen.add(fullUrl);
+
+    results.push({
+      topic,
+      source: 'BSG',
+      versions: [{ label: 'BSG Guideline Document', url: fullUrl }],
+    });
+  });
+
+  return results;
+}
+
+/**
+ * Pilot: DOM scraper for BSG (British Sarcoma Group).
+ *
+ * Registered in place of BESS: BESS's only public feed (`/feed/`) was
+ * inspected 2026-08-26 and found to be general site content (conference
+ * announcements, fellowship programmes, member-only "Protected:" posts) with
+ * zero guidance items, so it was deliberately NOT registered as a BESS
+ * source. BSG's guidance index was confirmed guidance-only instead.
+ */
+export const BSGAdapter: ProviderAdapter = {
+  name: 'British Sarcoma Group (BSG)',
+  sourceTag: 'BSG',
+  async fetchCandidates(): Promise<DiscoveredItem[]> {
+    const targetUrl = 'https://britishsarcomagroup.org.uk/guidelines-2/';
+    const res = await fetch(targetUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) OrthoGuidelinesHub/1.0',
+      },
+    });
+
+    if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${targetUrl}`);
+
+    const html = await res.text();
+    return parseBsgIndex(html, targetUrl);
+  },
+};
+
+/**
  * Pilot 2: Generic RSS adapter (for WordPress/CMS feeds).
  *
  * Metadata is taken verbatim from the feed: <title> for topic, <link> for the
@@ -427,9 +499,10 @@ if (isMain) {
 
     // Register pilot adapters.
     // GIRFT is intentionally absent: its hosts 403 automated clients by design.
-    // Add BESS once its feed URL is confirmed, e.g.
-    //   createRSSAdapter('BESS', 'BESS', 'https://bess.ac.uk/feed/'),
-    const adapters: ProviderAdapter[] = [BOAAdapter];
+    // BESS is intentionally absent too: its only feed is general site content
+    // (events/fellowships/member posts), not guidance — see BSGAdapter's doc
+    // comment above for the 2026-08-26 finding.
+    const adapters: ProviderAdapter[] = [BOAAdapter, BSGAdapter];
 
     const reports = await runDryRun(adapters);
 
