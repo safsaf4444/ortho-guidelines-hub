@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
-import { Search, ChevronDown, ExternalLink, Menu, X, TriangleAlert, Plus, WifiOff, Download, Database, History } from 'lucide-react'
+import { Search, ChevronDown, ExternalLink, Menu, X, TriangleAlert, Plus, WifiOff, Download, Database, History, ClipboardList } from 'lucide-react'
 import { GUIDELINES_DATA, Guideline, GuidelineVersion } from './data/guidelines-data'
 import { guidelinesService } from './lib/guidelines-service'
 import { changelogService, type ChangelogEntry } from './lib/changelog-service'
@@ -7,9 +7,11 @@ import { isSupabaseEnabled } from './lib/supabase'
 import { findDuplicateCandidates, countGuidelinesWithDuplicates, pairKey, DuplicateCandidate } from './lib/duplicate-detection'
 import { computeMerge } from './lib/dedupe'
 import { cn } from './lib/utils'
+import ReviewDashboard from './components/ReviewDashboard'
 
 const DUPLICATES_VIEW = '__duplicates__';
 const CHANGELOG_VIEW = '__changelog__';
+const REVIEW_QUEUE_VIEW = '__review-queue__';
 
 // TEMPORARY READ-ONLY LOCKDOWN pending governance and editor-ownership decisions.
 // While this is false, every write control (Add / Edit / Delete / Merge /
@@ -320,6 +322,15 @@ export default function App() {
     setIsNewGuideline(false);
   };
 
+  // Opens the shared Edit modal with a candidate's topic/source/versions
+  // prefilled, for manual editorial review. Not in `guidelines`, so treated
+  // as "new" like handleAddNew — the modal's own read-only gate is what
+  // actually prevents this from ever reaching Supabase (see persistGuideline).
+  const handleReviewCandidate = (draft: Guideline) => {
+    setEditingGuideline(draft);
+    setIsNewGuideline(true);
+  };
+
   const handleAddNew = () => {
     const n = guidelines.filter(g => g.id.startsWith('new-')).length + 1;
     setEditingGuideline({
@@ -340,6 +351,13 @@ export default function App() {
   };
 
   const persistGuideline = async (updated: Guideline, isNew: boolean) => {
+    // Read-only lockdown enforced at the source, not just by hiding the Save
+    // button: even if something calls this directly, it must not reach
+    // Supabase while WRITES_ENABLED is false.
+    if (!WRITES_ENABLED) {
+      console.warn('[persistGuideline] Ignored — WRITES_ENABLED is false. No local or database change made.');
+      return;
+    }
     // Update local state immediately
     setGuidelines(prev =>
       isNew ? [...prev, updated] : prev.map(g => g.id === updated.id ? updated : g)
@@ -390,6 +408,10 @@ export default function App() {
   // Non-optimistic: wait for the server delete to succeed before the UI
   // claims the record is gone, so a failed call never leaves a false state.
   const handleDelete = async (id: string) => {
+    if (!WRITES_ENABLED) {
+      console.warn('[handleDelete] Ignored — WRITES_ENABLED is false. No database change made.');
+      return;
+    }
     try {
       await guidelinesService.remove(id);
       setGuidelines(prev => prev.filter(g => g.id !== id));
@@ -449,6 +471,23 @@ export default function App() {
             <Database className="w-3.5 h-3.5" />
             <span>{isSupabaseEnabled ? "Supabase Live" : "Static Mode"}</span>
           </div>
+
+          {/* Review Staged Guidelines — read-only manual review tool. Visible to
+              everyone: it's a review surface, not a publication or admin
+              surface, so it needs no sign-in. See ReviewDashboard.tsx. */}
+          <button
+            onClick={() => setCurrentSection(REVIEW_QUEUE_VIEW)}
+            title="Manually review discovered guideline candidates awaiting editorial completion"
+            className={cn(
+              "flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors",
+              currentSection === REVIEW_QUEUE_VIEW
+                ? "bg-[#0F172A] text-white"
+                : "text-slate-700 bg-slate-100 hover:bg-slate-200"
+            )}
+          >
+            <ClipboardList className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Review Staged Guidelines</span>
+          </button>
 
           {/* Export JSON backup button */}
           <button
@@ -585,6 +624,10 @@ export default function App() {
               <span className="text-[11px] text-slate-400">
                 Full edit history across all guidelines, newest first. Append-only — notes can't be edited or deleted.
               </span>
+            ) : currentSection === REVIEW_QUEUE_VIEW ? (
+              <span className="text-[11px] text-slate-400">
+                Read-only manual review — a discovery/candidate queue, not a publication tool.
+              </span>
             ) : (
               <>
                 <span className="text-[11px] text-slate-400 hidden md:block">
@@ -661,6 +704,8 @@ export default function App() {
               />
             ) : currentSection === CHANGELOG_VIEW ? (
               <ChangelogPanel guidelines={guidelines} />
+            ) : currentSection === REVIEW_QUEUE_VIEW ? (
+              <ReviewDashboard onEditCandidate={handleReviewCandidate} />
             ) : sortedSections.length === 0 ? (
               <p className="text-[12px] text-slate-400 mt-3">No guidelines found.</p>
             ) : (
@@ -682,7 +727,13 @@ export default function App() {
         </main>
       </div>
 
-      {WRITES_ENABLED && editingGuideline && (
+      {/* Reachable regardless of WRITES_ENABLED — the read-only Pending Review
+          UI opens this modal for prefilled manual review (see
+          handleReviewCandidate). Save/Delete are gated inside EditModal
+          itself, and persistGuideline/handleDelete refuse to write while
+          WRITES_ENABLED is false — this outer condition is not the write
+          boundary. */}
+      {editingGuideline && (
         <EditModal
           guideline={editingGuideline}
           onSave={handleSave}
@@ -1335,9 +1386,17 @@ function EditModal({
         </div>
 
         {/* Footer */}
+        {!WRITES_ENABLED && (
+          <div className="px-4 py-2 bg-amber-50 border-t border-amber-200 text-[11px] text-amber-800 shrink-0">
+            Read-only mode — publication is disabled. This form is for review and prefill only; nothing typed here can be saved.
+          </div>
+        )}
         <div className="flex justify-between items-center gap-2 px-4 py-2.5 border-t border-slate-200 shrink-0">
           <div>
-            {!isNew && (
+            {/* Delete is a write action too — same WRITES_ENABLED gate as Save.
+                The actual write boundary is in handleDelete/persistGuideline
+                (App.tsx); hiding it here is the UI-convenience layer only. */}
+            {WRITES_ENABLED && !isNew && (
               <button
                 onClick={() => {
                   if (window.confirm(`Delete "${form.topic}"? This permanently removes it from the catalogue and cannot be undone.`)) {
@@ -1352,10 +1411,20 @@ function EditModal({
             )}
           </div>
           <div className="flex gap-2">
-            <button onClick={() => onSave(form)}
-              className="bg-[#0F172A] text-white py-1.5 px-4 rounded text-[12px] font-medium hover:bg-slate-800 transition-colors">
-              Save Guideline
-            </button>
+            {WRITES_ENABLED ? (
+              <button onClick={() => onSave(form)}
+                className="bg-[#0F172A] text-white py-1.5 px-4 rounded text-[12px] font-medium hover:bg-slate-800 transition-colors">
+                Save Guideline
+              </button>
+            ) : (
+              <button
+                disabled
+                title="Read-only mode — publication is disabled"
+                className="bg-slate-200 text-slate-400 py-1.5 px-4 rounded text-[12px] font-medium cursor-not-allowed"
+              >
+                Save Guideline
+              </button>
+            )}
             <button onClick={onClose}
               className="px-4 py-1.5 border border-slate-200 rounded text-[12px] text-slate-600 hover:bg-slate-50 transition-colors">
               Cancel
