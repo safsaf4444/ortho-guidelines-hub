@@ -210,19 +210,65 @@ export interface CandidateReport {
 // ─── pure helpers ────────────────────────────────────────────────────────────
 
 /**
+ * Strips a `ver` query parameter from a URL, case-insensitively, leaving
+ * everything else — every other query parameter, parameter order, and any
+ * fragment — untouched.
+ *
+ * Scope is deliberately narrow: `ver` only. It exists because BOFAS's DNN CMS
+ * appends a `?ver=<cache-busting-token>` to every document link that changes
+ * on each republish with no change to the document itself, which made exact
+ * URL matching report all 10 BOFAS Publications as "new" on every sync run —
+ * see SER-6 follow-up. No catalogue URL uses a `ver` parameter for anything
+ * (checked against src/data/guidelines-data.ts before adding this), so
+ * removing it cannot collide with a real document identity.
+ *
+ * Only reserializes the URL when a `ver` parameter was actually found and
+ * removed — a URL with no `ver` parameter is returned completely unchanged,
+ * byte for byte, specifically so this cannot alter the query-string encoding
+ * of URLs like nhfd.co.uk's `?open&<filename>`, where the query string IS the
+ * document identity (see normaliseCandidateUrl below) and must never be
+ * touched, even cosmetically, by a change aimed at a different host.
+ *
+ * Returns the input completely unchanged if it isn't a parseable absolute
+ * URL — this function must never throw or change behaviour for inputs
+ * normaliseCandidateUrl previously handled as opaque strings.
+ */
+function stripVolatileCacheBustingParam(url: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return url;
+  }
+
+  let stripped = false;
+  for (const key of Array.from(parsed.searchParams.keys())) {
+    if (key.toLowerCase() === 'ver') {
+      parsed.searchParams.delete(key);
+      stripped = true;
+    }
+  }
+
+  return stripped ? parsed.toString() : url;
+}
+
+/**
  * Canonical URL form for matching and for ID derivation.
  *
- * Lowercase, trimmed, trailing slashes removed. Intentionally conservative: it
- * does NOT strip query strings, fragments, or `www.`, because on these hosts
- * those can be load-bearing — nhfd.co.uk serves distinct documents from
+ * Lowercase, trimmed, trailing slashes removed, and a `ver` cache-busting
+ * query parameter stripped if present (see stripVolatileCacheBustingParam).
+ * Otherwise intentionally conservative: it does NOT strip any other query
+ * strings, fragments, or `www.`, because on these hosts those can be
+ * load-bearing — nhfd.co.uk serves distinct documents from
  * `/FFFAP/Resources.nsf/doc?open&<filename>`, where the query string IS the
  * document identity.
  *
  * This mirrors the normalisation sync-providers.ts already applied when building
- * its URL index, so match behaviour is unchanged from before phase 1.
+ * its URL index, so match behaviour is unchanged from before phase 1, other
+ * than the narrow `ver`-stripping addition above.
  */
 export function normaliseCandidateUrl(url: string): string {
-  return url.toLowerCase().trim().replace(/\/+$/, '');
+  return stripVolatileCacheBustingParam(url).toLowerCase().trim().replace(/\/+$/, '');
 }
 
 /**
