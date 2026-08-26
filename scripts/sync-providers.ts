@@ -372,6 +372,77 @@ export const BOFASAdapter: ProviderAdapter = {
 };
 
 /**
+ * Pure DOM parse of the BSSH "Guidelines & Resources" page.
+ *
+ * Verified live 2026-08-27: the page is a single content block mixing three
+ * link shapes — `.aspx` links to further BSSH sub-pages, `.pdf` links to
+ * documents hosted directly on bssh.ac.uk or on gettingitrightfirsttime.co.uk
+ * (GIRFT), and two inline journal citations (journals.sagepub.com) embedded
+ * in running prose. Deliberately scoped to `.pdf` links only — exactly 11 on
+ * the page, all genuine guidance/standards documents, with no other `.pdf`
+ * link anywhere else on the page. The `.aspx` sub-pages are a structurally
+ * different, non-uniform content type (some are guidance, at least one
+ * — "Coronavirus information" — is not) that would need separate
+ * page-by-page investigation; out of scope here, same reasoning as excluding
+ * BOFAS's Round Table booklets / Hyperbook.
+ *
+ * The GIRFT-hosted PDF is discovered like any other item — this parser does
+ * not know about scripts/blocked-sources.json — and is filtered out
+ * downstream by runDryRun's existing isBlocked() check, the same way it
+ * already handles GIRFT links from any other adapter.
+ */
+export function parseBsshGuidelinesIndex(html: string, baseUrl: string): DiscoveredItem[] {
+  const $ = cheerio.load(html);
+  const results: DiscoveredItem[] = [];
+  const seen = new Set<string>();
+
+  $('a[href*=".pdf"]').each((_, el) => {
+    const link = $(el);
+    const rawHref = link.attr('href')?.trim();
+    const topic = link.text().replace(/\s+/g, ' ').trim();
+
+    if (!rawHref || !topic) return;
+
+    const fullUrl = rawHref.startsWith('http') ? rawHref : new URL(rawHref, baseUrl).href;
+
+    if (seen.has(fullUrl)) return;
+    seen.add(fullUrl);
+
+    results.push({
+      topic,
+      source: 'BSSH',
+      versions: [{ label: 'BSSH Guideline Document', url: fullUrl }],
+    });
+  });
+
+  return results;
+}
+
+/**
+ * DOM scraper for BSSH Guidelines & Resources.
+ *
+ * Unlike BOFAS, these URLs carry no cache-busting query string, so exact-URL
+ * catalogue matching works cleanly here without needing the ver-stripping fix.
+ */
+export const BSSHAdapter: ProviderAdapter = {
+  name: 'British Society for Surgery of the Hand (BSSH)',
+  sourceTag: 'BSSH',
+  async fetchCandidates(): Promise<DiscoveredItem[]> {
+    const targetUrl = 'https://www.bssh.ac.uk/professionals/guidelines.aspx';
+    const res = await fetch(targetUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) OrthoGuidelinesHub/1.0',
+      },
+    });
+
+    if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${targetUrl}`);
+
+    const html = await res.text();
+    return parseBsshGuidelinesIndex(html, targetUrl);
+  },
+};
+
+/**
  * Pilot 2: Generic RSS adapter (for WordPress/CMS feeds).
  *
  * Metadata is taken verbatim from the feed: <title> for topic, <link> for the
@@ -584,7 +655,13 @@ if (isMain) {
     // report rather than clinical guidance) land in candidates.json as
     // reviewStatus 'pending' like everything else this pipeline finds —
     // nothing here writes to the catalogue.
-    const adapters: ProviderAdapter[] = [BOAAdapter, BSGAdapter, BOFASAdapter];
+    // BSSHAdapter is scoped to Guidelines & Resources' .pdf links only — see
+    // its doc comment above. BHS, BASS/UKSSB, BOSTAA, and EBJIS were each
+    // investigated and deliberately NOT automated (no stable extractable
+    // title, aggregate-row duplicate-matching conflict, no guidance index at
+    // all, and fragile page-builder markup, respectively) — see the
+    // provider-feasibility report for details on each.
+    const adapters: ProviderAdapter[] = [BOAAdapter, BSGAdapter, BOFASAdapter, BSSHAdapter];
 
     const reports = await runDryRun(adapters);
 
