@@ -296,6 +296,82 @@ export const BSGAdapter: ProviderAdapter = {
 };
 
 /**
+ * Pure DOM parse of the BOFAS "Statements / Publications" index page.
+ *
+ * SER-6 feasibility pilot. Split out for the same reason as parseBoaIndex /
+ * parseBsgIndex: offline-testable against fixture HTML.
+ *
+ * The page (a DNN/DotNetNuke site) is a single content block with three
+ * `<h2>`-separated sections ("BOFAS Position Statements", "BOFAS Guidelines
+ * and Pathways", "National COVID Audit (UK-FALCON)"), each holding one
+ * `<p><a href="....pdf...">Title</a> (year)</p>` per document — verified live
+ * 2026-08-27: exactly 10 `a[href*=".pdf"]` matches on the page, all of them
+ * genuine BOFAS/BOA guidance or position-statement documents, with no other
+ * `.pdf` link anywhere else on the page to accidentally match. The trailing
+ * "(year)" text sits outside the anchor and is deliberately not captured —
+ * only the anchor's own text is taken as the verbatim title, same rule as
+ * parseBoaIndex.
+ *
+ * Deliberately scoped to this one index page only. Does NOT cover the Round
+ * Table Consensus Booklets or the Hyperbook — both explicitly out of scope
+ * for this pilot (see SER-6). The "National COVID Audit (UK-FALCON)" item is
+ * discovered like any other item on the page — it is a real link the
+ * provider publishes — and flows through the same pending-candidate pipeline
+ * as everything else; nothing here writes it (or anything) to the catalogue.
+ */
+export function parseBofasPublicationsIndex(html: string, baseUrl: string): DiscoveredItem[] {
+  const $ = cheerio.load(html);
+  const results: DiscoveredItem[] = [];
+  const seen = new Set<string>();
+
+  $('a[href*=".pdf"]').each((_, el) => {
+    const link = $(el);
+    const rawHref = link.attr('href')?.trim();
+    const topic = link.text().replace(/\s+/g, ' ').trim();
+
+    if (!rawHref || !topic) return;
+
+    const fullUrl = rawHref.startsWith('http') ? rawHref : new URL(rawHref, baseUrl).href;
+
+    if (seen.has(fullUrl)) return;
+    seen.add(fullUrl);
+
+    results.push({
+      topic,
+      source: 'BOFAS',
+      versions: [{ label: 'BOFAS Publication PDF', url: fullUrl }],
+    });
+  });
+
+  return results;
+}
+
+/**
+ * SER-6: DOM scraper for BOFAS Position Statements / Publications only.
+ *
+ * Registered in the default adapter list below after feasibility review.
+ * Scope stays deliberately narrow — Round Table booklets and the Hyperbook
+ * are not covered; see parseBofasPublicationsIndex's doc comment above.
+ */
+export const BOFASAdapter: ProviderAdapter = {
+  name: 'British Orthopaedic Foot & Ankle Society (BOFAS)',
+  sourceTag: 'BOFAS',
+  async fetchCandidates(): Promise<DiscoveredItem[]> {
+    const targetUrl = 'https://www.bofas.org.uk/clinician/research/bofas-publications';
+    const res = await fetch(targetUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) OrthoGuidelinesHub/1.0',
+      },
+    });
+
+    if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${targetUrl}`);
+
+    const html = await res.text();
+    return parseBofasPublicationsIndex(html, targetUrl);
+  },
+};
+
+/**
  * Pilot 2: Generic RSS adapter (for WordPress/CMS feeds).
  *
  * Metadata is taken verbatim from the feed: <title> for topic, <link> for the
@@ -502,7 +578,13 @@ if (isMain) {
     // BESS is intentionally absent too: its only feed is general site content
     // (events/fellowships/member posts), not guidance — see BSGAdapter's doc
     // comment above for the 2026-08-26 finding.
-    const adapters: ProviderAdapter[] = [BOAAdapter, BSGAdapter];
+    // BOFASAdapter is scoped to the Publications index only (SER-6) — Round
+    // Table booklets and the Hyperbook are deliberately not covered, see its
+    // doc comment above. Discovered candidates (including UK-FALCON, an audit
+    // report rather than clinical guidance) land in candidates.json as
+    // reviewStatus 'pending' like everything else this pipeline finds —
+    // nothing here writes to the catalogue.
+    const adapters: ProviderAdapter[] = [BOAAdapter, BSGAdapter, BOFASAdapter];
 
     const reports = await runDryRun(adapters);
 
