@@ -1,0 +1,105 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-20T09:15:00.000Z",
+  "note": "STATIC FIXTURE for the Pending Review UI (src/components/ReviewDashboard.tsx). This is schema-faithful example data hand-written for local development and tests — it is NOT a live CI artifact. Real candidates are produced by scripts/sync-providers.ts and written to the gitignored candidates.json.",
+  "existingGuidelineCount": 231,
+  "totalCandidates": 4,
+  "reports": [
+    {
+      "pipeline": "sync-providers",
+      "adapter": "BOA Standards (BOASt) Adapter",
+      "provider": "BOA",
+      "generatedAt": "2026-08-20T09:15:00.000Z",
+      "totalDiscovered": 43,
+      "matchedExisting": 41,
+      "skippedBlocked": 0,
+      "candidates": [
+        {
+          "candidateId": "boa-new-guideline-3f9a1c07b2d4",
+          "pipeline": "sync-providers",
+          "provider": "BOA",
+          "providerName": "British Orthopaedic Association (BOASt)",
+          "topic": "BOAST — Management of Peri-Prosthetic Femoral Fractures",
+          "versions": [
+            { "label": "BOASt PDF", "url": "https://www.boa.ac.uk/uploads/assets/boast-peri-prosthetic-femoral-fractures.pdf" }
+          ],
+          "primaryUrl": "https://www.boa.ac.uk/uploads/assets/boast-peri-prosthetic-femoral-fractures.pdf",
+          "changeReason": "NEW_GUIDELINE",
+          "reviewStatus": "pending",
+          "discoveredAt": "2026-08-20T09:15:00.000Z",
+          "matchedGuidelineId": null,
+          "providerRef": null
+        },
+        {
+          "candidateId": "boa-new-guideline-7c2e88a94b11",
+          "pipeline": "sync-providers",
+          "provider": "BOA",
+          "providerName": "British Orthopaedic Association (BOASt)",
+          "topic": "BOAST — Paediatric Supracondylar Fracture Pathway (2026 update)",
+          "versions": [
+            { "label": "BOASt PDF", "url": "https://www.boa.ac.uk/uploads/assets/boast-paediatric-supracondylar-2026.pdf" }
+          ],
+          "primaryUrl": "https://www.boa.ac.uk/uploads/assets/boast-paediatric-supracondylar-2026.pdf",
+          "changeReason": "NEW_GUIDELINE",
+          "reviewStatus": "pending",
+          "discoveredAt": "2026-08-20T09:15:00.000Z",
+          "matchedGuidelineId": null,
+          "providerRef": null
+        }
+      ],
+      "newCandidates": [
+        {
+          "topic": "BOAST — Management of Peri-Prosthetic Femoral Fractures",
+          "source": "BOA",
+          "versions": [
+            { "label": "BOASt PDF", "url": "https://www.boa.ac.uk/uploads/assets/boast-peri-prosthetic-femoral-fractures.pdf" }
+          ]
+        },
+        {
+          "topic": "BOAST — Paediatric Supracondylar Fracture Pathway (2026 update)",
+          "source": "BOA",
+          "versions": [
+            { "label": "BOASt PDF", "url": "https://www.boa.ac.uk/uploads/assets/boast-paediatric-supracondylar-2026.pdf" }
+          ]
+        }
+      ]
+    },
+    {
+      "pipeline": "sync-providers",
+      "adapter": "BESS RSS Adapter (legacy-shape example — pre-Phase-1 output)",
+      "provider": "BESS",
+      "generatedAt": "2026-08-18T06:00:00.000Z",
+      "totalDiscovered": 6,
+      "matchedExisting": 4,
+      "skippedBlocked": 0,
+      "newCandidates": [
+        {
+          "topic": "BESS Shoulder Instability Management Guideline",
+          "source": "BESS",
+          "summary": "Consensus guideline on management pathways for atraumatic and traumatic shoulder instability.",
+          "versions": [
+            { "label": "BESS Guideline PDF", "url": "https://bess.ac.uk/guidelines/shoulder-instability/" }
+          ]
+        },
+        {
+          "topic": "BESS Rotator Cuff Repair — Post-operative Rehabilitation",
+          "source": "BESS",
+          "versions": [
+            { "label": "BESS Guideline PDF", "url": "https://bess.ac.uk/guidelines/rotator-cuff-rehab/" }
+          ]
+        }
+      ]
+    },
+    {
+      "pipeline": "sync-providers",
+      "adapter": "GIRFT Adapter",
+      "provider": "GIRFT",
+      "generatedAt": "2026-08-20T09:15:00.000Z",
+      "totalDiscovered": 0,
+      "matchedExisting": 0,
+      "skippedBlocked": 0,
+      "candidates": [],
+      "error": "GIRFT host returns 403 to automated clients — access-limited, manual verification only. No adapter is registered for this source."
+    }
+  ]
+}
