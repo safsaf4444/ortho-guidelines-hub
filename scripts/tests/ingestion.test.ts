@@ -130,6 +130,64 @@ eq(
   'https://www.nhfd.co.uk/fffap/resources.nsf/doc?open&sheffield,+pathway.pdf',
 );
 
+// ── SER-6 follow-up: strip only the `ver` cache-busting parameter ───────────
+// BOFAS's DNN CMS appends `?ver=<token>` to every document link, changing on
+// every republish with no change to the document — this made every BOFAS
+// Publications item match as "new" on every sync run. The fix must be narrow:
+// strip `ver` only, leave every other query parameter, fragment, and the
+// NHFD-style `?open&<filename>` identity completely untouched.
+
+eq(
+  'BOFAS: URL with ?ver= matches the equivalent URL without it',
+  normaliseCandidateUrl('https://www.bofas.org.uk/Portals/0/Position%20Statements/FAME%20STUDY%20POSITION%20STATEMENT.pdf?ver=AdqcljKluax_khQUqZhiwg%3d%3d'),
+  normaliseCandidateUrl('https://www.bofas.org.uk/Portals/0/Position%20Statements/FAME%20STUDY%20POSITION%20STATEMENT.pdf'),
+);
+eq(
+  'BOFAS: ver stripping is case-insensitive (VER=, Ver=)',
+  normaliseCandidateUrl('https://www.bofas.org.uk/a.pdf?VER=xyz'),
+  normaliseCandidateUrl('https://www.bofas.org.uk/a.pdf?Ver=xyz'),
+);
+eq(
+  'ver-only query string is removed cleanly, no dangling "?"',
+  normaliseCandidateUrl('https://www.bofas.org.uk/a.pdf?ver=xyz'),
+  'https://www.bofas.org.uk/a.pdf',
+);
+eq(
+  'a meaningful non-ver query parameter is preserved, not stripped',
+  normaliseCandidateUrl('https://www.nature.com/articles/x?sharing_token=ABC123'),
+  'https://www.nature.com/articles/x?sharing_token=abc123',
+);
+check(
+  'a URL differing ONLY by a real (non-ver) query parameter still normalises distinctly',
+  normaliseCandidateUrl('https://www.nature.com/articles/x?sharing_token=ABC123')
+    !== normaliseCandidateUrl('https://www.nature.com/articles/x?sharing_token=DEF456'),
+);
+eq(
+  'ver stripped alongside a real query parameter — the real one survives',
+  normaliseCandidateUrl('https://www.bofas.org.uk/a.pdf?ver=xyz&edition=2'),
+  'https://www.bofas.org.uk/a.pdf?edition=2',
+);
+eq(
+  'a URL fragment survives ver stripping untouched',
+  normaliseCandidateUrl('https://www.bofas.org.uk/a.pdf?ver=xyz#section2'),
+  'https://www.bofas.org.uk/a.pdf#section2',
+);
+eq(
+  'NHFD doc?open& identity is unaffected by the ver fix (no ver param present)',
+  normaliseCandidateUrl('https://www.nhfd.co.uk/FFFAP/Resources.nsf/doc?open&Sheffield,+Pathway.pdf'),
+  'https://www.nhfd.co.uk/fffap/resources.nsf/doc?open&sheffield,+pathway.pdf',
+);
+eq(
+  'BOA asset URLs (no query string at all) are unaffected by the ver fix',
+  normaliseCandidateUrl('https://www.boa.ac.uk/asset/F8B1C499-C38A-4805-8CB8D8EB3087BCA7/'),
+  'https://www.boa.ac.uk/asset/f8b1c499-c38a-4805-8cb8d8eb3087bca7',
+);
+eq(
+  'a non-parseable/relative input is returned unchanged by the strip step, same as before',
+  normaliseCandidateUrl('  /relative/path/A/  '),
+  '/relative/path/a',
+);
+
 const idArgs = {
   pipeline: 'sync-providers',
   provider: 'BOA',
