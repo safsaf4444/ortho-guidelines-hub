@@ -370,20 +370,26 @@ export default function App() {
           <div className="bg-[#0F172A] text-white w-7 h-7 rounded flex items-center justify-center font-semibold text-sm shrink-0">
             O
           </div>
-          <div className="flex flex-col leading-none">
-            <span className="font-serif text-[1rem] text-slate-900 leading-tight">Orthopaedic Guidelines Hub</span>
-            <span className="text-[11px] text-slate-500 hidden sm:block mt-0.5">
+          <div className="flex flex-col leading-none min-w-0">
+            <span className="font-serif text-[1rem] text-slate-900 leading-tight truncate">Orthopaedic Guidelines Hub</span>
+            {/* md: not sm: — deliberately matches the hamburger's own
+                `md:hidden` breakpoint below. Between 640-767px, sm: would
+                show this alongside the still-visible mobile hamburger and
+                overflow the fixed-height header — the exact overlap reported
+                at ~740px. Same reasoning for the badge and button labels
+                further down this header. */}
+            <span className="text-[11px] text-slate-500 hidden md:block mt-0.5 truncate">
               National guidance, grouped by topic — ward, on call, and clinic
             </span>
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 shrink-0">
           {/* Supabase connection badge */}
           <div
             title={isSupabaseEnabled ? "Connected to Supabase live database" : "Operating in static fallback mode"}
             className={cn(
-              "hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border",
+              "hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border",
               isSupabaseEnabled
                 ? "bg-emerald-50 text-emerald-700 border-emerald-200"
                 : "bg-amber-50 text-amber-700 border-amber-200"
@@ -413,7 +419,7 @@ export default function App() {
             )}
           >
             <ClipboardList className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Review Staged Guidelines</span>
+            <span className="hidden md:inline">Review Staged Guidelines</span>
           </button>
 
           {/* Export JSON backup button */}
@@ -423,7 +429,7 @@ export default function App() {
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-md transition-colors"
           >
             <Download className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Export JSON</span>
+            <span className="hidden md:inline">Export JSON</span>
           </button>
         </div>
       </header>
