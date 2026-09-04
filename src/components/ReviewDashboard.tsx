@@ -84,19 +84,19 @@ export default function ReviewDashboard({
   };
 
   if (allCandidates.length === 0) {
-    return <p className="text-[12px] text-slate-400 mt-3">No pending candidates in this data source.</p>;
+    return <p className="text-[12px] text-slate-500 mt-3">No pending candidates in this data source.</p>;
   }
 
   return (
     <div className="mt-3">
-      <p className="text-[11px] text-slate-400 mb-3">
+      <p className="text-[11px] text-slate-500 mb-3">
         Discovered items awaiting manual editorial review. Nothing here is published automatically —
         "Review &amp; Edit" opens the guideline form prefilled for a human to complete; "Dismiss" only
         hides the card in this browser tab and does not persist, so it returns on reload.
       </p>
 
       {visible.length === 0 ? (
-        <p className="text-[12px] text-slate-400">All candidates in this session have been dismissed.</p>
+        <p className="text-[12px] text-slate-500">All candidates in this session have been dismissed.</p>
       ) : (
         <div className="flex flex-col gap-2.5">
           {visible.map(candidate => (
@@ -149,7 +149,7 @@ function CandidateCard({
       <div className="flex justify-between items-start gap-2 flex-wrap">
         <div className="min-w-0">
           <div className="text-[13px] font-medium text-slate-800">{candidate.topic}</div>
-          <div className="text-[11px] text-slate-400 mt-0.5">
+          <div className="text-[11px] text-slate-500 mt-0.5">
             {candidate.providerName ?? candidate.provider}
             {discovered && <> · discovered {discovered}</>}
           </div>
