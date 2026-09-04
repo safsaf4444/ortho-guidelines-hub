@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { Search, ChevronDown, ExternalLink, Menu, X, TriangleAlert, Plus, WifiOff, Download, Database, History, ClipboardList } from 'lucide-react'
 import { GUIDELINES_DATA, Guideline, GuidelineVersion } from './data/guidelines-data'
 import { guidelinesService } from './lib/guidelines-service'
-import { changelogService, type ChangelogEntry } from './lib/changelog-service'
+import { changelogService, type ChangelogLoad } from './lib/changelog-service'
 import { isSupabaseEnabled } from './lib/supabase'
 import { findDuplicateCandidates, countGuidelinesWithDuplicates, pairKey, DuplicateCandidate } from './lib/duplicate-detection'
 import { computeMerge } from './lib/dedupe'
@@ -11,6 +11,7 @@ import ReviewDashboard from './components/ReviewDashboard'
 import EditorAuthControl from './components/EditorAuthControl'
 import { useEditorAuth } from './lib/auth'
 import { canWrite, writeBlockedReason } from './lib/write-access'
+import { splitPublishers, canonicalProvider, providerUrl } from './lib/providers'
 
 const DUPLICATES_VIEW = '__duplicates__';
 const CHANGELOG_VIEW = '__changelog__';
@@ -115,114 +116,6 @@ function sortSections(names: string[]): string[] {
   });
 }
 
-// "Also published by" (Feature 3): the real co-badging signal in this dataset
-// lives inside a single row's `source` string (e.g. "GIRFT / BHS / BOA",
-// "BOA (BOASt) with BOFAS"), NOT across separate records — 0 topics appear
-// under more than one distinct source. So we surface the co-publishers by
-// parsing the source field, splitting only on " / " and " with " at paren depth
-// 0. We deliberately do NOT split on "&", "and", or "," because those occur
-// inside single society names (e.g. "BAJIS (Bone & Joint Infection Society)",
-// "NHFD (RCP / FFFAP)").
-function splitPublishers(source: string): string[] {
-  const out: string[] = [];
-  let buf = '';
-  let depth = 0;
-  for (let i = 0; i < source.length; i++) {
-    const ch = source[i];
-    if (ch === '(') { depth++; buf += ch; continue; }
-    if (ch === ')') { depth = Math.max(0, depth - 1); buf += ch; continue; }
-    if (depth === 0) {
-      if (ch === '/' && source[i - 1] === ' ' && source[i + 1] === ' ') { out.push(buf); buf = ''; continue; }
-      if (source.slice(i).toLowerCase().startsWith(' with ')) { out.push(buf); buf = ''; i += ' with '.length - 1; continue; }
-    }
-    buf += ch;
-  }
-  out.push(buf);
-  return out.map(p => p.trim()).filter(Boolean);
-}
-
-// ─── Provider normalisation (Phase 0: presentation only) ─────────────────────
-// The "By provider" view used to group on the raw `source` string, which yields
-// 53 groups for 231 records because every collaboration spelling becomes its own
-// bucket ("BESS", "BESS / BOA", "BESS / BOA / NHS EBI Programme", …).
-//
-// canonicalProvider() reduces a raw source to the single organisation that owns
-// the document. It is a PURE function used only for grouping/sorting — the raw
-// `source` string is still rendered verbatim on cards and in the detail view, and
-// nothing here reads or writes the database.
-//
-// Rules (agreed 2026-08-23):
-//   R1 first-listed publisher wins; collaborators never form their own group
-//   R2 acronym expansions collapse to the acronym  (BASS (British Assoc…) → BASS)
-//   R3 series/sub-brands collapse to the parent    (BOA (BOASt), BOA SpecS → BOA)
-//   R4 parent-org parentheticals are dropped       (GIRFT (NHS England) → GIRFT)
-//   R5 trailing " - Sub-report" is dropped         (GIRFT … - Spinal Services)
-//   R6 a few whole strings are overridden outright (see OVERRIDES)
-// NHFD is deliberately kept separate from FFFAP.
-
-// Whole-source overrides. These win before any parsing, and exist because the
-// first-listed publisher is NOT the owning body for these specific documents.
-const PROVIDER_OVERRIDES: Record<string, string> = {
-  'Academy of Medical Royal Colleges / NHS England / NICE / GIRFT': 'NHS EBI Programme',
-  // UKSSB owns the standard; BASS is listed first but is not the owner here.
-  'BASS / UKSSB': 'UKSSB',
-};
-
-// Canonical name for a single publisher token, after splitting. Maps long-form
-// names and alternate spellings onto one label so the same body cannot produce
-// two groups (e.g. "FFFAP (RCP)" and "RCP (FFFAP)").
-const PROVIDER_ALIASES: Record<string, string> = {
-  'academy of medical royal colleges': 'AoMRC',
-  'british geriatrics society': 'BGS',
-  'british hip society': 'BHS',
-  'british sarcoma group': 'BSG',
-  'british scoliosis society': 'BSS',
-  'international osteoporosis foundation': 'IOF',
-  'nhs evidence-based interventions (ebi) programme': 'NHS EBI Programme',
-  'nhs ebi programme': 'NHS EBI Programme',
-  'royal osteoporosis society': 'ROS',
-  // Both spellings of the RCP falls & fragility fracture audit programme.
-  'fffap (rcp)': 'FFFAP',
-  'rcp (fffap)': 'FFFAP',
-  // Parenthetical here is the parent org, not a sub-brand — keep NHFD distinct.
-  'nhfd (rcp / fffap)': 'NHFD',
-};
-
-function canonicalProvider(source: string): string {
-  const raw = (source ?? '').trim();
-  if (!raw) return 'Unspecified';
-  if (PROVIDER_OVERRIDES[raw]) return PROVIDER_OVERRIDES[raw];
-
-  // R1: the owning body is the first publisher listed.
-  let name = splitPublishers(raw)[0] ?? raw;
-
-  // Alias check before stripping, so multi-word keys like "NHFD (RCP / FFFAP)"
-  // and "FFFAP (RCP)" match while their parentheses are still intact.
-  const aliased = PROVIDER_ALIASES[name.toLowerCase()];
-  if (aliased) return aliased;
-
-  // R5: drop a trailing " - Sub-report" (GIRFT (NHS England) - Spinal Services).
-  name = name.replace(/\s+-\s+.+$/, '').trim();
-
-  // R2/R3/R4: drop a trailing parenthetical. The text OUTSIDE the parentheses is
-  // always the provider, whether the inside is an acronym expansion
-  // ("BAJIS (Bone & Joint Infection Society)"), a series ("BOA (BOASt)",
-  // "British Hip Society (NAHR)"), or a parent org ("GIRFT (NHS England)").
-  //
-  // Do NOT try to guess from string length which side is the acronym: NAHR is
-  // shorter than "British Hip Society" but is a registry/series, not an alias for
-  // it, so a length rule wrongly creates a top-level "NAHR" group. The reverse
-  // cases where the acronym really is inside the brackets
-  // ("British Sarcoma Group (BSG)") are handled by PROVIDER_ALIASES on the outer
-  // text instead, which is explicit and cannot misfire.
-  const paren = name.match(/^(.*?)\s*\(([^)]*)\)\s*$/);
-  if (paren) name = paren[1].trim();
-
-  // R3: space-separated sub-brand with no parentheses ("BOA SpecS" → "BOA").
-  name = name.replace(/^(BOA)\s+SpecS$/i, '$1');
-
-  return PROVIDER_ALIASES[name.toLowerCase()] ?? name.trim();
-}
 
 // Tracks connectivity so the UI can flag when the user is viewing the cached
 // (installed/offline) copy rather than a live-loaded page.
@@ -575,7 +468,7 @@ export default function App() {
                 <span className="text-[12px] font-medium">Possible duplicates</span>
                 <span className={cn(
                   "px-1.5 py-px rounded text-[11px] font-medium",
-                  currentSection === DUPLICATES_VIEW ? "bg-white/20 text-white" : "bg-amber-100 text-amber-700"
+                  currentSection === DUPLICATES_VIEW ? "bg-white/20 text-white" : "bg-amber-100 text-amber-800"
                 )}>
                   {countGuidelinesWithDuplicates(duplicateCandidates)}
                 </span>
@@ -849,18 +742,28 @@ function GuidelineCard({
     return pubs.length > 1 ? pubs.slice(1) : [];
   }, [item.source]);
 
+  // Outbound link for the provider tag. null for a provider we have no
+  // confident URL for — the tag then renders as plain text, as it always did.
+  const providerHref = providerUrl(item.source);
+
   return (
     <div className="border border-slate-200 rounded overflow-hidden bg-white">
 
-      {/* Header row */}
-      <button
-        className="w-full px-3 py-1.5 flex justify-between items-center hover:bg-slate-50 text-left transition-colors"
-        onClick={() => setIsExpanded(!isExpanded)}
-      >
-        <div className="flex flex-col gap-px min-w-0">
+      {/* Header row.
+          This is a <div>, not a <button>, because the provider tag is a real
+          link: an <a> nested inside a <button> is invalid HTML (interactive
+          content cannot nest) and breaks keyboard navigation. The row is
+          instead split into two sibling controls — the topic button and the
+          chevron button — with the provider link between them. */}
+      <div className="w-full px-3 py-1.5 flex justify-between items-center hover:bg-slate-50 transition-colors">
+        <button
+          className="flex flex-col gap-px min-w-0 flex-1 text-left"
+          onClick={() => setIsExpanded(!isExpanded)}
+          aria-expanded={isExpanded}
+        >
           <div className="flex items-center gap-1.5 flex-wrap">
             <span className="text-[13px] font-medium text-slate-800 leading-snug">{item.topic}</span>
-            <span className="text-[10px] text-slate-400 border border-slate-200 rounded px-1 py-px shrink-0">
+            <span className="text-[10px] text-slate-500 border border-slate-200 rounded px-1 py-px shrink-0">
               {item.type}
             </span>
             {otherSections.map(cl => (
@@ -870,26 +773,49 @@ function GuidelineCard({
           {item.subGroup && (
             <div className="text-[11px] text-slate-400">{item.subGroup}</div>
           )}
-        </div>
+        </button>
 
         <div className="flex items-center gap-1.5 shrink-0 ml-3">
-          <span className="text-[11px] text-slate-400 hidden sm:block">{item.source}</span>
+          {providerHref ? (
+            <a
+              href={providerHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              // Belt and braces: the link is no longer inside the toggle
+              // button, but stopping propagation keeps a click on it from
+              // reaching any future row-level handler.
+              onClick={e => e.stopPropagation()}
+              title={`Open the ${canonicalProvider(item.source)} website in a new tab`}
+              className="text-[11px] text-slate-500 hidden sm:block hover:text-slate-900 hover:underline underline-offset-2 focus:outline-none focus-visible:ring-1 focus-visible:ring-slate-400 rounded"
+            >
+              {item.source}
+            </a>
+          ) : (
+            <span className="text-[11px] text-slate-500 hidden sm:block">{item.source}</span>
+          )}
           {(item.type === 'National guidance' || item.type === 'Specialist society guidance') && (
-            <span className="text-[10px] text-slate-400 border border-slate-200 rounded px-1 py-px shrink-0">
+            <span className="text-[10px] text-slate-500 border border-slate-200 rounded px-1 py-px shrink-0">
               Natl
             </span>
           )}
           {item.regionalVariation && (
-            <span className="text-[10px] text-slate-400 border border-slate-200 rounded px-1 py-px shrink-0">
+            <span className="text-[10px] text-slate-500 border border-slate-200 rounded px-1 py-px shrink-0">
               Reg
             </span>
           )}
-          <ChevronDown className={cn(
-            "w-3.5 h-3.5 text-slate-400 transition-transform duration-200",
-            isExpanded && "rotate-180"
-          )} />
+          <button
+            onClick={() => setIsExpanded(!isExpanded)}
+            aria-expanded={isExpanded}
+            aria-label={isExpanded ? 'Collapse details' : 'Expand details'}
+            className="shrink-0 rounded focus:outline-none focus-visible:ring-1 focus-visible:ring-slate-400"
+          >
+            <ChevronDown className={cn(
+              "w-3.5 h-3.5 text-slate-400 transition-transform duration-200",
+              isExpanded && "rotate-180"
+            )} />
+          </button>
         </div>
-      </button>
+      </div>
 
       {/* Expanded body */}
       {isExpanded && (
@@ -1049,19 +975,20 @@ function fmtTimestamp(iso: string): string {
 // card. Fetches on mount (i.e. when the card expands). In static/offline mode
 // the service returns [] for reads and throws on write (surfaced via alert).
 function CardChangelog({ guidelineId, isEditor }: { guidelineId: string; isEditor: boolean }) {
-  const [entries, setEntries] = useState<ChangelogEntry[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [load, setLoad] = useState<ChangelogLoad | null>(null);
   const [text, setText] = useState('');
   const [saving, setSaving] = useState(false);
   const MAX_INLINE = 3;
 
   useEffect(() => {
     let active = true;
+    setLoad(null);
     changelogService.listForGuideline(guidelineId)
-      .then(e => { if (active) setEntries(e); })
-      .finally(() => { if (active) setLoading(false); });
+      .then(r => { if (active) setLoad(r); });
     return () => { active = false; };
   }, [guidelineId]);
+
+  const entries = load?.ok ? load.entries : [];
 
   const addNote = async () => {
     // Source-level guard, not just the hidden input below — see
@@ -1075,7 +1002,12 @@ function CardChangelog({ guidelineId, isEditor }: { guidelineId: string; isEdito
     setSaving(true);
     try {
       const created = await changelogService.create({ guidelineId, description: trimmed });
-      setEntries(prev => [created, ...prev]);
+      // A successful insert proves the table is reachable, so fold the new note
+      // into an ok-state list even if the initial load had reported otherwise.
+      setLoad(prev => ({
+        ok: true,
+        entries: [created, ...(prev?.ok ? prev.entries : [])],
+      }));
       setText('');
     } catch (err) {
       alert(`Could not add note.\n\n${err instanceof Error ? err.message : String(err)}`);
@@ -1090,8 +1022,13 @@ function CardChangelog({ guidelineId, isEditor }: { guidelineId: string; isEdito
         Changelog
       </div>
 
-      {loading ? (
+      {load === null ? (
         <p className="text-[11px] text-slate-400">Loading…</p>
+      ) : !load.ok && load.reason === 'error' ? (
+        // Genuine query failure — never shown as "no notes yet".
+        <p className="text-[11px] text-amber-800">Couldn’t load notes. {load.message}</p>
+      ) : !load.ok ? (
+        <p className="text-[11px] text-slate-400">{load.message}</p>
       ) : entries.length === 0 ? (
         <p className="text-[11px] text-slate-400">No notes yet.</p>
       ) : (
@@ -1138,16 +1075,16 @@ function CardChangelog({ guidelineId, isEditor }: { guidelineId: string; isEdito
 // Project-wide edit history, newest first — reuses the full-width special-view
 // pattern (like DuplicatesPanel), toggled from the sidebar.
 function ChangelogPanel({ guidelines }: { guidelines: Guideline[] }) {
-  const [entries, setEntries] = useState<ChangelogEntry[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [load, setLoad] = useState<ChangelogLoad | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let active = true;
+    setLoad(null);
     changelogService.listAll()
-      .then(e => { if (active) setEntries(e); })
-      .finally(() => { if (active) setLoading(false); });
+      .then(r => { if (active) setLoad(r); });
     return () => { active = false; };
-  }, []);
+  }, [reloadKey]);
 
   const guidelineById = useMemo(() => {
     const m = new Map<string, Guideline>();
@@ -1155,13 +1092,33 @@ function ChangelogPanel({ guidelines }: { guidelines: Guideline[] }) {
     return m;
   }, [guidelines]);
 
-  if (loading) return <p className="text-[12px] text-slate-400 mt-3">Loading changelog…</p>;
-  if (entries.length === 0) {
+  if (load === null) return <p className="text-[12px] text-slate-400 mt-3">Loading changelog…</p>;
+
+  // A genuine query failure — distinct from "nothing here yet", and retryable.
+  if (!load.ok && load.reason === 'error') {
     return (
-      <p className="text-[12px] text-slate-400 mt-3">
-        No changelog entries yet{isSupabaseEnabled ? '' : ' — the live database isn’t connected, so notes are unavailable in static mode'}.
-      </p>
+      <div className="mt-3 border border-amber-300 bg-amber-50 rounded-md px-3 py-2">
+        <p className="text-[12px] text-amber-900 font-medium">Couldn’t load the changelog.</p>
+        <p className="text-[11px] text-amber-800 mt-0.5 break-words">{load.message}</p>
+        <button
+          onClick={() => setReloadKey(k => k + 1)}
+          className="mt-1.5 text-[11px] font-medium text-amber-900 underline underline-offset-2 hover:text-amber-950"
+        >
+          Retry
+        </button>
+      </div>
     );
+  }
+
+  // Not provisioned (static mode, or the table does not exist yet). Says so
+  // honestly instead of claiming there are simply no entries.
+  if (!load.ok) {
+    return <p className="text-[12px] text-slate-400 mt-3">{load.message}</p>;
+  }
+
+  const entries = load.entries;
+  if (entries.length === 0) {
+    return <p className="text-[12px] text-slate-400 mt-3">No changelog entries yet.</p>;
   }
 
   return (

@@ -11,7 +11,8 @@
     "seed": "tsx scripts/seed.ts",
     "export-static": "tsx scripts/export-static.ts",
     "flag-dead-links": "tsx scripts/flag-dead-links.ts",
-    "test:offline": "tsx scripts/tests/ingestion.test.ts && tsx scripts/tests/boa-adapter.test.ts && tsx scripts/tests/bsg-adapter.test.ts && tsx scripts/tests/bofas-adapter.test.ts && tsx scripts/tests/bssh-adapter.test.ts && tsx scripts/tests/equivalence.test.ts && tsx scripts/tests/review-candidates.test.ts && tsx scripts/tests/auth-editor.test.ts"
+    "map-link-status": "tsx scripts/map-link-status.ts",
+    "test:offline": "tsx scripts/tests/ingestion.test.ts && tsx scripts/tests/boa-adapter.test.ts && tsx scripts/tests/bsg-adapter.test.ts && tsx scripts/tests/bofas-adapter.test.ts && tsx scripts/tests/bssh-adapter.test.ts && tsx scripts/tests/equivalence.test.ts && tsx scripts/tests/review-candidates.test.ts && tsx scripts/tests/auth-editor.test.ts && tsx scripts/tests/providers.test.ts && tsx scripts/tests/changelog-load.test.ts"
   },
   "dependencies": {
     "@radix-ui/react-slot": "^1.3.0",
