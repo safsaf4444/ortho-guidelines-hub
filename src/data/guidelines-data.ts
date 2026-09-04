@@ -1,6 +1,6 @@
 // AUTO-GENERATED from the Supabase `guidelines` table by scripts/export-static.ts.
 // Do not edit by hand — change the database and run `npm run export-static`.
-// Generated: 2026-08-23 — 231 records.
+// Generated: 2026-09-04 — 231 records.
 
 export type GuidelineVersion = {
   label: string;
@@ -3126,7 +3126,7 @@ export const GUIDELINES_DATA: Guideline[] = [
     "subGroup": "Updated March 2026",
     "source": "BAJIS (Bone & Joint Infection Society)",
     "summary": "BAJIS curates the UK's orthopaedic infection guidance in one place rather than publishing its own. Links: BOA BOASts on acute PJI (2023), fracture-related infection (2019) and children with acute MSK infection (2022); the British Hip Society PJI document (2020); the BASK knee PJI document (2020); the eLfH PJI training programme; and the INFORM clinician resources from Bristol. Multidisciplinary - orthopaedics, microbiology, ID, nursing/pharmacy/AHP, plastics, radiology - and affiliated to the BOA.",
-    "notes": "IMPORTANT: BAJIS PUBLISHES NO GUIDELINES OF ITS OWN (as of July 2026). Founded June 2023 out of the UKPJI meeting series. This page is a curated index - the same job this hub does, for infection specifically; worth reviewing as prior art. Replace 'BOIS' in the source list with BAJIS. NOTE: BAJIS hosts an OUTDATED copy of the BHS PJI standard - use the BHS canonical URL instead.",
+    "notes": "IMPORTANT: BAJIS PUBLISHES NO GUIDELINES OF ITS OWN (as of July 2026). Founded June 2023 out of the UKPJI meeting series. This page is a curated index - the same job this hub does, for infection specifically; worth reviewing as prior art. NOTE: BAJIS hosts an OUTDATED copy of the BHS PJI standard - use the BHS canonical URL instead.",
     "status": "Live",
     "regionalVariation": false,
     "localOverlayNeeded": false,

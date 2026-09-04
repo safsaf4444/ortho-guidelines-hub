@@ -1,4 +1,11 @@
 import { supabase } from './supabase';
+import {
+  type ChangelogEntry,
+  type ChangelogLoad,
+  STATIC_MODE_MESSAGE,
+  NO_TABLE_MESSAGE,
+  isMissingTableError,
+} from './changelog-load';
 
 /**
  * Append-only edit history for guidelines (Feature 2).
@@ -6,19 +13,14 @@ import { supabase } from './supabase';
  * Deliberately minimal: free-text note + timestamp, one row per note. No edit,
  * no delete, no diff/rollback — that scope was explicitly cut.
  *
- * Mirrors guidelinesService's posture on connectivity:
- *   - reads return [] when Supabase isn't configured (e.g. the public static
- *     build), so the UI degrades quietly rather than throwing;
+ * Connectivity posture:
+ *   - reads return a discriminated ChangelogLoad so the UI can tell "nothing
+ *     here yet" apart from "not provisioned" and from "the query failed". They
+ *     previously all collapsed to [], which showed real errors as an empty
+ *     state;
  *   - writes throw a clear error when Supabase isn't configured, so a failed
  *     "+ Add note" surfaces instead of silently no-op-ing.
  */
-
-export type ChangelogEntry = {
-  id: string;
-  guidelineId: string;
-  description: string;
-  createdAt: string; // ISO timestamp
-};
 
 type DbChangelogRow = {
   id: string;
@@ -36,34 +38,47 @@ function toEntry(row: DbChangelogRow): ChangelogEntry {
   };
 }
 
+// The load-state types and the missing-table classifier live in a
+// browser-dependency-free module so offline tests can import them without
+// pulling in the Supabase client. Re-exported here so existing importers of
+// this module are unaffected.
+export type { ChangelogEntry, ChangelogLoad } from './changelog-load';
+export { isMissingTableError } from './changelog-load';
+
 export const changelogService = {
-  /** All changelog entries across every guideline, newest first. [] in static mode. */
-  async listAll(): Promise<ChangelogEntry[]> {
-    if (!supabase) return [];
+  /** All changelog entries across every guideline, newest first. */
+  async listAll(): Promise<ChangelogLoad> {
+    if (!supabase) return { ok: false, reason: 'unavailable', message: STATIC_MODE_MESSAGE };
     const { data, error } = await supabase
       .from('guideline_changelog')
       .select('*')
       .order('created_at', { ascending: false });
     if (error) {
+      if (isMissingTableError(error.code, error.message)) {
+        return { ok: false, reason: 'unavailable', message: NO_TABLE_MESSAGE };
+      }
       console.warn('[changelog-service] listAll query error:', error.message);
-      return [];
+      return { ok: false, reason: 'error', message: error.message };
     }
-    return (data as DbChangelogRow[] | null)?.map(toEntry) ?? [];
+    return { ok: true, entries: (data as DbChangelogRow[] | null)?.map(toEntry) ?? [] };
   },
 
-  /** Entries for one guideline, newest first. [] in static mode. */
-  async listForGuideline(guidelineId: string): Promise<ChangelogEntry[]> {
-    if (!supabase) return [];
+  /** Entries for one guideline, newest first. */
+  async listForGuideline(guidelineId: string): Promise<ChangelogLoad> {
+    if (!supabase) return { ok: false, reason: 'unavailable', message: STATIC_MODE_MESSAGE };
     const { data, error } = await supabase
       .from('guideline_changelog')
       .select('*')
       .eq('guideline_id', guidelineId)
       .order('created_at', { ascending: false });
     if (error) {
+      if (isMissingTableError(error.code, error.message)) {
+        return { ok: false, reason: 'unavailable', message: NO_TABLE_MESSAGE };
+      }
       console.warn('[changelog-service] listForGuideline query error:', error.message);
-      return [];
+      return { ok: false, reason: 'error', message: error.message };
     }
-    return (data as DbChangelogRow[] | null)?.map(toEntry) ?? [];
+    return { ok: true, entries: (data as DbChangelogRow[] | null)?.map(toEntry) ?? [] };
   },
 
   /** Append a note. Throws if Supabase is unconfigured or the insert fails. */
