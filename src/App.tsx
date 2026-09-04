@@ -12,6 +12,7 @@ import EditorAuthControl from './components/EditorAuthControl'
 import { useEditorAuth } from './lib/auth'
 import { canWrite, writeBlockedReason } from './lib/write-access'
 import { splitPublishers, canonicalProvider, providerUrl } from './lib/providers'
+import { findGapNote } from './lib/gap-detection'
 
 const DUPLICATES_VIEW = '__duplicates__';
 const CHANGELOG_VIEW = '__changelog__';
@@ -29,11 +30,16 @@ const REVIEW_QUEUE_VIEW = '__review-queue__';
 // (currently unreachable) write UI still type-checks for that later change.
 const WRITES_ENABLED: boolean = false;
 
+// Display labels only — the underlying field name and stored values
+// (unchecked/needs-review/broken/verified) are unchanged; see
+// supabase-schema.sql's check constraint. "Verified" read as a claim of
+// clinical endorsement, which this field never made: it is an HTTP-reachability
+// check (see scripts/flag-dead-links.ts), so the label says "Link checked".
 const LINK_STATUS_OPTIONS: { value: NonNullable<Guideline['linkVerificationStatus']>; label: string }[] = [
-  { value: 'unchecked', label: 'Unchecked' },
+  { value: 'unchecked', label: 'Not checked' },
   { value: 'needs-review', label: 'Needs review' },
-  { value: 'broken', label: 'Broken' },
-  { value: 'verified', label: 'Verified' },
+  { value: 'broken', label: 'Broken link' },
+  { value: 'verified', label: 'Link checked' },
 ];
 
 function linkStatusBadgeClass(status: Guideline['linkVerificationStatus']): string {
@@ -101,6 +107,18 @@ const TYPE_OPTIONS = [
   "National guidance", "Specialist society guidance", "Quick reference", "Local overlay"
 ];
 
+// Quick-access chips above the results area. Each maps to an existing section
+// value (see SECTION_OPTIONS) via the same setCurrentSection the sidebar uses
+// — no new filter mechanism, no new data/tagging. "Emergency" is the one label
+// that doesn't match its section verbatim (the section is "Emergencies").
+const QUICK_ACCESS_CHIPS: { label: string; section: string }[] = [
+  { label: 'Emergency', section: 'Emergencies' },
+  { label: 'Trauma', section: 'Trauma' },
+  { label: 'Spine', section: 'Spine' },
+  { label: 'Foot & Ankle', section: 'Foot & Ankle' },
+  { label: 'Paediatrics', section: 'Paediatrics' },
+];
+
 const STATUS_OPTIONS = [
   "Live", "To source", "Drafted", "Reviewed", "Under review", "Archived"
 ];
@@ -115,6 +133,7 @@ function sortSections(names: string[]): string[] {
     return a.localeCompare(b);
   });
 }
+
 
 
 // Tracks connectivity so the UI can flag when the user is viewing the cached
@@ -353,7 +372,7 @@ export default function App() {
           </div>
           <div className="flex flex-col leading-none">
             <span className="font-serif text-[1rem] text-slate-900 leading-tight">Orthopaedic Guidelines Hub</span>
-            <span className="text-[11px] text-slate-400 hidden sm:block mt-0.5">
+            <span className="text-[11px] text-slate-500 hidden sm:block mt-0.5">
               National guidance, grouped by topic — ward, on call, and clinic
             </span>
           </div>
@@ -434,7 +453,7 @@ export default function App() {
           isSidebarOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
         )}>
           <div className="p-4">
-            <div className="text-[10px] font-semibold text-slate-400 tracking-wider mb-2 uppercase">
+            <div className="text-[10px] font-semibold text-slate-500 tracking-wider mb-2 uppercase">
               Sections
             </div>
             <nav className="flex flex-col gap-px">
@@ -514,7 +533,7 @@ export default function App() {
             </nav>
           </div>
 
-          <div className="p-4 text-[10px] text-slate-400 border-t border-slate-100 leading-relaxed">
+          <div className="p-4 text-[10px] text-slate-500 border-t border-slate-100 leading-relaxed">
             National reference only. Not a substitute for clinical judgement or local trust policy.
           </div>
         </aside>
@@ -522,42 +541,72 @@ export default function App() {
         {/* Main */}
         <main className="flex-1 flex flex-col bg-[#F8FAFC] overflow-y-auto relative">
 
+          {/* Search hero + quick-access chips. Sticky within `main`'s own
+              scroll area (main is the nearest scrolling ancestor, so top-0
+              here means "top of the scrollable content", not the viewport) —
+              stays visible while cards scroll beneath it. Only shown for the
+              default browse view; the special views below have their own
+              toolbar content and no searchQuery/section concept applies. */}
+          {currentSection !== DUPLICATES_VIEW && currentSection !== CHANGELOG_VIEW && currentSection !== REVIEW_QUEUE_VIEW && (
+            <div className="sticky top-0 z-10 bg-[#F8FAFC] px-5 pt-3 pb-2 border-b border-slate-100 shrink-0">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+                <input
+                  type="text"
+                  placeholder="Search condition, injury, procedure or guidance body…"
+                  className="w-full pl-10 pr-4 py-2.5 bg-white border border-slate-200 rounded-lg text-[14px] focus:outline-none focus:ring-2 focus:ring-slate-300 transition-shadow shadow-sm"
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                />
+              </div>
+              <div className="flex flex-wrap gap-1.5 mt-2">
+                {QUICK_ACCESS_CHIPS.map(chip => (
+                  <button
+                    key={chip.section}
+                    onClick={() => setCurrentSection(chip.section)}
+                    className={cn(
+                      "px-2.5 py-1 rounded-full text-[11px] font-medium border transition-colors",
+                      currentSection === chip.section
+                        ? "bg-[#0F172A] text-white border-[#0F172A]"
+                        : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
+                    )}
+                  >
+                    {chip.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Toolbar */}
           <div className="px-5 py-1.5 flex justify-between items-center gap-2 border-b border-slate-100 bg-white shrink-0">
             {currentSection === DUPLICATES_VIEW ? (
-              <span className="text-[11px] text-slate-400">
+              <span className="text-[11px] text-slate-500">
                 Heuristic matches only — nothing is merged or deleted automatically.
               </span>
             ) : currentSection === CHANGELOG_VIEW ? (
-              <span className="text-[11px] text-slate-400">
+              <span className="text-[11px] text-slate-500">
                 Full edit history across all guidelines, newest first. Append-only — notes can't be edited or deleted.
               </span>
             ) : currentSection === REVIEW_QUEUE_VIEW ? (
-              <span className="text-[11px] text-slate-400">
+              <span className="text-[11px] text-slate-500">
                 Read-only manual review — a discovery/candidate queue, not a publication tool.
               </span>
             ) : (
               <>
-                <span className="text-[11px] text-slate-400 hidden md:block">
+                <span className="text-[11px] text-slate-500 hidden md:block">
                   Tap a card to expand sources and versions.
                 </span>
                 <div className="flex items-center gap-2 w-full md:w-auto">
-                  <div className="relative flex-1 md:w-[220px]">
-                    <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-400" />
-                    <input
-                      type="text"
-                      placeholder="Search topics, providers…"
-                      className="w-full pl-7 pr-3 py-1.5 bg-white border border-slate-200 rounded text-[12px] focus:outline-none focus:ring-1 focus:ring-slate-300 transition-shadow"
-                      value={searchQuery}
-                      onChange={e => setSearchQuery(e.target.value)}
-                    />
-                  </div>
+                  {/* Search input lives in the sticky hero above (see "Search
+                      hero + quick-access chips") — one searchQuery input, not
+                      two. */}
                   <select
                     value={linkStatusFilter}
                     onChange={e => setLinkStatusFilter(e.target.value)}
                     className="px-2 py-1.5 border border-slate-200 rounded text-[12px] bg-white focus:outline-none focus:ring-1 focus:ring-slate-300 shrink-0"
                   >
-                    <option value="All">All link statuses</option>
+                    <option value="All">All link-check statuses</option>
                     {LINK_STATUS_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                   </select>
                   {/* Group-by toggle: same filtered data, different lens on the main panel.
@@ -616,7 +665,21 @@ export default function App() {
             ) : currentSection === REVIEW_QUEUE_VIEW ? (
               <ReviewDashboard onEditCandidate={handleReviewCandidate} />
             ) : sortedSections.length === 0 ? (
-              <p className="text-[12px] text-slate-400 mt-3">No guidelines found.</p>
+              (() => {
+                const gapNote = findGapNote(searchQuery, guidelines);
+                return gapNote ? (
+                  <div className="mt-3 border border-slate-200 bg-white rounded-md px-3.5 py-3 max-w-lg">
+                    <p className="text-[12px] font-medium text-slate-800">
+                      No current UK guidance identified for this topic.
+                    </p>
+                    <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">{gapNote}</p>
+                  </div>
+                ) : (
+                  <p className="text-[12px] text-slate-500 mt-3">
+                    No results — try a different term or browse by category.
+                  </p>
+                );
+              })()
             ) : (
               sortedSections.map(section => (
                 <SectionContainer
@@ -688,10 +751,10 @@ function SectionContainer({
       >
         <div>
           <span className="text-[13px] font-semibold text-slate-700">{section}</span>
-          <span className="text-[11px] text-slate-400 ml-2">{subtitle}</span>
+          <span className="text-[11px] text-slate-500 ml-2">{subtitle}</span>
         </div>
         <ChevronDown className={cn(
-          "w-3.5 h-3.5 text-slate-400 transition-transform duration-200 shrink-0",
+          "w-3.5 h-3.5 text-slate-500 transition-transform duration-200 shrink-0",
           isCollapsed && "rotate-180"
         )} />
       </div>
@@ -767,11 +830,11 @@ function GuidelineCard({
               {item.type}
             </span>
             {otherSections.map(cl => (
-              <span key={cl} className="text-[10px] text-slate-400">· also in {cl}</span>
+              <span key={cl} className="text-[10px] text-slate-500">· also in {cl}</span>
             ))}
           </div>
           {item.subGroup && (
-            <div className="text-[11px] text-slate-400">{item.subGroup}</div>
+            <div className="text-[11px] text-slate-500">{item.subGroup}</div>
           )}
         </button>
 
@@ -810,7 +873,7 @@ function GuidelineCard({
             className="shrink-0 rounded focus:outline-none focus-visible:ring-1 focus-visible:ring-slate-400"
           >
             <ChevronDown className={cn(
-              "w-3.5 h-3.5 text-slate-400 transition-transform duration-200",
+              "w-3.5 h-3.5 text-slate-500 transition-transform duration-200",
               isExpanded && "rotate-180"
             )} />
           </button>
@@ -827,7 +890,7 @@ function GuidelineCard({
 
           {item.regionalVariation && (
             <div className="flex items-center gap-1.5 px-2 py-1 bg-slate-50 border border-slate-200 rounded mb-1.5">
-              <TriangleAlert className="w-3 h-3 text-slate-400 shrink-0" />
+              <TriangleAlert className="w-3 h-3 text-slate-500 shrink-0" />
               <span className="text-[11px] text-slate-500">
                 Regional variation — check local trust protocol before applying.
               </span>
@@ -837,7 +900,7 @@ function GuidelineCard({
           {item.versions.length > 0 && (
             <div className="mb-1.5">
               <div className="flex items-center justify-between mb-1 flex-wrap gap-1">
-                <div className="text-[9px] font-semibold text-slate-400 uppercase tracking-widest">
+                <div className="text-[9px] font-semibold text-slate-500 uppercase tracking-widest">
                   Source Links
                 </div>
                 <div className="flex items-center gap-1.5 flex-wrap">
@@ -848,7 +911,7 @@ function GuidelineCard({
                     {LINK_STATUS_OPTIONS.find(o => o.value === linkStatus)?.label}
                   </span>
                   {item.linkLastVerified && (
-                    <span className="text-[10px] text-slate-400">verified {item.linkLastVerified}</span>
+                    <span className="text-[10px] text-slate-500">link checked {item.linkLastVerified}</span>
                   )}
                   {WRITES_ENABLED && isEditor && (
                     <>
@@ -870,7 +933,7 @@ function GuidelineCard({
                         }}
                         className="text-[10px] text-slate-500 hover:text-slate-700 underline underline-offset-2"
                       >
-                        Mark verified today
+                        Mark link checked today
                       </button>
                     </>
                   )}
@@ -888,28 +951,33 @@ function GuidelineCard({
                         onClick={e => e.stopPropagation()}
                       >
                         {v.label}
-                        <ExternalLink className="w-2.5 h-2.5 shrink-0 text-slate-400" />
+                        <ExternalLink className="w-2.5 h-2.5 shrink-0 text-slate-500" />
                       </a>
                     ) : (
                       <span className="text-[11px] text-slate-500">{v.label}</span>
                     )}
                     {v.date && (
-                      <span className="text-[10px] text-slate-400 ml-3 shrink-0">{v.date}</span>
+                      <span className="text-[10px] text-slate-500 ml-3 shrink-0">{v.date}</span>
                     )}
                   </div>
                 ))}
               </div>
+              {/* Calm, persistent, non-dismissible — sits near the click-through
+                  rather than gating it. See handoff task 4. */}
+              <p className="text-[10px] text-slate-500 mt-1.5 leading-snug">
+                This hub links to source guidance. Use clinical judgement and local escalation processes.
+              </p>
             </div>
           )}
 
           {item.notes && (
-            <p className="text-[11px] text-slate-400 italic mb-1.5">{item.notes}</p>
+            <p className="text-[11px] text-slate-500 italic mb-1.5">{item.notes}</p>
           )}
 
           {/* Feature 3 — cross-references, computed live from existing data */}
           {alsoPublishedBy.length > 0 && (
             <div className="mb-1.5">
-              <div className="text-[9px] font-semibold text-slate-400 uppercase tracking-widest mb-0.5">
+              <div className="text-[9px] font-semibold text-slate-500 uppercase tracking-widest mb-0.5">
                 Also published by
               </div>
               <div className="flex flex-wrap gap-1">
@@ -924,13 +992,13 @@ function GuidelineCard({
 
           {related.length > 0 && (
             <div className="mb-1.5">
-              <div className="text-[9px] font-semibold text-slate-400 uppercase tracking-widest mb-0.5">
+              <div className="text-[9px] font-semibold text-slate-500 uppercase tracking-widest mb-0.5">
                 Related in {item.section}
               </div>
               <div className="flex flex-col gap-px">
                 {related.map(r => (
                   <span key={r.id} className="text-[11px] text-slate-600 truncate">
-                    · {r.topic} <span className="text-slate-400">— {r.source}</span>
+                    · {r.topic} <span className="text-slate-500">— {r.source}</span>
                   </span>
                 ))}
               </div>
@@ -944,14 +1012,14 @@ function GuidelineCard({
           <div className="flex justify-between items-center pt-1 border-t border-slate-100">
             <div className="flex items-center gap-2.5">
               {item.lastChecked && (
-                <span className="text-[10px] text-slate-400">Last checked: {item.lastChecked}</span>
+                <span className="text-[10px] text-slate-500">Last checked: {item.lastChecked}</span>
               )}
-              <span className="text-[10px] text-slate-400">ID: {item.id}</span>
+              <span className="text-[10px] text-slate-500">ID: {item.id}</span>
             </div>
             {WRITES_ENABLED && isEditor && (
               <button
                 onClick={e => { e.stopPropagation(); onEdit(item); }}
-                className="px-2 py-0.5 text-[10px] font-medium border border-slate-200 rounded text-slate-400 hover:bg-slate-50 hover:text-slate-600 transition-colors"
+                className="px-2 py-0.5 text-[10px] font-medium border border-slate-200 rounded text-slate-500 hover:bg-slate-50 hover:text-slate-600 transition-colors"
               >
                 Edit
               </button>
@@ -1018,29 +1086,29 @@ function CardChangelog({ guidelineId, isEditor }: { guidelineId: string; isEdito
 
   return (
     <div className="mb-1.5 border-t border-slate-100 pt-1.5">
-      <div className="text-[9px] font-semibold text-slate-400 uppercase tracking-widest mb-1">
+      <div className="text-[9px] font-semibold text-slate-500 uppercase tracking-widest mb-1">
         Changelog
       </div>
 
       {load === null ? (
-        <p className="text-[11px] text-slate-400">Loading…</p>
+        <p className="text-[11px] text-slate-500">Loading…</p>
       ) : !load.ok && load.reason === 'error' ? (
         // Genuine query failure — never shown as "no notes yet".
         <p className="text-[11px] text-amber-800">Couldn’t load notes. {load.message}</p>
       ) : !load.ok ? (
-        <p className="text-[11px] text-slate-400">{load.message}</p>
+        <p className="text-[11px] text-slate-500">{load.message}</p>
       ) : entries.length === 0 ? (
-        <p className="text-[11px] text-slate-400">No notes yet.</p>
+        <p className="text-[11px] text-slate-500">No notes yet.</p>
       ) : (
         <ul className="flex flex-col gap-0.5 mb-1.5">
           {entries.slice(0, MAX_INLINE).map(e => (
             <li key={e.id} className="text-[11px] text-slate-600 flex gap-2">
-              <span className="text-slate-400 shrink-0 tabular-nums">{fmtTimestamp(e.createdAt)}</span>
+              <span className="text-slate-500 shrink-0 tabular-nums">{fmtTimestamp(e.createdAt)}</span>
               <span className="whitespace-pre-line">{e.description}</span>
             </li>
           ))}
           {entries.length > MAX_INLINE && (
-            <li className="text-[10px] text-slate-400">
+            <li className="text-[10px] text-slate-500">
               +{entries.length - MAX_INLINE} more — see the Changelog view.
             </li>
           )}
@@ -1092,7 +1160,7 @@ function ChangelogPanel({ guidelines }: { guidelines: Guideline[] }) {
     return m;
   }, [guidelines]);
 
-  if (load === null) return <p className="text-[12px] text-slate-400 mt-3">Loading changelog…</p>;
+  if (load === null) return <p className="text-[12px] text-slate-500 mt-3">Loading changelog…</p>;
 
   // A genuine query failure — distinct from "nothing here yet", and retryable.
   if (!load.ok && load.reason === 'error') {
@@ -1113,12 +1181,12 @@ function ChangelogPanel({ guidelines }: { guidelines: Guideline[] }) {
   // Not provisioned (static mode, or the table does not exist yet). Says so
   // honestly instead of claiming there are simply no entries.
   if (!load.ok) {
-    return <p className="text-[12px] text-slate-400 mt-3">{load.message}</p>;
+    return <p className="text-[12px] text-slate-500 mt-3">{load.message}</p>;
   }
 
   const entries = load.entries;
   if (entries.length === 0) {
-    return <p className="text-[12px] text-slate-400 mt-3">No changelog entries yet.</p>;
+    return <p className="text-[12px] text-slate-500 mt-3">No changelog entries yet.</p>;
   }
 
   return (
@@ -1129,10 +1197,10 @@ function ChangelogPanel({ guidelines }: { guidelines: Guideline[] }) {
           <div key={e.id} className="border border-slate-200 rounded-md bg-white px-3 py-2">
             <div className="flex justify-between items-start gap-2 flex-wrap">
               <span className="text-[12px] font-medium text-slate-800">{g ? g.topic : e.guidelineId}</span>
-              <span className="text-[10px] text-slate-400 shrink-0 tabular-nums">{fmtTimestamp(e.createdAt)}</span>
+              <span className="text-[10px] text-slate-500 shrink-0 tabular-nums">{fmtTimestamp(e.createdAt)}</span>
             </div>
             <p className="text-[12px] text-slate-600 whitespace-pre-line mt-0.5">{e.description}</p>
-            <div className="text-[10px] text-slate-400 mt-1">
+            <div className="text-[10px] text-slate-500 mt-1">
               {g ? `${g.section} · ${g.source}` : 'guideline not in current view'} · ID: {e.guidelineId}
             </div>
           </div>
@@ -1177,7 +1245,7 @@ function EditModal({
       versions: prev.versions.map((v, i) => i === idx ? { ...v, [key]: value } : v),
     }));
 
-  const lbl = "block text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-0.5";
+  const lbl = "block text-[10px] font-semibold text-slate-500 uppercase tracking-wide mb-0.5";
   const inp = "w-full px-2.5 py-1.5 border border-slate-200 rounded text-[12px] bg-white focus:outline-none focus:ring-1 focus:ring-slate-300";
 
   return (
@@ -1191,7 +1259,7 @@ function EditModal({
           <h2 className="text-[13px] font-semibold text-slate-800">
             {isNew ? 'Add Guideline' : 'Edit Guideline'}
           </h2>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 transition-colors">
+          <button onClick={onClose} className="text-slate-500 hover:text-slate-600 transition-colors">
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -1204,7 +1272,7 @@ function EditModal({
             <div>
               <label className={lbl}>ID</label>
               <input type="text" value={form.id} readOnly
-                className={cn(inp, "bg-slate-50 text-slate-400 cursor-default")} />
+                className={cn(inp, "bg-slate-50 text-slate-500 cursor-default")} />
             </div>
             <div>
               <label className={lbl}>Section</label>
@@ -1358,7 +1426,7 @@ function EditModal({
                       placeholder="Date"
                       className="w-[76px] shrink-0 px-2 py-1 border border-slate-200 rounded text-[12px] bg-white focus:outline-none focus:ring-1 focus:ring-slate-300" />
                     <button onClick={() => removeVersion(idx)}
-                      className="text-slate-400 hover:text-slate-600 transition-colors shrink-0">
+                      className="text-slate-500 hover:text-slate-600 transition-colors shrink-0">
                       <X className="w-3.5 h-3.5" />
                     </button>
                   </div>
@@ -1407,7 +1475,7 @@ function EditModal({
               <button
                 disabled
                 title={blockedReason ?? 'Read-only mode — publication is disabled'}
-                className="bg-slate-200 text-slate-400 py-1.5 px-4 rounded text-[12px] font-medium cursor-not-allowed"
+                className="bg-slate-200 text-slate-500 py-1.5 px-4 rounded text-[12px] font-medium cursor-not-allowed"
               >
                 Save Guideline
               </button>
@@ -1440,7 +1508,7 @@ function DuplicatesPanel({
   onDeleteOne: (g: Guideline) => void;
 }) {
   if (candidates.length === 0) {
-    return <p className="text-[12px] text-slate-400 mt-3">No likely duplicates detected.</p>;
+    return <p className="text-[12px] text-slate-500 mt-3">No likely duplicates detected.</p>;
   }
 
   return (
@@ -1512,7 +1580,7 @@ function DuplicatePairCard({
         {WRITES_ENABLED && isEditor && (
           <button
             onClick={() => onDismiss(a, b)}
-            className="text-[10px] text-slate-400 hover:text-slate-600 shrink-0 underline underline-offset-2"
+            className="text-[10px] text-slate-500 hover:text-slate-600 shrink-0 underline underline-offset-2"
           >
             Keep both — dismiss
           </button>
@@ -1533,7 +1601,7 @@ function DuplicatePairCard({
                   <span className="text-[9px] px-1 py-px rounded bg-slate-700 text-white shrink-0">canonical</span>
                 )}
               </div>
-              <span className="text-[10px] text-slate-400">
+              <span className="text-[10px] text-slate-500">
                 {g.section} · {g.source} · {g.status}{g.archived ? ' · archived' : ''} · {g.versions.length} link{g.versions.length === 1 ? '' : 's'}
               </span>
               {WRITES_ENABLED && isEditor && (
@@ -1573,7 +1641,7 @@ function DuplicatePairCard({
           >
             Delete "{duplicate.topic}" without merging
           </button>
-          <span className="text-[10px] text-slate-400 ml-auto">
+          <span className="text-[10px] text-slate-500 ml-auto">
             {newVersionCount > 0 ? `+${newVersionCount} link${newVersionCount === 1 ? '' : 's'}` : 'no new links'}
             {newSections.length > 0 ? ` · adds ${newSections.join(', ')}` : ''}
           </span>
