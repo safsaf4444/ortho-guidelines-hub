@@ -201,6 +201,19 @@ export default function App() {
     return true;
   });
 
+  // Phase 4 item E — "Clear filters" is shown only when something is actually
+  // narrowing the list. currentSection here also covers a quick-access chip
+  // selection, since chips just call setCurrentSection — same state, no new
+  // filter dimension introduced.
+  const hasActiveFilters =
+    searchQuery.trim() !== '' || linkStatusFilter !== 'All' || currentSection !== 'All';
+
+  const clearFilters = () => {
+    setSearchQuery('');
+    setLinkStatusFilter('All');
+    setCurrentSection('All');
+  };
+
   // Two lenses on the same filtered data, chosen by the groupBy toggle:
   //  - 'section': a guideline appears under its primary section AND every
   //    cross-listed section — one canonical record, shown wherever it's
@@ -565,13 +578,19 @@ export default function App() {
                   onChange={e => setSearchQuery(e.target.value)}
                 />
               </div>
-              <div className="flex flex-wrap gap-1.5 mt-2">
+              <div className="flex flex-wrap items-center gap-1.5 mt-2">
                 {QUICK_ACCESS_CHIPS.map(chip => (
                   <button
                     key={chip.section}
                     onClick={() => setCurrentSection(chip.section)}
                     className={cn(
-                      "px-2.5 py-1 rounded-full text-[11px] font-medium border transition-colors",
+                      // px-3 py-2 (up from px-2.5 py-1) — a real, if not
+                      // literally 44px, improvement to the tap target. A
+                      // strict 44px-tall pill would look oversized next to
+                      // the already-verified Part 3 chip row, so this is a
+                      // deliberate "roughly, where feasible" compromise, not
+                      // an oversight — see Phase 4 report.
+                      "px-3 py-2 rounded-full text-[11px] font-medium border transition-colors",
                       currentSection === chip.section
                         ? "bg-[#0F172A] text-white border-[#0F172A]"
                         : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
@@ -580,6 +599,14 @@ export default function App() {
                     {chip.label}
                   </button>
                 ))}
+                {hasActiveFilters && (
+                  <button
+                    onClick={clearFilters}
+                    className="px-3 py-2 rounded-full text-[11px] font-medium text-slate-500 border border-transparent hover:text-slate-700 hover:border-slate-200 transition-colors"
+                  >
+                    Clear filters ×
+                  </button>
+                )}
               </div>
             </div>
           )}
@@ -610,7 +637,7 @@ export default function App() {
                   <select
                     value={linkStatusFilter}
                     onChange={e => setLinkStatusFilter(e.target.value)}
-                    className="px-2 py-1.5 border border-slate-200 rounded text-[12px] bg-white focus:outline-none focus:ring-1 focus:ring-slate-300 shrink-0"
+                    className="px-2.5 py-2 border border-slate-200 rounded text-[12px] bg-white focus:outline-none focus:ring-1 focus:ring-slate-300 shrink-0"
                   >
                     <option value="All">All link-check statuses</option>
                     {LINK_STATUS_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
@@ -766,10 +793,10 @@ function SectionContainer({
       </div>
 
       {!isCollapsed && (
-        <div className="px-3.5 pb-3.5 flex flex-col gap-1.5 border-t border-slate-100">
+        <div className="px-3.5 pb-3.5 flex flex-col gap-2.5 border-t border-slate-100">
           <div className="h-1.5" />
           {items.map(g => (
-            <GuidelineCard key={g.id} item={g} sectionContext={section} allGuidelines={allGuidelines} isEditor={isEditor} onEdit={onEdit} onQuickUpdate={onQuickUpdate} />
+            <GuidelineCard key={g.id} item={g} sectionContext={section} groupBy={groupBy} allGuidelines={allGuidelines} isEditor={isEditor} onEdit={onEdit} onQuickUpdate={onQuickUpdate} />
           ))}
         </div>
       )}
@@ -780,10 +807,11 @@ function SectionContainer({
 // ─── Guideline Card ───────────────────────────────────────────────────────────
 
 function GuidelineCard({
-  item, sectionContext, allGuidelines, isEditor, onEdit, onQuickUpdate,
+  item, sectionContext, groupBy, allGuidelines, isEditor, onEdit, onQuickUpdate,
 }: {
   item: Guideline;
   sectionContext: string;
+  groupBy: 'section' | 'provider';
   allGuidelines: Guideline[];
   isEditor: boolean;
   onEdit: (g: Guideline) => void;
@@ -815,80 +843,114 @@ function GuidelineCard({
   // confident URL for — the tag then renders as plain text, as it always did.
   const providerHref = providerUrl(item.source);
 
-  return (
-    <div className="border border-slate-200 rounded overflow-hidden bg-white">
+  // Primary source link — the one the new "Open source guidance" action
+  // opens. versions[0] is the canonical/primary entry by existing convention
+  // elsewhere in this codebase (e.g. scripts/flag-dead-links.ts). Guarded the
+  // same way the version-row links already are: absent or '#' means no real
+  // target, so the action doesn't render rather than pointing nowhere.
+  const primaryUrl = item.versions[0]?.url;
+  const hasPrimaryLink = Boolean(primaryUrl && primaryUrl !== '#');
 
-      {/* Header row.
-          This is a <div>, not a <button>, because the provider tag is a real
-          link: an <a> nested inside a <button> is invalid HTML (interactive
-          content cannot nest) and breaks keyboard navigation. The row is
-          instead split into two sibling controls — the topic button and the
-          chevron button — with the provider link between them. */}
-      <div className="w-full px-3 py-1.5 flex justify-between items-center hover:bg-slate-50 transition-colors">
-        <button
-          className="flex flex-col gap-px min-w-0 flex-1 text-left"
-          onClick={() => setIsExpanded(!isExpanded)}
-          aria-expanded={isExpanded}
-        >
-          <div className="flex items-center gap-1.5 flex-wrap">
-            <span className="text-[13px] font-medium text-slate-800 leading-snug">{item.topic}</span>
-            <span className="text-[10px] text-slate-500 border border-slate-200 rounded px-1 py-px shrink-0">
-              {item.type}
-            </span>
-            {otherSections.map(cl => (
-              <span key={cl} className="text-[10px] text-slate-500">· also in {cl}</span>
-            ))}
+  return (
+    <div className="border border-slate-200 rounded-lg overflow-hidden bg-white">
+
+      {/* Collapsed row. A single accessible control (role="button" + tabIndex
+          + Enter/Space), not the earlier button/div split — a plain <div>
+          can safely contain the provider <a> directly (unlike a <button>,
+          where nesting interactive content is invalid HTML and was the
+          reason for that split). Mouse users can click anywhere on the row;
+          keyboard users tab to the row itself. The provider link stops
+          propagation so it opens externally without also toggling. */}
+      <div
+        role="button"
+        tabIndex={0}
+        aria-expanded={isExpanded}
+        onClick={() => setIsExpanded(!isExpanded)}
+        onKeyDown={e => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            setIsExpanded(!isExpanded);
+          }
+        }}
+        className="w-full px-3 py-2.5 flex items-start gap-2 cursor-pointer hover:bg-slate-50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-400"
+      >
+        <div className="flex flex-col gap-1 min-w-0 flex-1">
+          {/* Priority order per Phase 4: title, then provider + one
+              high-level type label + (when useful) a section cue, then an
+              expand affordance. Cross-listing, co-badge detail, versions,
+              notes and changelog all move into the expanded body below —
+              same data, nothing dropped, just not competing for attention
+              in the scan line. */}
+          <span className="text-[13px] font-medium text-slate-800 leading-snug">{item.topic}</span>
+          <div className="flex items-center gap-1.5 flex-wrap text-[11px] text-slate-500">
+            {providerHref ? (
+              <a
+                href={providerHref}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={e => e.stopPropagation()}
+                title={`Open the ${canonicalProvider(item.source)} website in a new tab`}
+                className="hover:text-slate-900 hover:underline underline-offset-2 focus:outline-none focus-visible:ring-1 focus-visible:ring-slate-400 rounded"
+              >
+                {item.source}
+              </a>
+            ) : (
+              <span>{item.source}</span>
+            )}
+            <span aria-hidden="true" className="text-slate-300">·</span>
+            <span>{item.type}</span>
+            {/* Section cue only when grouped by provider — grouped by section,
+                the section is already the group heading right above, so
+                repeating it on every card would be redundant. */}
+            {groupBy === 'provider' && (
+              <>
+                <span aria-hidden="true" className="text-slate-300">·</span>
+                <span>{item.section}</span>
+              </>
+            )}
+            {/* Kept collapsed (not moved to expanded) — this is a safety-
+                relevant fact ("don't assume this applies uniformly") that's
+                genuinely useful to see before expanding, not just admin
+                metadata. The full explanatory warning stays in the expanded
+                body as well. */}
+            {item.regionalVariation && (
+              <>
+                <span aria-hidden="true" className="text-slate-300">·</span>
+                <span className="text-amber-700 font-medium">Regional variation</span>
+              </>
+            )}
           </div>
           {item.subGroup && (
-            <div className="text-[11px] text-slate-500">{item.subGroup}</div>
+            <div className="text-[10px] text-slate-500">{item.subGroup}</div>
           )}
-        </button>
-
-        <div className="flex items-center gap-1.5 shrink-0 ml-3">
-          {providerHref ? (
-            <a
-              href={providerHref}
-              target="_blank"
-              rel="noopener noreferrer"
-              // Belt and braces: the link is no longer inside the toggle
-              // button, but stopping propagation keeps a click on it from
-              // reaching any future row-level handler.
-              onClick={e => e.stopPropagation()}
-              title={`Open the ${canonicalProvider(item.source)} website in a new tab`}
-              className="text-[11px] text-slate-500 hidden sm:block hover:text-slate-900 hover:underline underline-offset-2 focus:outline-none focus-visible:ring-1 focus-visible:ring-slate-400 rounded"
-            >
-              {item.source}
-            </a>
-          ) : (
-            <span className="text-[11px] text-slate-500 hidden sm:block">{item.source}</span>
-          )}
-          {(item.type === 'National guidance' || item.type === 'Specialist society guidance') && (
-            <span className="text-[10px] text-slate-500 border border-slate-200 rounded px-1 py-px shrink-0">
-              Natl
-            </span>
-          )}
-          {item.regionalVariation && (
-            <span className="text-[10px] text-slate-500 border border-slate-200 rounded px-1 py-px shrink-0">
-              Reg
-            </span>
-          )}
-          <button
-            onClick={() => setIsExpanded(!isExpanded)}
-            aria-expanded={isExpanded}
-            aria-label={isExpanded ? 'Collapse details' : 'Expand details'}
-            className="shrink-0 rounded focus:outline-none focus-visible:ring-1 focus-visible:ring-slate-400"
-          >
-            <ChevronDown className={cn(
-              "w-3.5 h-3.5 text-slate-500 transition-transform duration-200",
-              isExpanded && "rotate-180"
-            )} />
-          </button>
         </div>
+        <ChevronDown
+          aria-hidden="true"
+          className={cn(
+            "w-4 h-4 text-slate-500 transition-transform duration-200 shrink-0 mt-0.5",
+            isExpanded && "rotate-180"
+          )}
+        />
       </div>
 
       {/* Expanded body */}
       {isExpanded && (
-        <div className="border-t border-slate-100 px-3 pt-2 pb-2.5">
+        <div className="border-t border-slate-100 px-3 pt-3 pb-2.5">
+
+          {/* The next action a clinician usually wants after expanding: the
+              actual source, not more of this hub's metadata about it. Uses
+              the real href from versions[0] — no new/guessed URL. */}
+          {hasPrimaryLink && (
+            <a
+              href={primaryUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2.5 mb-2 bg-[#0F172A] text-white rounded-md text-[12px] font-medium hover:bg-slate-800 transition-colors"
+            >
+              Open source guidance
+              <ExternalLink className="w-3.5 h-3.5" />
+            </a>
+          )}
 
           <p className="text-[12px] text-slate-600 leading-relaxed mb-1.5 whitespace-pre-line">
             {item.summary}
@@ -947,20 +1009,25 @@ function GuidelineCard({
               </div>
               <div className="flex flex-col">
                 {item.versions.map((v, idx) => (
-                  <div key={idx} className="flex justify-between items-center py-0.5 border-b border-slate-100 last:border-0">
+                  <div key={idx} className="flex justify-between items-center gap-2 flex-wrap border-b border-slate-100 last:border-0">
                     {v.url && v.url !== '#' ? (
                       <a
                         href={v.url}
                         target="_blank"
                         rel="noreferrer"
-                        className="text-[11px] text-slate-600 hover:text-slate-900 hover:underline flex items-center gap-1"
+                        // py-2 (not the old py-0.5) so the tappable area of the
+                        // link itself, not just the visible text glyph, is
+                        // closer to a real touch target on a phone. Label
+                        // wraps rather than truncates — it can carry real
+                        // content (edition/date), not just chrome.
+                        className="text-[11px] text-slate-600 hover:text-slate-900 hover:underline flex items-center gap-1 py-2"
                         onClick={e => e.stopPropagation()}
                       >
                         {v.label}
-                        <ExternalLink className="w-2.5 h-2.5 shrink-0 text-slate-500" />
+                        <ExternalLink className="w-3 h-3 shrink-0 text-slate-500" />
                       </a>
                     ) : (
-                      <span className="text-[11px] text-slate-500">{v.label}</span>
+                      <span className="text-[11px] text-slate-500 py-2">{v.label}</span>
                     )}
                     {v.date && (
                       <span className="text-[10px] text-slate-500 ml-3 shrink-0">{v.date}</span>
@@ -980,34 +1047,57 @@ function GuidelineCard({
             <p className="text-[11px] text-slate-500 italic mb-1.5">{item.notes}</p>
           )}
 
-          {/* Feature 3 — cross-references, computed live from existing data */}
-          {alsoPublishedBy.length > 0 && (
-            <div className="mb-1.5">
-              <div className="text-[9px] font-semibold text-slate-500 uppercase tracking-widest mb-0.5">
-                Also published by
-              </div>
-              <div className="flex flex-wrap gap-1">
-                {alsoPublishedBy.map(p => (
-                  <span key={p} className="text-[10px] text-slate-500 border border-slate-200 rounded px-1.5 py-px">
-                    {p}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
+          {/* Cross-reference detail, grouped into one block instead of three
+              separate fragments (Phase 4 item B2/C). Same three facts as
+              before — cross-listing (moved out of the collapsed row),
+              co-badging societies, and related-in-section — just one visual
+              container instead of scattering each in its own bordered strip. */}
+          {(otherSections.length > 0 || alsoPublishedBy.length > 0 || related.length > 0) && (
+            <div className="mb-1.5 border border-slate-100 bg-slate-50/60 rounded-md px-2.5 py-2 flex flex-col gap-1.5">
+              {otherSections.length > 0 && (
+                <div>
+                  <div className="text-[9px] font-semibold text-slate-500 uppercase tracking-widest mb-0.5">
+                    Also in
+                  </div>
+                  <div className="flex flex-wrap gap-1">
+                    {otherSections.map(cl => (
+                      <span key={cl} className="text-[10px] text-slate-500 border border-slate-200 bg-white rounded px-1.5 py-px">
+                        {cl}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
 
-          {related.length > 0 && (
-            <div className="mb-1.5">
-              <div className="text-[9px] font-semibold text-slate-500 uppercase tracking-widest mb-0.5">
-                Related in {item.section}
-              </div>
-              <div className="flex flex-col gap-px">
-                {related.map(r => (
-                  <span key={r.id} className="text-[11px] text-slate-600 truncate">
-                    · {r.topic} <span className="text-slate-500">— {r.source}</span>
-                  </span>
-                ))}
-              </div>
+              {alsoPublishedBy.length > 0 && (
+                <div>
+                  <div className="text-[9px] font-semibold text-slate-500 uppercase tracking-widest mb-0.5">
+                    Also published by
+                  </div>
+                  <div className="flex flex-wrap gap-1">
+                    {alsoPublishedBy.map(p => (
+                      <span key={p} className="text-[10px] text-slate-500 border border-slate-200 bg-white rounded px-1.5 py-px">
+                        {p}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {related.length > 0 && (
+                <div>
+                  <div className="text-[9px] font-semibold text-slate-500 uppercase tracking-widest mb-0.5">
+                    Related in {item.section}
+                  </div>
+                  <div className="flex flex-col gap-px">
+                    {related.map(r => (
+                      <span key={r.id} className="text-[11px] text-slate-600">
+                        · {r.topic} <span className="text-slate-500">— {r.source}</span>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
