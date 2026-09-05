@@ -389,8 +389,10 @@ export default function App() {
                 `md:hidden` breakpoint below. Between 640-767px, sm: would
                 show this alongside the still-visible mobile hamburger and
                 overflow the fixed-height header — the exact overlap reported
-                at ~740px. Same reasoning for the badge and button labels
-                further down this header. */}
+                at ~740px. Unlike the badge/button-labels below, the subtitle
+                sits UNDER the title in a flex-col, so it adds height, not row
+                width — it isn't part of the 798px overflow reported next and
+                doesn't need the same lg: treatment. */}
             <span className="text-[11px] text-slate-500 hidden md:block mt-0.5 truncate">
               National guidance, grouped by topic — ward, on call, and clinic
             </span>
@@ -398,11 +400,21 @@ export default function App() {
         </div>
 
         <div className="flex items-center gap-3 shrink-0">
-          {/* Supabase connection badge */}
+          {/* Supabase connection badge.
+              lg: not md: — at md (768px) this badge, "Editor sign in", and
+              both button text labels together measure ~560px+, which does
+              NOT fit a viewport just over 768px (confirmed: overflow at
+              798px, via scrollWidth > clientWidth). Pushed to lg (1024px),
+              where the arithmetic clears with real margin. 768-1023px shows
+              a leaner header (icon-only buttons, no badge) instead — the
+              "hide progressively" option, not a wrap/overflow-menu, since
+              wrapping would need the header's height to grow, and multiple
+              other elements (the sidebar, the mobile backdrop) hardcode
+              `top-[56px]` against this header's current fixed height. */}
           <div
             title={isSupabaseEnabled ? "Connected to Supabase live database" : "Operating in static fallback mode"}
             className={cn(
-              "hidden md:flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border",
+              "hidden lg:flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border",
               isSupabaseEnabled
                 ? "bg-emerald-50 text-emerald-700 border-emerald-200"
                 : "bg-amber-50 text-amber-700 border-amber-200"
@@ -432,7 +444,7 @@ export default function App() {
             )}
           >
             <ClipboardList className="w-3.5 h-3.5" />
-            <span className="hidden md:inline">Review Staged Guidelines</span>
+            <span className="hidden lg:inline">Review Staged Guidelines</span>
           </button>
 
           {/* Export JSON backup button */}
@@ -442,7 +454,7 @@ export default function App() {
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-md transition-colors"
           >
             <Download className="w-3.5 h-3.5" />
-            <span className="hidden md:inline">Export JSON</span>
+            <span className="hidden lg:inline">Export JSON</span>
           </button>
         </div>
       </header>
