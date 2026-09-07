@@ -107,18 +107,6 @@ const TYPE_OPTIONS = [
   "National guidance", "Specialist society guidance", "Quick reference", "Local overlay"
 ];
 
-// Quick-access chips above the results area. Each maps to an existing section
-// value (see SECTION_OPTIONS) via the same setCurrentSection the sidebar uses
-// — no new filter mechanism, no new data/tagging. "Emergency" is the one label
-// that doesn't match its section verbatim (the section is "Emergencies").
-const QUICK_ACCESS_CHIPS: { label: string; section: string }[] = [
-  { label: 'Emergency', section: 'Emergencies' },
-  { label: 'Trauma', section: 'Trauma' },
-  { label: 'Spine', section: 'Spine' },
-  { label: 'Foot & Ankle', section: 'Foot & Ankle' },
-  { label: 'Paediatrics', section: 'Paediatrics' },
-];
-
 const STATUS_OPTIONS = [
   "Live", "To source", "Drafted", "Reviewed", "Under review", "Archived"
 ];
@@ -202,9 +190,8 @@ export default function App() {
   });
 
   // Phase 4 item E — "Clear filters" is shown only when something is actually
-  // narrowing the list. currentSection here also covers a quick-access chip
-  // selection, since chips just call setCurrentSection — same state, no new
-  // filter dimension introduced.
+  // narrowing the list: free-text search, the link-check filter, or a
+  // section chosen from the sidebar.
   const hasActiveFilters =
     searchQuery.trim() !== '' || linkStatusFilter !== 'All' || currentSection !== 'All';
 
@@ -572,12 +559,16 @@ export default function App() {
         {/* Main */}
         <main className="flex-1 flex flex-col bg-[#F8FAFC] overflow-y-auto relative">
 
-          {/* Search hero + quick-access chips. Sticky within `main`'s own
-              scroll area (main is the nearest scrolling ancestor, so top-0
-              here means "top of the scrollable content", not the viewport) —
-              stays visible while cards scroll beneath it. Only shown for the
-              default browse view; the special views below have their own
-              toolbar content and no searchQuery/section concept applies. */}
+          {/* Search hero. Sticky within `main`'s own scroll area (main is the
+              nearest scrolling ancestor, so top-0 here means "top of the
+              scrollable content", not the viewport) — stays visible while
+              cards scroll beneath it. Only shown for the default browse
+              view; the special views below have their own toolbar content
+              and no searchQuery/section concept applies.
+
+              The quick-access chip row (Emergency/Trauma/Spine/Foot &
+              Ankle/Paediatrics) that used to sit here was removed at the
+              user's request. */}
           {currentSection !== DUPLICATES_VIEW && currentSection !== CHANGELOG_VIEW && currentSection !== REVIEW_QUEUE_VIEW && (
             <div className="sticky top-0 z-10 bg-[#F8FAFC] px-5 pt-3 pb-2 border-b border-slate-100 shrink-0">
               <div className="relative">
@@ -590,36 +581,14 @@ export default function App() {
                   onChange={e => setSearchQuery(e.target.value)}
                 />
               </div>
-              <div className="flex flex-wrap items-center gap-1.5 mt-2">
-                {QUICK_ACCESS_CHIPS.map(chip => (
-                  <button
-                    key={chip.section}
-                    onClick={() => setCurrentSection(chip.section)}
-                    className={cn(
-                      // px-3 py-2 (up from px-2.5 py-1) — a real, if not
-                      // literally 44px, improvement to the tap target. A
-                      // strict 44px-tall pill would look oversized next to
-                      // the already-verified Part 3 chip row, so this is a
-                      // deliberate "roughly, where feasible" compromise, not
-                      // an oversight — see Phase 4 report.
-                      "px-3 py-2 rounded-full text-[11px] font-medium border transition-colors",
-                      currentSection === chip.section
-                        ? "bg-[#0F172A] text-white border-[#0F172A]"
-                        : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
-                    )}
-                  >
-                    {chip.label}
-                  </button>
-                ))}
-                {hasActiveFilters && (
-                  <button
-                    onClick={clearFilters}
-                    className="px-3 py-2 rounded-full text-[11px] font-medium text-slate-500 border border-transparent hover:text-slate-700 hover:border-slate-200 transition-colors"
-                  >
-                    Clear filters ×
-                  </button>
-                )}
-              </div>
+              {hasActiveFilters && (
+                <button
+                  onClick={clearFilters}
+                  className="mt-1.5 px-1 py-1 text-[11px] font-medium text-slate-500 hover:text-slate-700 transition-colors"
+                >
+                  Clear filters ×
+                </button>
+              )}
             </div>
           )}
 
