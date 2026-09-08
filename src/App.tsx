@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
-import { Search, ChevronDown, ExternalLink, Menu, X, TriangleAlert, Plus, WifiOff, Download, Database, History, ClipboardList } from 'lucide-react'
+import { Search, ChevronDown, ExternalLink, Menu, X, TriangleAlert, Plus, WifiOff, Download, Database, History, ClipboardList, Table2 } from 'lucide-react'
 import { GUIDELINES_DATA, Guideline, GuidelineVersion } from './data/guidelines-data'
 import { guidelinesService } from './lib/guidelines-service'
 import { changelogService, type ChangelogLoad } from './lib/changelog-service'
@@ -18,6 +18,7 @@ import { buildCatalogue, catalogueRowCount } from './lib/catalogue'
 const DUPLICATES_VIEW = '__duplicates__';
 const CHANGELOG_VIEW = '__changelog__';
 const REVIEW_QUEUE_VIEW = '__review-queue__';
+const CATALOGUE_VIEW = '__catalogue__';
 
 // TEMPORARY READ-ONLY LOCKDOWN pending governance and editor-ownership decisions.
 // While this is false, every write control (Add / Edit / Delete / Merge /
@@ -144,34 +145,32 @@ function useOnlineStatus(): boolean {
 }
 
 /**
- * The one unlisted route in the app: `#/catalogue`.
+ * `#/catalogue` is kept as a deep link to the Full catalogue tab.
  *
- * A hash check rather than a router. GitHub Pages serves static files only,
- * so a real path like `/catalogue` would 404 on direct navigation or reload;
- * a hash never reaches the server. @tanstack/react-router is a dependency
- * but deliberately unused — one unlisted view does not justify a routing
- * overhaul (and Phase 4 explicitly ruled one out).
+ * The view was originally an UNLISTED hash route (no nav entry anywhere), to
+ * keep the clinician UI uncluttered. It is now a normal sidebar tab at the
+ * user's request, so the hash is no longer the only way in — it is retained
+ * only so an existing bookmark still lands on the right tab.
+ *
+ * Honoured on initial load only, not via a `hashchange` listener: now that
+ * the tab is the primary entry point, syncing hash ↔ view state in both
+ * directions would add state complexity for no real benefit. A hash check
+ * rather than a router because GitHub Pages serves static files only — a
+ * real `/catalogue` path would 404 on reload — and one view never justified
+ * pulling in @tanstack/react-router (which stays unused).
  */
 const CATALOGUE_HASH = '#/catalogue';
 
-function useIsCatalogueRoute(): boolean {
-  const read = () =>
-    typeof window !== 'undefined' &&
-    window.location.hash.replace(/\/+$/, '') === CATALOGUE_HASH;
-
-  const [isCatalogue, setIsCatalogue] = useState(read);
-  useEffect(() => {
-    const update = () => setIsCatalogue(read());
-    window.addEventListener('hashchange', update);
-    return () => window.removeEventListener('hashchange', update);
-  }, []);
-  return isCatalogue;
+function initialSectionFromHash(): string {
+  if (typeof window === 'undefined') return 'All';
+  return window.location.hash.replace(/\/+$/, '') === CATALOGUE_HASH
+    ? CATALOGUE_VIEW
+    : 'All';
 }
 
 export default function App() {
   const [guidelines, setGuidelines] = useState<Guideline[]>(GUIDELINES_DATA);
   const isOnline = useOnlineStatus();
-  const isCatalogueRoute = useIsCatalogueRoute();
   // P0 write-lockdown, layer 2: even once WRITES_ENABLED flips true, a write
   // control also requires isEditor. See src/lib/write-access.ts.
   const editorAuth = useEditorAuth();
@@ -182,7 +181,7 @@ export default function App() {
   useEffect(() => {
     guidelinesService.getAll().then(setGuidelines);
   }, []);
-  const [currentSection, setCurrentSection] = useState('All');
+  const [currentSection, setCurrentSection] = useState(initialSectionFromHash);
   const [searchQuery, setSearchQuery] = useState('');
   const [linkStatusFilter, setLinkStatusFilter] = useState('All');
   // Sidebar navigation always filters by clinical section; this toggle only
@@ -385,17 +384,6 @@ export default function App() {
     }
   };
 
-  // Unlisted editorial catalogue (#/catalogue). Placed after every hook above
-  // so this early return can never change hook order. Reads the same
-  // `guidelines` state as the browse screen — same live Supabase data, same
-  // static fallback, no second copy of the catalogue.
-  //
-  // Returning before the main UI means the clinician browse screen is not
-  // merely hidden here but never mounted, so this view cannot affect it.
-  if (isCatalogueRoute) {
-    return <CatalogueView guidelines={guidelines} />;
-  }
-
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-white font-sans text-slate-800">
 
@@ -531,6 +519,30 @@ export default function App() {
                 </span>
               </button>
 
+              {/* Full catalogue — the dense spreadsheet-style table. Was an
+                  unlisted hash route; promoted to a normal tab on request. */}
+              <button
+                onClick={() => { setCurrentSection(CATALOGUE_VIEW); setIsSidebarOpen(false); }}
+                title="Dense table of every entry — provider, then section, then title"
+                className={cn(
+                  "flex justify-between items-center gap-1.5 px-2.5 py-1.5 rounded transition-colors",
+                  currentSection === CATALOGUE_VIEW
+                    ? "bg-[#0F172A] text-white"
+                    : "text-slate-600 hover:bg-slate-50"
+                )}
+              >
+                <span className="flex items-center gap-1.5 min-w-0">
+                  <Table2 className="w-3 h-3 shrink-0" />
+                  <span className="text-[12px] font-medium">Full catalogue</span>
+                </span>
+                <span className={cn(
+                  "px-1.5 py-px rounded text-[11px] font-medium shrink-0",
+                  currentSection === CATALOGUE_VIEW ? "bg-white/20 text-white" : "bg-slate-100 text-slate-500"
+                )}>
+                  {guidelines.length}
+                </span>
+              </button>
+
               <button
                 onClick={() => { setCurrentSection(DUPLICATES_VIEW); setIsSidebarOpen(false); }}
                 className={cn(
@@ -607,7 +619,7 @@ export default function App() {
               The quick-access chip row (Emergency/Trauma/Spine/Foot &
               Ankle/Paediatrics) that used to sit here was removed at the
               user's request. */}
-          {currentSection !== DUPLICATES_VIEW && currentSection !== CHANGELOG_VIEW && currentSection !== REVIEW_QUEUE_VIEW && (
+          {currentSection !== DUPLICATES_VIEW && currentSection !== CHANGELOG_VIEW && currentSection !== REVIEW_QUEUE_VIEW && currentSection !== CATALOGUE_VIEW && (
             <div className="sticky top-0 z-10 bg-[#F8FAFC] px-5 pt-3 pb-2 border-b border-slate-100 shrink-0">
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
@@ -643,6 +655,10 @@ export default function App() {
             ) : currentSection === REVIEW_QUEUE_VIEW ? (
               <span className="text-[11px] text-slate-500">
                 Read-only manual review — a discovery/candidate queue, not a publication tool.
+              </span>
+            ) : currentSection === CATALOGUE_VIEW ? (
+              <span className="text-[11px] text-slate-500">
+                Every entry, fixed order: provider → section → title. Read-only reference view.
               </span>
             ) : (
               <>
@@ -702,7 +718,12 @@ export default function App() {
           </div>
 
           {/* Cards */}
-          <div className="px-4 pt-3 pb-8 w-full max-w-4xl">
+          {/* The catalogue is a wide dense table and needs the full panel
+              width; every other view keeps the readable max-w-4xl measure. */}
+          <div className={cn(
+            "px-4 pt-3 pb-8 w-full",
+            currentSection !== CATALOGUE_VIEW && "max-w-4xl"
+          )}>
             {currentSection === DUPLICATES_VIEW ? (
               <DuplicatesPanel
                 candidates={duplicateCandidates}
@@ -716,6 +737,8 @@ export default function App() {
               <ChangelogPanel guidelines={guidelines} />
             ) : currentSection === REVIEW_QUEUE_VIEW ? (
               <ReviewDashboard onEditCandidate={handleReviewCandidate} />
+            ) : currentSection === CATALOGUE_VIEW ? (
+              <CatalogueView guidelines={guidelines} />
             ) : sortedSections.length === 0 ? (
               (() => {
                 const gapNote = findGapNote(searchQuery, guidelines);
@@ -803,26 +826,16 @@ function CatalogueView({ guidelines }: { guidelines: Guideline[] }) {
   };
 
   return (
-    <div className="min-h-screen bg-white font-sans text-slate-800">
-      <header className="px-5 py-3 border-b border-slate-200 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <h1 className="font-serif text-[1rem] text-slate-900">Editorial catalogue</h1>
+    <div className="border border-slate-200 rounded-md bg-white overflow-hidden">
+      <div className="px-3 py-2 border-b border-slate-200 bg-white">
         <span className="text-[11px] text-slate-500">
-          {totalRows} entr{totalRows === 1 ? 'y' : 'ies'} · {groups.length} provider{groups.length === 1 ? '' : 's'} ·
-          {' '}provider → section → title, fixed order
+          {totalRows} entr{totalRows === 1 ? 'y' : 'ies'} · {groups.length} provider{groups.length === 1 ? '' : 's'}
         </span>
-        {/* Back to the hub. Safe to include: it points AWAY from this view,
-            so it does not make the catalogue discoverable from the app. */}
-        <a
-          href="#"
-          className="text-[11px] text-slate-500 hover:text-slate-900 underline underline-offset-2 ml-auto"
-        >
-          ← Back to hub
-        </a>
-      </header>
+      </div>
 
       {/* Horizontal scroll is confined to this wrapper rather than the page:
-          this is a dense desktop QA table, and letting the columns collapse
-          would defeat its purpose. */}
+          this is a dense table, and letting the columns collapse would
+          defeat its purpose. */}
       <div className="overflow-x-auto">
         <div className="min-w-[880px]">
 
