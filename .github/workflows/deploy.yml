@@ -27,15 +27,13 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          # Node 20 here, 22 in every other workflow. Left as-is deliberately:
-          # this job only runs `npm ci` + `npm run build`, and never loads the
-          # Supabase realtime client, so the "Node.js 20 without native
-          # WebSocket support" failure that forced 22 elsewhere cannot occur.
-          # vite@8 requires ^20.19.0 || >=22.12.0, and `node-version: 20`
-          # resolves to the latest 20.x, which satisfies it — but with zero
-          # headroom, on a release line that is now end-of-life. Move to 22
-          # when convenient; it is a tidiness issue, not a live breakage.
-          node-version: 20
+          # Node 22, matching detect-changes.yml, approve-change.yml,
+          # dead-link-check.yml and guideline-sync.yml. Previously 20, which
+          # worked (vite@8 needs ^20.19.0 || >=22.12.0, and `20` resolves to
+          # the latest 20.x) but with zero headroom on an end-of-life release
+          # line. Bumped ahead of the 20 Sep 2026 presentation to remove that
+          # risk, not to fix a live break.
+          node-version: 22
           cache: 'npm'
 
       - name: Install dependencies
