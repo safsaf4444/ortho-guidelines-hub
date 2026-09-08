@@ -21,36 +21,35 @@ The app works without a database (falls back to static data), but to enable data
 4. Seed the database: `npm run seed`
 5. Start the app: `npm run dev`
 
-`VITE_*` variables are exposed to the frontend bundle — only put the anon key there, never the service role key. `SUPABASE_SERVICE_ROLE_KEY` is read only by `scripts/seed.ts`.
+`VITE_*` variables are exposed to the frontend bundle — only put the anon key there, never the service role key. `SUPABASE_SERVICE_ROLE_KEY` is read by `scripts/*.ts` and — when present — by `npm run dev` to enable local editing. It is never included in a build; see [SECURITY.md](SECURITY.md).
 
 ## Security — current status
 
-**Status: read-only in production; magic-link editor sign-in prepared but not
-switched on.**
+**Status: the public site is read-only. Editing is a local-only capability —
+there is no sign-in, and no account exists.**
 
-- **Database, already live:** `supabase-migration-readonly-lockdown.sql` has
-  been run — `public.guidelines` has RLS enabled with a single public
-  read-only `SELECT` policy and no insert/update/delete policy, so nobody
-  (including the owner) can currently write through the public anon key /
-  Data API / app. The `service_role` key used by `scripts/*.ts` bypasses RLS,
-  so seeding/export/approve-change scripts keep working.
-- **Database, not yet run:** `supabase-migration-add-editor-writes-and-changelog.sql`
-  adds an editor-only write policy on `guidelines` and creates an
-  editor-only-readable `guideline_changelog`. It is additive to the migration
-  above, not a replacement, and is run by hand — see
-  [SECURITY.md](SECURITY.md) for the full manual prerequisite list
-  (configuring the Supabase Auth redirect URL, the initial editor's magic-link
-  sign-in, running the migration, setting `VITE_EDITOR_UUIDS`, and flipping
-  `WRITES_ENABLED`).
-- **App, prepared in this branch:** `src/lib/auth.ts` (magic-link sign-in via
-  `signInWithOtp`, session restore, sign-out), `src/lib/editor-allowlist.ts`
-  (explicit UUID allowlist, fails closed with no config), and every write
-  control gated `WRITES_ENABLED && isEditor && ...`. Neither condition alone
-  reveals a write control, and RLS denies the write server-side regardless of
-  either. `WRITES_ENABLED` stays hardcoded `false` throughout this branch.
+- **Database, live:** `supabase-migration-readonly-lockdown.sql` and
+  `supabase-migration-add-changelog-with-rls.sql` have both been run.
+  `public.guidelines` has RLS enabled with a single public read-only `SELECT`
+  policy and **no** insert/update/delete policy; `public.guideline_changelog`
+  is the same shape (public `SELECT`, no write policy, so it is append-only
+  for every non-service caller). Nobody can write through the public anon key,
+  the Data API, or the deployed app. The `service_role` key bypasses RLS, so
+  `scripts/*.ts` keep working.
+- **App:** editing is enabled (`WRITES_ENABLED = true`) but additionally
+  requires `LOCAL_EDITOR_MODE`, which is true only under `npm run dev` with
+  `SUPABASE_SERVICE_ROLE_KEY` in `.env.local`. `vite.config.ts` injects that
+  key only when serving; every build substitutes an empty string, so the
+  deployed bundle carries only the public anon key. Run the hub locally and
+  the Add/Edit/Delete/Merge controls and the changelog "Add note" box appear;
+  the deployed site never shows them.
+- **Removed:** magic-link sign-in, the editor UUID allowlist and
+  `VITE_EDITOR_UUIDS`. See [SECURITY.md](SECURITY.md) for the full access
+  model, the evidence it was verified against, and rollback steps.
+
   Browsing, search, filtering, section/provider grouping, cross-references,
-  the read-only Pending Review dashboard, and the static fallback are
-  unchanged for all visitors.
+  the read-only Pending Review dashboard, the catalogue and the static
+  fallback are unchanged for all visitors.
 
 ## Data remediation ordering
 

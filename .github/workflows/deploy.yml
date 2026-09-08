@@ -27,6 +27,14 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
+          # Node 20 here, 22 in every other workflow. Left as-is deliberately:
+          # this job only runs `npm ci` + `npm run build`, and never loads the
+          # Supabase realtime client, so the "Node.js 20 without native
+          # WebSocket support" failure that forced 22 elsewhere cannot occur.
+          # vite@8 requires ^20.19.0 || >=22.12.0, and `node-version: 20`
+          # resolves to the latest 20.x, which satisfies it — but with zero
+          # headroom, on a release line that is now end-of-life. Move to 22
+          # when convenient; it is a tidiness issue, not a live breakage.
           node-version: 20
           cache: 'npm'
 
@@ -36,6 +44,17 @@ jobs:
       - name: Build
         run: npm run build
         env:
+          # Public values only, on purpose. The anon key is public by design
+          # and RLS is what protects writes (SECURITY.md).
+          #
+          # DO NOT add SUPABASE_SERVICE_ROLE_KEY here, and do not add a
+          # VITE_-prefixed copy of it. Editing is a local-only capability:
+          # vite.config.ts injects that key only when serving, so this build
+          # produces a bundle that physically cannot write. Passing it here
+          # would put a write path on the public internet.
+          #
+          # VITE_EDITOR_UUIDS is intentionally absent too — the editor
+          # allowlist it configured no longer exists.
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL || 'https://xutjahmbyrvifcltpxxu.supabase.co' }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY || 'sb_publishable_MdOTKiEJr1RMUuMEY2lJNQ_Lhggiv3M' }}
 
