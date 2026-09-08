@@ -13,6 +13,7 @@ import { useEditorAuth } from './lib/auth'
 import { canWrite, writeBlockedReason } from './lib/write-access'
 import { splitPublishers, canonicalProvider, providerUrl } from './lib/providers'
 import { findGapNote } from './lib/gap-detection'
+import { buildCatalogue, catalogueRowCount } from './lib/catalogue'
 
 const DUPLICATES_VIEW = '__duplicates__';
 const CHANGELOG_VIEW = '__changelog__';
@@ -142,9 +143,35 @@ function useOnlineStatus(): boolean {
   return online;
 }
 
+/**
+ * The one unlisted route in the app: `#/catalogue`.
+ *
+ * A hash check rather than a router. GitHub Pages serves static files only,
+ * so a real path like `/catalogue` would 404 on direct navigation or reload;
+ * a hash never reaches the server. @tanstack/react-router is a dependency
+ * but deliberately unused — one unlisted view does not justify a routing
+ * overhaul (and Phase 4 explicitly ruled one out).
+ */
+const CATALOGUE_HASH = '#/catalogue';
+
+function useIsCatalogueRoute(): boolean {
+  const read = () =>
+    typeof window !== 'undefined' &&
+    window.location.hash.replace(/\/+$/, '') === CATALOGUE_HASH;
+
+  const [isCatalogue, setIsCatalogue] = useState(read);
+  useEffect(() => {
+    const update = () => setIsCatalogue(read());
+    window.addEventListener('hashchange', update);
+    return () => window.removeEventListener('hashchange', update);
+  }, []);
+  return isCatalogue;
+}
+
 export default function App() {
   const [guidelines, setGuidelines] = useState<Guideline[]>(GUIDELINES_DATA);
   const isOnline = useOnlineStatus();
+  const isCatalogueRoute = useIsCatalogueRoute();
   // P0 write-lockdown, layer 2: even once WRITES_ENABLED flips true, a write
   // control also requires isEditor. See src/lib/write-access.ts.
   const editorAuth = useEditorAuth();
@@ -357,6 +384,17 @@ export default function App() {
       alert(`Merge failed — no changes were made.\n\n${err instanceof Error ? err.message : String(err)}`);
     }
   };
+
+  // Unlisted editorial catalogue (#/catalogue). Placed after every hook above
+  // so this early return can never change hook order. Reads the same
+  // `guidelines` state as the browse screen — same live Supabase data, same
+  // static fallback, no second copy of the catalogue.
+  //
+  // Returning before the main UI means the clinician browse screen is not
+  // merely hidden here but never mounted, so this view cannot affect it.
+  if (isCatalogueRoute) {
+    return <CatalogueView guidelines={guidelines} />;
+  }
 
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-white font-sans text-slate-800">
@@ -730,6 +768,240 @@ export default function App() {
           isNew={isNewGuideline}
         />
       )}
+    </div>
+  );
+}
+
+// ─── Editorial catalogue (unlisted, #/catalogue) ──────────────────────────────
+
+/**
+ * Dense, complete, fixed-order view of the whole catalogue for editorial
+ * verification. Deliberately the opposite of the clinician browse screen:
+ * maximum density and full metadata, rather than Phase 4's reduced density.
+ *
+ * Not linked from anywhere in the app — reachable only by typing the hash.
+ * That is a decluttering measure, not a security one: everything shown here
+ * is already public elsewhere in the app, and RLS (not this route's
+ * obscurity) is what actually protects the data. Should move behind the
+ * editor gate when that is activated — see the report/follow-ups.
+ *
+ * Read-only by construction: no edit controls, no write paths, no
+ * WRITES_ENABLED branch anywhere in this component.
+ */
+function CatalogueView({ guidelines }: { guidelines: Guideline[] }) {
+  const groups = useMemo(() => buildCatalogue(guidelines), [guidelines]);
+  const totalRows = catalogueRowCount(groups);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  // Shared column widths so the header and every row stay aligned.
+  const COL = {
+    type: 'w-[150px]',
+    status: 'w-[104px]',
+    date: 'w-[92px]',
+    flags: 'w-[38px]',
+    source: 'w-[74px]',
+  };
+
+  return (
+    <div className="min-h-screen bg-white font-sans text-slate-800">
+      <header className="px-5 py-3 border-b border-slate-200 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <h1 className="font-serif text-[1rem] text-slate-900">Editorial catalogue</h1>
+        <span className="text-[11px] text-slate-500">
+          {totalRows} entr{totalRows === 1 ? 'y' : 'ies'} · {groups.length} provider{groups.length === 1 ? '' : 's'} ·
+          {' '}provider → section → title, fixed order
+        </span>
+        {/* Back to the hub. Safe to include: it points AWAY from this view,
+            so it does not make the catalogue discoverable from the app. */}
+        <a
+          href="#"
+          className="text-[11px] text-slate-500 hover:text-slate-900 underline underline-offset-2 ml-auto"
+        >
+          ← Back to hub
+        </a>
+      </header>
+
+      {/* Horizontal scroll is confined to this wrapper rather than the page:
+          this is a dense desktop QA table, and letting the columns collapse
+          would defeat its purpose. */}
+      <div className="overflow-x-auto">
+        <div className="min-w-[880px]">
+
+          <div className="flex items-center gap-2 px-3 py-1.5 border-b border-slate-200 bg-slate-50 text-[9px] font-semibold text-slate-500 uppercase tracking-widest sticky top-0 z-10">
+            <span className="flex-1 min-w-0">Topic</span>
+            <span className={COL.type}>Type</span>
+            <span className={COL.status}>Link check</span>
+            <span className={COL.date}>Last checked</span>
+            <span className={COL.flags}>Flags</span>
+            <span className={COL.source}>Source</span>
+          </div>
+
+          {groups.map(pg => (
+            <section key={pg.provider}>
+              <h2 className="px-3 py-1.5 bg-slate-100 border-b border-slate-200 text-[12px] font-semibold text-slate-800 flex items-baseline gap-2">
+                {pg.provider}
+                <span className="text-[10px] font-normal text-slate-500">
+                  {pg.total} entr{pg.total === 1 ? 'y' : 'ies'}
+                </span>
+              </h2>
+
+              {pg.sections.map(sg => (
+                <div key={sg.section}>
+                  <h3 className="px-3 py-1 bg-slate-50 border-b border-slate-100 text-[10px] font-semibold text-slate-600 uppercase tracking-wide">
+                    {sg.section}
+                    <span className="ml-2 font-normal normal-case tracking-normal text-slate-500">
+                      {sg.items.length}
+                    </span>
+                  </h3>
+
+                  {sg.items.map(item => {
+                    const status = item.linkVerificationStatus ?? 'unchecked';
+                    const primaryUrl = item.versions[0]?.url;
+                    const hasPrimary = Boolean(primaryUrl && primaryUrl !== '#');
+                    const isOpen = expandedId === item.id;
+
+                    return (
+                      <div key={item.id} className="border-b border-slate-100 last:border-0">
+                        <div
+                          role="button"
+                          tabIndex={0}
+                          aria-expanded={isOpen}
+                          onClick={() => setExpandedId(isOpen ? null : item.id)}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter' || e.key === ' ') {
+                              e.preventDefault();
+                              setExpandedId(isOpen ? null : item.id);
+                            }
+                          }}
+                          className={cn(
+                            "flex items-center gap-2 px-3 py-1.5 text-[11px] cursor-pointer hover:bg-slate-50 transition-colors",
+                            "focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-400",
+                            isOpen && "bg-slate-50"
+                          )}
+                        >
+                          <span className="flex-1 min-w-0 truncate text-slate-800" title={item.topic}>
+                            {item.topic}
+                          </span>
+                          <span className={cn(COL.type, "shrink-0 truncate text-slate-500")} title={item.type}>
+                            {item.type}
+                          </span>
+                          <span className={cn(COL.status, "shrink-0")}>
+                            <span className={cn(
+                              "inline-block px-1.5 py-px rounded border text-[10px] font-medium",
+                              linkStatusBadgeClass(status)
+                            )}>
+                              {LINK_STATUS_OPTIONS.find(o => o.value === status)?.label}
+                            </span>
+                          </span>
+                          <span className={cn(COL.date, "shrink-0 text-slate-500 tabular-nums")}>
+                            {item.linkLastVerified ?? '—'}
+                          </span>
+                          <span className={cn(COL.flags, "shrink-0")}>
+                            {item.regionalVariation && (
+                              <span
+                                title="Regional variation — check local trust protocol"
+                                className="text-[10px] text-amber-700 border border-amber-200 bg-amber-50 rounded px-1 py-px font-medium"
+                              >
+                                Reg
+                              </span>
+                            )}
+                          </span>
+                          <span className={cn(COL.source, "shrink-0")}>
+                            {hasPrimary ? (
+                              <a
+                                href={primaryUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={e => e.stopPropagation()}
+                                title="Open source guidance in a new tab"
+                                className="inline-flex items-center gap-1 text-slate-600 hover:text-slate-900 underline underline-offset-2"
+                              >
+                                Open
+                                <ExternalLink className="w-3 h-3 shrink-0" />
+                              </a>
+                            ) : (
+                              <span className="text-slate-400">—</span>
+                            )}
+                          </span>
+                        </div>
+
+                        {/* Expanded detail. Reads the same live `item` object
+                            as the row, so it can never drift from the browse
+                            screen's copy — there is only one copy. */}
+                        {isOpen && (
+                          <div className="px-3 pb-2.5 pt-1 bg-slate-50 text-[11px]">
+                            {hasPrimary && (
+                              <a
+                                href={primaryUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1.5 px-3 py-2 mb-2 bg-[#0F172A] text-white rounded-md text-[11px] font-medium hover:bg-slate-800 transition-colors"
+                              >
+                                Open source guidance
+                                <ExternalLink className="w-3.5 h-3.5" />
+                              </a>
+                            )}
+
+                            {item.summary && (
+                              <p className="text-slate-600 leading-relaxed mb-1.5 whitespace-pre-line">{item.summary}</p>
+                            )}
+                            {item.notes && (
+                              <p className="text-slate-500 italic mb-1.5 whitespace-pre-line">{item.notes}</p>
+                            )}
+
+                            {item.versions.length > 0 && (
+                              <div className="mb-1.5">
+                                <div className="text-[9px] font-semibold text-slate-500 uppercase tracking-widest mb-0.5">
+                                  All source links ({item.versions.length})
+                                </div>
+                                <div className="flex flex-col">
+                                  {item.versions.map((v, i) => (
+                                    <div key={i} className="flex items-center gap-2 py-0.5">
+                                      {v.url && v.url !== '#' ? (
+                                        <a
+                                          href={v.url}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="text-slate-600 hover:text-slate-900 underline underline-offset-2 inline-flex items-center gap-1"
+                                        >
+                                          {v.label}
+                                          <ExternalLink className="w-2.5 h-2.5 shrink-0" />
+                                        </a>
+                                      ) : (
+                                        <span className="text-slate-500">{v.label}</span>
+                                      )}
+                                      {v.date && <span className="text-slate-500 tabular-nums">{v.date}</span>}
+                                    </div>
+                                  ))}
+                                </div>
+                                <p className="text-[10px] text-slate-500 mt-1.5 leading-snug">
+                                  This hub links to source guidance. Use clinical judgement and local escalation processes.
+                                </p>
+                              </div>
+                            )}
+
+                            <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-slate-500 pt-1 border-t border-slate-200">
+                              <span>ID: {item.id}</span>
+                              <span>Status: {item.status}</span>
+                              <span>Source (raw): {item.source}</span>
+                              {item.lastChecked && <span>Last checked: {item.lastChecked}</span>}
+                              {(item.crossListedIn ?? []).length > 0 && (
+                                <span>Also in: {(item.crossListedIn ?? []).join(', ')}</span>
+                              )}
+                              {item.linkVerificationNotes && (
+                                <span className="w-full">Link note: {item.linkVerificationNotes}</span>
+                              )}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              ))}
+            </section>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
