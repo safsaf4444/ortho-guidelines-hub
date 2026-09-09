@@ -3,7 +3,7 @@ import { Search, ChevronDown, ExternalLink, Menu, X, TriangleAlert, Plus, WifiOf
 import { GUIDELINES_DATA, Guideline, GuidelineVersion } from './data/guidelines-data'
 import { guidelinesService } from './lib/guidelines-service'
 import { changelogService, type ChangelogLoad } from './lib/changelog-service'
-import { isSupabaseEnabled, LOCAL_EDITOR_MODE } from './lib/supabase'
+import { isSupabaseEnabled } from './lib/supabase'
 import { findDuplicateCandidates, countGuidelinesWithDuplicates, pairKey, DuplicateCandidate } from './lib/duplicate-detection'
 import { computeMerge } from './lib/dedupe'
 import { cn } from './lib/utils'
@@ -22,15 +22,18 @@ const CATALOGUE_VIEW = '__catalogue__';
 // link-verification / changelog "Add note"). Now TRUE: the read-only lockdown
 // that stood while editor ownership was undecided has been lifted.
 //
-// This alone does not put a write path on the public site. Writing also
-// requires LOCAL_EDITOR_MODE — true only under `npm run dev` with a
-// service-role key in .env.local, and hardcoded false in every build (see
-// vite.config.ts and src/lib/supabase.ts). So the deployed hub at
-// safsaf4444.github.io stays read-only by construction, not by policy: its
-// bundle holds only the public anon key, and `guidelines` still has exactly
-// one RLS policy (guidelines_public_read) and no write policy for that key.
+// ⚠ Editing is PUBLIC. Every visitor to the deployed site can add, edit and
+// delete guidelines, with no sign-in. That is granted at the database layer:
+// `guidelines` carries insert/update/delete RLS policies for the anon role
+// (supabase-migration-public-write-access.sql), and the public anon key in
+// this bundle is enough to use them. A deliberate decision by the site owner
+// — see SECURITY.md.
 //
-// Set this to false to disable editing everywhere, including locally.
+// This flag is therefore no longer a security control, only a convenience:
+// set it to false to hide every write control everywhere. Doing so does NOT
+// close the write path — anyone can still write via the REST API with the
+// public key. To actually revoke public writes, drop the RLS policies (the
+// rollback block in supabase-migration-public-write-access.sql).
 const WRITES_ENABLED: boolean = true;
 
 // Display labels only — the underlying field name and stored values
@@ -173,10 +176,11 @@ export default function App() {
   const [guidelines, setGuidelines] = useState<Guideline[]>(GUIDELINES_DATA);
   const isOnline = useOnlineStatus();
   // Write gate, layer 2. WRITES_ENABLED lifts the build-time kill switch; a
-  // write control additionally requires this to be a local dev session with a
-  // service-role key configured. There is no sign-in, account or allowlist —
-  // editing is a local-only capability. See src/lib/write-access.ts.
-  const canEdit = LOCAL_EDITOR_MODE;
+  // write control additionally requires a live database to write to (in
+  // static fallback mode every write would throw). There is no sign-in,
+  // account or allowlist: editing is open to everyone, everywhere.
+  // See src/lib/write-access.ts.
+  const canEdit = isSupabaseEnabled;
 
   // Silently replace static data with DB data when Supabase is configured.
   // Falls back to GUIDELINES_DATA automatically — see guidelines-service.ts.
@@ -420,10 +424,12 @@ export default function App() {
               "Editor sign in" control, and both button text labels together
               measured ~560px+, which does NOT fit a viewport just over 768px
               (confirmed: overflow at 798px, via scrollWidth > clientWidth).
-              Removing sign-in bought back ~110px, but the breakpoint stays at
-              lg deliberately: the widest case is now this badge plus the
-              "Local editing" badge, and that only ever occurs locally, where
-              regressing the header would go unnoticed. Pushed to lg (1024px),
+              Removing sign-in bought back ~110px, and the "Local editing"
+              badge that briefly replaced it has since gone too, so the header
+              is now the leanest it has been. The breakpoint stays at lg
+              deliberately rather than being relaxed back to md — the measured
+              798px overflow was never re-tested at md and there is nothing to
+              gain from loosening it. Pushed to lg (1024px),
               where the arithmetic clears with real margin. 768-1023px shows
               a leaner header (icon-only buttons, no badge) instead — the
               "hide progressively" option, not a wrap/overflow-menu, since
@@ -443,19 +449,6 @@ export default function App() {
             <span>{isSupabaseEnabled ? "Supabase Live" : "Static Mode"}</span>
           </div>
 
-          {/* Local-editing indicator. Replaces the former magic-link sign-in
-              control: there is no sign-in any more, so the only thing worth
-              surfacing is whether THIS session can write. Never rendered in
-              the deployed site — canEdit is false there at build time. */}
-          {canEdit && (
-            <div
-              title="Editing enabled — running locally with a service-role key. The deployed site is read-only."
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border bg-amber-50 text-amber-800 border-amber-300"
-            >
-              <Pencil className="w-3.5 h-3.5" />
-              <span>Local editing</span>
-            </div>
-          )}
 
           {/* Review Staged Guidelines — read-only manual review tool. Visible to
               everyone: it's a review surface, not a publication or admin
@@ -1229,9 +1222,12 @@ function GuidelineCard({
               624px below the card title and 236px BELOW THE FOLD, rendered as
               10px pale text — the editor had to know it existed to find it.
               Styled secondary, not primary, so the source link still leads for
-              the clinical reader. It only ever renders in local-editor mode
-              (see LOCAL_EDITOR_MODE in src/lib/supabase.ts), so no visitor to
-              the deployed site sees this row change at all. */}
+              the clinical reader.
+
+              ⚠ This now renders for EVERY visitor to the deployed site, not
+              just a local editor: editing is public and unauthenticated (see
+              the WRITES_ENABLED comment at the top of this file and
+              SECURITY.md). Anyone reading a guideline can change it. */}
           {(hasPrimaryLink || (WRITES_ENABLED && canEdit)) && (
             <div className="flex flex-wrap items-center gap-2 mb-2">
               {hasPrimaryLink && (
