@@ -127,5 +127,40 @@ if (!existsSync('dist')) {
   );
 }
 
+// The removed magic-link sign-in UI must not reappear in a build. Gated only
+// on dist/ existing, not on the key, so it runs even without a configured
+// .env.local.
+//
+// Deliberately asserts on OUR OWN user-facing strings, never on Supabase
+// client method names: @supabase/auth-js bundles the whole GoTrue client, so
+// `signInWithOtp` (along with signInWithPassword, signInWithOAuth, …) is
+// present in dist/ as vendored library code and always will be. That is inert
+// — there are no Auth users, and `guidelines` has no write policy for the
+// authenticated role either, so holding a session grants nothing.
+if (existsSync('dist')) {
+  const distFiles: string[] = [];
+  (function walk(dir: string) {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, e.name);
+      if (e.isDirectory()) walk(full);
+      else distFiles.push(full);
+    }
+  })('dist');
+  const distText = distFiles
+    .filter(f => f.endsWith('.js') || f.endsWith('.html') || f.endsWith('.css'))
+    .map(f => { try { return readFileSync(f, 'utf8'); } catch { return ''; } })
+    .join(''); 
+
+  for (const dead of [
+    'Editor sign in',
+    'Send magic link',
+    'Check your email for a sign-in link',
+    'Signed in (not an editor)',
+    'Sign in as an approved editor',
+  ]) {
+    check(`removed sign-in UI string is absent from dist/: "${dead}"`, !distText.includes(dead));
+  }
+}
+
 console.log(`\n──────────────\n${pass} passed, ${fail} failed\n`);
 process.exit(fail === 0 ? 0 : 1);
