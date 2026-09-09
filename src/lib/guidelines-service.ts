@@ -12,27 +12,35 @@ export const guidelinesService = {
    */
   async getAll(): Promise<Guideline[]> {
     if (!supabase) {
-      return [...GUIDELINES_DATA];
+      // Filtered the same way as the live query so archived entries stay
+      // hidden in offline/static mode too.
+      return GUIDELINES_DATA.filter(g => !g.archived);
     }
     try {
       const { data, error } = await supabase
         .from('guidelines')
+        // Archived rows are soft-deleted: they still exist in the table but
+        // must never reach the app. Excluding them HERE, in the single query
+        // every view is built from, keeps them out of the list, search,
+        // grouping, the catalogue and duplicate detection alike — there is
+        // no second read path to keep in sync.
         .select('*')
+        .eq('archived', false)
         .order('section')
         .order('topic');
 
       if (error) {
         console.warn('[guidelines-service] query error — falling back to static data:', error.message);
-        return [...GUIDELINES_DATA];
+        return GUIDELINES_DATA.filter(g => !g.archived);
       }
       if (!data || data.length === 0) {
         console.info('[guidelines-service] table is empty — falling back to static data (run npm run seed)');
-        return [...GUIDELINES_DATA];
+        return GUIDELINES_DATA.filter(g => !g.archived);
       }
       return (data as DbGuideline[]).map(toGuideline);
     } catch (err) {
       console.warn('[guidelines-service] Supabase unreachable — falling back to static data:', err);
-      return [...GUIDELINES_DATA];
+      return GUIDELINES_DATA.filter(g => !g.archived);
     }
   },
 
@@ -53,11 +61,24 @@ export const guidelinesService = {
     if (error) throw asPersistError('update', error);
   },
 
-  /** Permanently delete a guideline from Supabase. Throws if Supabase is unconfigured or write fails. */
-  async remove(id: string): Promise<void> {
+  /**
+   * Soft-delete a guideline: mark it archived rather than removing the row.
+   *
+   * There is no hard-delete path any more, and there cannot be one from the
+   * browser: the anon role has no DELETE policy on `guidelines` (see
+   * supabase-migration-soft-delete-and-mandatory-notes.sql), so a DELETE would
+   * silently affect zero rows. Since anyone can edit this site without signing
+   * in, that is deliberate — vandalism becomes a one-line UPDATE to undo
+   * rather than a restore from backup:
+   *     update public.guidelines set archived = false where id = '<id>';
+   *
+   * Writes only the `archived` flag, not the whole row, so archiving can never
+   * accidentally clobber a concurrent edit to another field.
+   */
+  async archive(id: string): Promise<void> {
     if (!supabase) throw new Error('Supabase client is not initialized. Check your connection / environment variables.');
-    const { error } = await supabase.from('guidelines').delete().eq('id', id);
-    if (error) throw asPersistError('delete', error);
+    const { error } = await supabase.from('guidelines').update({ archived: true }).eq('id', id);
+    if (error) throw asPersistError('archive', error);
   },
 };
 

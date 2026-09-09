@@ -12,6 +12,7 @@ import { canWrite, writeBlockedReason } from './lib/write-access'
 import { splitPublishers, canonicalProvider, providerUrl } from './lib/providers'
 import { findGapNote } from './lib/gap-detection'
 import { buildCatalogue, catalogueRowCount } from './lib/catalogue'
+import { prepareChangeNote, isValidChangeNote, archiveNote, linkStatusNote, mergeNote, MAX_NOTE_LENGTH } from './lib/change-note'
 
 const DUPLICATES_VIEW = '__duplicates__';
 const CHANGELOG_VIEW = '__changelog__';
@@ -303,12 +304,32 @@ export default function App() {
     setIsNewGuideline(true);
   };
 
-  const persistGuideline = async (updated: Guideline, isNew: boolean) => {
+  /**
+   * Persist a guideline AND its change note.
+   *
+   * Editing is public and unauthenticated, so there is no account to
+   * attribute a change to: the note is the only audit trail there is, and
+   * every caller must supply one. See src/lib/change-note.ts.
+   *
+   * Order matters. The guideline is written first because
+   * guideline_changelog.guideline_id is a foreign key, so a note for a NEW
+   * guideline cannot exist before the row does. The two writes are separate
+   * PostgREST requests and are therefore NOT atomic — if the note fails
+   * after the guideline succeeded we say so loudly rather than swallow it,
+   * because it means a change landed unlogged.
+   */
+  const persistGuideline = async (updated: Guideline, isNew: boolean, note: string) => {
     // Read-only lockdown enforced at the source, not just by hiding the Save
     // button: even if something calls this directly, it must not reach
     // Supabase unless both WRITES_ENABLED and canEdit hold.
     if (!canWrite(WRITES_ENABLED, canEdit)) {
       console.warn(`[persistGuideline] Ignored — ${writeBlockedReason(WRITES_ENABLED, canEdit)} No local or database change made.`);
+      return;
+    }
+    const prepared = prepareChangeNote(note);
+    if (!prepared.ok) {
+      console.warn(`[persistGuideline] Refused — ${prepared.error} No change made.`);
+      alert(prepared.error);
       return;
     }
     // Update local state immediately
@@ -320,6 +341,11 @@ export default function App() {
         await guidelinesService.create(updated);
       } else {
         await guidelinesService.update(updated);
+      }
+      try {
+        await changelogService.create({ guidelineId: updated.id, description: prepared.note });
+      } catch (noteErr) {
+        console.error('[persistGuideline] Guideline saved but the change note failed:', noteErr);
       }
     } catch (err) {
       console.error('[persistGuideline] Failed to persist guideline to Supabase:', err);
@@ -339,14 +365,19 @@ export default function App() {
     URL.revokeObjectURL(url);
   };
 
-  const handleSave = (updated: Guideline) => {
+  const handleSave = (updated: Guideline, note: string) => {
     setEditingGuideline(null);
-    persistGuideline(updated, isNewGuideline);
+    persistGuideline(updated, isNewGuideline, note);
   };
 
   // Fast, in-card update path for link verification review — no modal round-trip.
+  // A single click should not demand typed prose, and the app already knows
+  // exactly what changed, so this writes its own note. The invariant "every
+  // write leaves a changelog entry" still holds.
   const handleQuickUpdate = (updated: Guideline) => {
-    persistGuideline(updated, false);
+    const label = LINK_STATUS_OPTIONS.find(o => o.value === updated.linkVerificationStatus)?.label
+      ?? String(updated.linkVerificationStatus);
+    persistGuideline(updated, false, linkStatusNote(label, todayISO()));
   };
 
   const handleDismissDuplicate = (a: Guideline, b: Guideline) => {
@@ -365,12 +396,18 @@ export default function App() {
       console.warn(`[handleDelete] Ignored — ${writeBlockedReason(WRITES_ENABLED, canEdit)} No database change made.`);
       return;
     }
+    const topic = guidelines.find(g => g.id === id)?.topic ?? id;
     try {
-      await guidelinesService.remove(id);
+      await guidelinesService.archive(id);
+      try {
+        await changelogService.create({ guidelineId: id, description: archiveNote(topic) });
+      } catch (noteErr) {
+        console.error('[handleDelete] Archived, but the change note failed:', noteErr);
+      }
       setGuidelines(prev => prev.filter(g => g.id !== id));
     } catch (err) {
-      console.error('[handleDelete] Failed to delete guideline:', err);
-      alert(`Delete failed — the record was not removed.\n\n${err instanceof Error ? err.message : String(err)}`);
+      console.error('[handleDelete] Failed to archive guideline:', err);
+      alert(`Remove failed — the entry was not archived.\n\n${err instanceof Error ? err.message : String(err)}`);
     }
   };
 
@@ -378,13 +415,20 @@ export default function App() {
     const merged = computeMerge(canonical, duplicate);
     try {
       await guidelinesService.update(merged);
-      await guidelinesService.remove(duplicate.id);
+      await guidelinesService.archive(duplicate.id);
+      try {
+        const note = mergeNote(merged.topic, duplicate.topic);
+        await changelogService.create({ guidelineId: merged.id, description: note });
+        await changelogService.create({ guidelineId: duplicate.id, description: note });
+      } catch (noteErr) {
+        console.error('[handleMergeDuplicates] Merged, but a change note failed:', noteErr);
+      }
       setGuidelines(prev =>
         prev.map(g => g.id === merged.id ? merged : g).filter(g => g.id !== duplicate.id)
       );
     } catch (err) {
-      // update() and remove() are awaited sequentially — if update throws,
-      // remove() never runs, so a failure here never leaves a merge half-done.
+      // update() and archive() are awaited sequentially — if update throws,
+      // archive() never runs, so a failure here never leaves a merge half-done.
       console.error('[handleMergeDuplicates] Failed to persist merge:', err);
       alert(`Merge failed — no changes were made.\n\n${err instanceof Error ? err.message : String(err)}`);
     }
@@ -1608,7 +1652,7 @@ function EditModal({
 }: {
   guideline: Guideline;
   canEdit: boolean;
-  onSave: (g: Guideline) => void;
+  onSave: (g: Guideline, note: string) => void;
   onClose: () => void;
   onDelete: (id: string) => void;
   isNew: boolean;
@@ -1617,6 +1661,14 @@ function EditModal({
     ...guideline,
     versions: guideline.versions.map(v => ({ ...v })),
   });
+
+  // Required. Anyone can edit this site without signing in, so there is no
+  // account to attribute a change to — this note is the whole audit trail.
+  // Validated with the same rule the database enforces (see
+  // src/lib/change-note.ts and the guideline_changelog not-blank CHECK), so
+  // the form and the constraint can never disagree about what counts as empty.
+  const [note, setNote] = useState('');
+  const noteOk = isValidChangeNote(note);
 
   const writable = canWrite(WRITES_ENABLED, canEdit);
   const blockedReason = writeBlockedReason(WRITES_ENABLED, canEdit);
@@ -1837,6 +1889,30 @@ function EditModal({
             {blockedReason} This form is for review and prefill only; nothing typed here can be saved.
           </div>
         )}
+        {writable && (
+          <div className="px-4 py-2.5 border-t border-slate-200 bg-slate-50 shrink-0">
+            <label htmlFor="change-note" className={lbl}>
+              Change note <span className="text-red-600">*</span>
+            </label>
+            <textarea
+              id="change-note"
+              value={note}
+              onChange={e => setNote(e.target.value)}
+              rows={2}
+              maxLength={MAX_NOTE_LENGTH}
+              placeholder={isNew ? "What are you adding, and why?" : "What did you change, and why?"}
+              className={inp + " resize-none"}
+            />
+            <div className="flex justify-between items-center mt-0.5">
+              <span className="text-[10px] text-slate-500">
+                Required. Recorded in this guideline&apos;s changelog — edits are public and anonymous, so this is the only record of what changed.
+              </span>
+              <span className="text-[10px] text-slate-400 tabular-nums shrink-0 ml-2">
+                {note.trim().length}/{MAX_NOTE_LENGTH}
+              </span>
+            </div>
+          </div>
+        )}
         <div className="flex justify-between items-center gap-2 px-4 py-2.5 border-t border-slate-200 shrink-0">
           <div>
             {/* Delete is a write action too — same gate as Save. The actual
@@ -1845,21 +1921,31 @@ function EditModal({
             {writable && !isNew && (
               <button
                 onClick={() => {
-                  if (window.confirm(`Delete "${form.topic}"? This permanently removes it from the catalogue and cannot be undone.`)) {
+                  if (window.confirm(`Remove "${form.topic}" from the catalogue?
+
+This archives the entry rather than deleting it: it disappears from the site, but the record is kept and can be restored.`)) {
                     onDelete(form.id);
                     onClose();
                   }
                 }}
                 className="px-3 py-1.5 border border-red-200 text-red-600 rounded text-[12px] font-medium hover:bg-red-50 transition-colors"
               >
-                Delete
+                Remove
               </button>
             )}
           </div>
           <div className="flex gap-2">
             {writable ? (
-              <button onClick={() => onSave(form)}
-                className="bg-[#0F172A] text-white py-1.5 px-4 rounded text-[12px] font-medium hover:bg-slate-800 transition-colors">
+              <button
+                onClick={() => onSave(form, note)}
+                disabled={!noteOk}
+                title={noteOk ? undefined : "Add a change note before saving"}
+                className={cn(
+                  "py-1.5 px-4 rounded text-[12px] font-medium transition-colors",
+                  noteOk
+                    ? "bg-[#0F172A] text-white hover:bg-slate-800"
+                    : "bg-slate-200 text-slate-500 cursor-not-allowed"
+                )}>
                 Save Guideline
               </button>
             ) : (

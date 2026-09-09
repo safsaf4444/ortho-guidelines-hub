@@ -4,8 +4,12 @@
 
 **Guideline content on this site is publicly editable by anyone, with no
 sign-in.** Any visitor to https://safsaf4444.github.io/ortho-guidelines-hub/
-can add, edit and delete clinical guideline entries. So can anyone using the
-REST API directly, with no browser involved.
+can add and edit clinical guideline entries. So can anyone using the REST
+API directly, with no browser involved.
+
+Two safeguards bound the damage a single edit can do: entries can be
+**archived but not deleted**, and **every edit requires a change note**. See
+"Safeguards" below. Neither restricts who may edit.
 
 This is a **deliberate, explicit decision by the site owner**, taken after the
 trade-off was set out in full. It is not an oversight, a misconfiguration, or
@@ -19,8 +23,8 @@ insert/update/delete round-trip with the public anon key.
 
 | Table | RLS | Policies | Effect for an anonymous visitor |
 |---|---|---|---|
-| `public.guidelines` | enabled | `guidelines_public_read` (SELECT), `guidelines_public_insert` (INSERT), `guidelines_public_update` (UPDATE), `guidelines_public_delete` (DELETE) | full read/write/delete |
-| `public.guideline_changelog` | enabled | `changelog_public_read` (SELECT), `changelog_public_insert` (INSERT) | read and append; **cannot** edit or delete existing notes |
+| `public.guidelines` | enabled | `guidelines_public_read` (SELECT), `guidelines_public_insert` (INSERT), `guidelines_public_update` (UPDATE) — **no DELETE policy** | read, create and edit; **cannot destroy a row** |
+| `public.guideline_changelog` | enabled | `changelog_public_read` (SELECT), `changelog_public_insert` (INSERT), plus a not-blank CHECK constraint | read and append a non-empty note; **cannot** edit or delete existing notes |
 
 `auth.users` is empty and expected to stay empty. There is no sign-in of any
 kind in the application.
@@ -35,7 +39,9 @@ kind in the application.
 - **There is no record of who made a change.** No accounts, no IP logging in
   the application layer, no attribution. `guidelines.updated_at` records only
   *when* a row last changed.
-- Deletion is unrestricted. A `DELETE` with no filter would remove every row.
+- Deletion is **not** possible — see "Safeguards" below. The worst a visitor
+  can do is archive an entry or overwrite its text, both of which are
+  recoverable.
 - The exposure is a property of the database, not of the deployed frontend.
   It began the moment the RLS policies were applied and is unaffected by which
   bundle is deployed or by the `WRITES_ENABLED` flag in the app.
@@ -50,8 +56,69 @@ kind in the application.
   the correct mechanism. The service-role key is not in any bundle — see the
   regression test below. This matters: if it ever were shipped, dropping the
   RLS policies would no longer close the write path.
-- **Backups exist** under `backups/` (gitignored, local only). Restoring from
-  one is the recovery path if content is vandalised or mass-deleted.
+- **Backups exist** under `backups/` (gitignored, local only). With soft
+  delete in place these are now the second line of recovery rather than the
+  first — un-archiving is. Worth confirming they are current regardless.
+
+## Safeguards
+
+Two limits sit on top of public write access. Neither restricts *who* may
+edit — that is deliberately unrestricted — they limit how much damage a single
+edit can do and make sure it leaves a trace.
+
+### 1. Soft delete
+
+`guidelines` has **no DELETE policy**, so a `DELETE` from anon affects zero
+rows however it is issued. The app's "Remove" action performs
+`UPDATE ... SET archived = true` instead. The row physically remains and is
+restored with one statement:
+
+```sql
+select id, topic from public.guidelines where archived = true;   -- find
+update public.guidelines set archived = false where id = '<id>'; -- restore
+```
+
+`guidelinesService.getAll()` filters on `archived = false`, and it is the only
+read path in the app, so archived entries are absent from the list, search,
+grouping, the catalogue and duplicate detection without any per-view work. The
+merge flow archives the losing row rather than deleting it, for the same reason.
+
+This converts the one irreversible action into a reversible one: vandalism now
+costs a single UPDATE to undo, not a restore from backup.
+
+### 2. Mandatory change notes
+
+There are no accounts, so a change can never be attributed to a person. A
+required note is what replaces attribution: every write records **what**
+changed and **why**, even though **who** is unknowable.
+
+- **In the UI** — the edit and add form has a required Change note field and
+  the Save button stays disabled until it is non-empty.
+- **In the database** — `guideline_changelog_description_not_blank`
+  (`length(btrim(description)) > 0`) rejects empty and whitespace-only notes,
+  so this holds for direct API callers too, not only the UI. Verified: empty
+  and whitespace notes return `23514`, a missing field returns `23502`.
+- **Single-click actions** ("Mark link checked today", the link-status
+  dropdown, archiving, merging) generate their own note, prefixed
+  `Automatic:`, so the invariant "every write leaves a changelog entry" holds
+  without demanding typed prose for one click.
+- Notes are append-only and capped at 500 characters.
+
+#### What the note requirement does and does not guarantee
+
+Stated plainly, because the difference matters:
+
+- **Guaranteed:** no note can be blank, whoever writes it and however.
+- **Not guaranteed:** that every guideline change is accompanied by a note.
+  PostgREST issues the guideline write and the note write as two separate
+  requests, so someone using curl can `PATCH` a guideline and simply never
+  post a note. The UI always writes both, and reports loudly if the note fails
+  after the guideline succeeded — but the UI is not the only way in.
+
+Closing that gap needs both writes moved into a single `SECURITY DEFINER`
+function (an RPC that takes the patch and the note, validates the note, and
+writes both in one transaction) with direct `UPDATE`/`INSERT` on `guidelines`
+then revoked from anon. That is the correct fix and is not yet implemented.
 
 ## Keys
 
@@ -90,7 +157,7 @@ policies are untouched, so the site keeps working as a reference. Setting
 
 ## History
 
-This site has had three access models. The current one is the third.
+This site has had four access models. The current one is the fourth.
 
 1. **Read-only lockdown** (`supabase-migration-readonly-lockdown.sql`) — RLS
    on, a single public SELECT policy, no writes for anyone.
@@ -105,3 +172,8 @@ This site has had three access models. The current one is the third.
    insert/update/delete, and the app's write controls render for every
    visitor. The service-role injection was removed entirely, so local and
    production now use the identical anon client and identical permissions.
+4. **Public editing, bounded** (current) —
+   `supabase-migration-soft-delete-and-mandatory-notes.sql` revokes the anon
+   DELETE policy granted in (3) and adds the not-blank CHECK on change
+   notes. Editing stays open to everyone; destroying a row and making an
+   unexplained edit through the UI both stop being possible.
