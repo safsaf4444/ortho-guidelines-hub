@@ -1,3 +1,7 @@
+-- ⚠ SUPERSEDED by supabase-migration-add-changelog-with-rls.sql.
+-- This version creates the table WITHOUT enabling RLS, which predates the
+-- read-only lockdown. Do not run it. Kept for history only.
+
 -- Adds a lightweight, append-only edit-history log for guidelines.
 -- Safe to run more than once (IF NOT EXISTS guards).
 -- Run this once in Supabase -> SQL Editor.
