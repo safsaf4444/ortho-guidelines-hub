@@ -1218,19 +1218,44 @@ function GuidelineCard({
       {isExpanded && (
         <div className="border-t border-slate-100 px-3 pt-3 pb-2.5">
 
-          {/* The next action a clinician usually wants after expanding: the
-              actual source, not more of this hub's metadata about it. Uses
-              the real href from versions[0] — no new/guessed URL. */}
-          {hasPrimaryLink && (
-            <a
-              href={primaryUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="inline-flex items-center gap-1.5 px-3.5 py-2.5 mb-2 bg-[#0F172A] text-white rounded-md text-[12px] font-medium hover:bg-slate-800 transition-colors"
-            >
-              Open source guidance
-              <ExternalLink className="w-3.5 h-3.5" />
-            </a>
+          {/* Primary actions for an expanded card.
+              "Open source guidance" is the next action a clinician usually
+              wants after expanding: the actual source, not more of this hub's
+              metadata about it. Uses the real href from versions[0] — no
+              new/guessed URL.
+
+              "Edit guideline" sits beside it rather than at the foot of the
+              card, where it previously lived. Measured there at 1440x905:
+              624px below the card title and 236px BELOW THE FOLD, rendered as
+              10px pale text — the editor had to know it existed to find it.
+              Styled secondary, not primary, so the source link still leads for
+              the clinical reader. It only ever renders in local-editor mode
+              (see LOCAL_EDITOR_MODE in src/lib/supabase.ts), so no visitor to
+              the deployed site sees this row change at all. */}
+          {(hasPrimaryLink || (WRITES_ENABLED && canEdit)) && (
+            <div className="flex flex-wrap items-center gap-2 mb-2">
+              {hasPrimaryLink && (
+                <a
+                  href={primaryUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2.5 bg-[#0F172A] text-white rounded-md text-[12px] font-medium hover:bg-slate-800 transition-colors"
+                >
+                  Open source guidance
+                  <ExternalLink className="w-3.5 h-3.5" />
+                </a>
+              )}
+              {WRITES_ENABLED && canEdit && (
+                <button
+                  onClick={e => { e.stopPropagation(); onEdit(item); }}
+                  title="Edit this guideline"
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2.5 bg-white border border-slate-300 text-slate-700 rounded-md text-[12px] font-medium hover:bg-slate-50 hover:border-slate-400 transition-colors"
+                >
+                  <Pencil className="w-3.5 h-3.5" />
+                  Edit guideline
+                </button>
+              )}
+            </div>
           )}
 
           <p className="text-[12px] text-slate-600 leading-relaxed mb-1.5 whitespace-pre-line">
@@ -1386,21 +1411,14 @@ function GuidelineCard({
               fetches) only when the card is expanded. */}
           <CardChangelog guidelineId={item.id} canEdit={canEdit} />
 
-          <div className="flex justify-between items-center pt-1 border-t border-slate-100">
-            <div className="flex items-center gap-2.5">
-              {item.lastChecked && (
-                <span className="text-[10px] text-slate-500">Last checked: {item.lastChecked}</span>
-              )}
-              <span className="text-[10px] text-slate-500">ID: {item.id}</span>
-            </div>
-            {WRITES_ENABLED && canEdit && (
-              <button
-                onClick={e => { e.stopPropagation(); onEdit(item); }}
-                className="px-2 py-0.5 text-[10px] font-medium border border-slate-200 rounded text-slate-500 hover:bg-slate-50 hover:text-slate-600 transition-colors"
-              >
-                Edit
-              </button>
+          {/* Card footer: provenance only. The Edit control that used to sit
+              at the right of this row has moved to the action row at the top
+              of the expanded body — see the comment there. */}
+          <div className="flex items-center gap-2.5 pt-1 border-t border-slate-100">
+            {item.lastChecked && (
+              <span className="text-[10px] text-slate-500">Last checked: {item.lastChecked}</span>
             )}
+            <span className="text-[10px] text-slate-500">ID: {item.id}</span>
           </div>
         </div>
       )}
