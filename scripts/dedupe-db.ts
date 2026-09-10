@@ -106,7 +106,8 @@ async function run() {
       return b.id.localeCompare(a.id);
     });
 
-    const keeper = group[0];
+    // group[0] is the keeper: the sort above has already ordered the group so
+    // the row to retain sits first. Everything after it is redundant.
     for (let i = 1; i < group.length; i++) {
       idsToDelete.add(group[i].id);
     }

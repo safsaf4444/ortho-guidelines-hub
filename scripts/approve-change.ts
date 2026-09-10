@@ -26,7 +26,45 @@ const COMMENT_AUTHOR = process.env.COMMENT_AUTHOR ?? 'unknown';
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-async function githubRequest(pathAndQuery: string, init: RequestInit = {}) {
+/** The only part of a GitHub issue this script reads. */
+interface GitHubIssue {
+  body: string;
+}
+
+/**
+ * Narrows an untyped GitHub API response to the issue shape this script needs.
+ *
+ * Deliberately throws instead of defaulting. This replaced `issue.body ?? ''`,
+ * which meant a malformed or unexpected response produced an empty body —
+ * extractField then found no Row ID and no URL, and the approval silently did
+ * nothing: no error, no log, no applied change, and a green workflow run. An
+ * approval step that quietly no-ops is worse than one that fails, because
+ * nobody goes looking for a change they were told had been applied.
+ */
+function asIssue(value: unknown, context: string): GitHubIssue {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error(
+      `${context}: expected a JSON object from the GitHub API, got ` +
+        `${value === null ? 'null' : Array.isArray(value) ? 'an array' : typeof value}.`,
+    );
+  }
+  const body = (value as { body?: unknown }).body;
+  if (body === null || body === undefined) {
+    throw new Error(
+      `${context}: the issue has an empty body, so it carries no approval metadata ` +
+        '(Row ID / URL). Refusing to continue rather than applying nothing silently.',
+    );
+  }
+  if (typeof body !== 'string') {
+    throw new Error(
+      `${context}: expected the issue "body" to be a string, got ${typeof body}. ` +
+        'The GitHub API response is not the shape this script was written against.',
+    );
+  }
+  return { body };
+}
+
+async function githubRequest(pathAndQuery: string, init: RequestInit = {}): Promise<unknown> {
   const res = await fetch(`https://api.github.com${pathAndQuery}`, {
     ...init,
     headers: {
@@ -66,8 +104,11 @@ async function main() {
     return;
   }
 
-  const issue = await githubRequest(`/repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}`);
-  const issueBody: string = issue.body ?? '';
+  const issue = asIssue(
+    await githubRequest(`/repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}`),
+    `issue #${ISSUE_NUMBER}`,
+  );
+  const issueBody: string = issue.body;
 
   const rowId = extractField(issueBody, 'Row ID for the approval script');
   const url = extractField(issueBody, 'URL');

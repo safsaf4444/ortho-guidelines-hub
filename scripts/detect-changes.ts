@@ -208,7 +208,18 @@ async function main() {
     await ensureLabelExists();
   }
 
-  const blocked = loadJson<{ domains: { domain: string }[] }>(BLOCKED_SOURCES_PATH, { domains: [] });
+  // Matches what scripts/blocked-sources.json actually holds. The type was
+  // previously just { domain: string }, so every append needed a suppression
+  // directive to get past the fields the file has carried since it was seeded.
+  // reason/added/source are optional because hand-added entries do not always
+  // fill them in.
+  type BlockedDomain = {
+    domain: string;
+    reason?: string;
+    added?: string;
+    source?: 'manual' | 'auto';
+  };
+  const blocked = loadJson<{ domains: BlockedDomain[] }>(BLOCKED_SOURCES_PATH, { domains: [] });
   const blockedDomains = new Set(
     blocked.domains.map((d) => d.domain).filter((d) => !d.startsWith('PLACEHOLDER'))
   );
@@ -280,7 +291,6 @@ async function main() {
 
         if (failStreaks[url] >= FAILS_BEFORE_BLOCKING && domain) {
           blocked.domains.push({
-            // @ts-expect-error -- extra fields fine, matches the shape in blocked-sources.json
             domain,
             reason: `Automated fetch failed ${FAILS_BEFORE_BLOCKING} consecutive runs: ${err}`,
             added: new Date().toISOString().slice(0, 10),

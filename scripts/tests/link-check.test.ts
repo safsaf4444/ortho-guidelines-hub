@@ -5,11 +5,17 @@
  * (which classifies each URL) and scripts/map-link-status.ts (which turns a run
  * into proposed linkVerificationStatus changes).
  *
- * WHY THIS FILE EXISTS: neither script had any test coverage, and `npx tsc -b`
- * does not type-check scripts/ at all — tsconfig.app.json includes only `src`,
- * tsconfig.node.json only `vite.config.ts`. tsx transpiles without checking. So
- * a type error or a broken regex in a script was invisible to the whole
- * verification standard. Both happened while extending this pipeline.
+ * WHY THIS FILE EXISTS: neither script had any test coverage, and at the time
+ * `npx tsc -b` did not type-check scripts/ at all — tsconfig.app.json included
+ * only `src`, tsconfig.node.json only `vite.config.ts`, and tsx transpiles
+ * without checking. A type error or even a broken regex in a script was
+ * invisible to the whole verification standard, and two such bugs reached the
+ * repo that way while this pipeline was being extended.
+ *
+ * That gap is now closed: tsconfig.scripts.json is a referenced project, so
+ * `npx tsc -b` covers scripts/. These tests remain the behavioural half —
+ * type-checking would not have caught a redirect comparison that treated
+ * http->https as a move.
  *
  * Pure functions only: no network, no database, no filesystem writes. Importing
  * flag-dead-links is safe — it guards main() behind an `isMain` check.
@@ -19,7 +25,7 @@
 import {
   normaliseForRedirect, isMeaningfulRedirect, classifyHttpStatus,
   looksLikeWaf, isRetryableVerdict, buildCsv, tally,
-  type Result, type Verdict,
+  type Result,
 } from '../flag-dead-links';
 import {
   verdictToStatus, worstStatus,

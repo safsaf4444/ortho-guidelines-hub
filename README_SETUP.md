@@ -105,3 +105,32 @@ means that one URL is skipped and left for you to check by hand occasionally).
   an array of `{ label, url, date }` objects (matching what `upsert-verified.ts` writes, per your
   existing mapper). If `src/lib/guidelines-mapper.ts` uses different key names, open
   `scripts/detect-changes.ts` and adjust the one line marked `// ADJUST THIS` near the top.
+
+## Verification standard — run this before calling anything done
+
+This project has a documented history of changes reported as complete that were
+not. The following is the minimum bar, in order:
+
+```
+npx tsc -b            # types: src/, vite.config.ts, AND scripts/
+npm run test:offline  # the offline suite (no network, no database)
+npm run build         # the production bundle
+```
+
+Then, if anything was deployed, re-fetch the live site with `Cache-Control:
+no-cache` and a random query string and confirm the served bundle hash actually
+changed. A stale service worker has produced false "verified" results here before.
+
+**`scripts/` is now type-checked.** It was not until 2026-09-10:
+`tsconfig.app.json` includes only `src`, `tsconfig.node.json` only
+`vite.config.ts`, and `tsx` runs scripts without type-checking them — so a type
+error, or even a regex mangled into a syntax error, could sit in a data or
+link-checking script while all three commands above passed. Two such bugs
+reached the repo that way. `tsconfig.scripts.json` is now a referenced project,
+so `npx tsc -b` covers scripts/; `npm run typecheck:scripts` runs just that
+project when you want it on its own.
+
+**Supabase changes need HTTP-level proof.** PostgREST returns `200` for a write
+that RLS filtered to zero rows, so "no error thrown" proves nothing. A write
+succeeded only if the status is < 300 **and** the expected number of rows came
+back. Check both.
