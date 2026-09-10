@@ -27,7 +27,13 @@ dist-ssr
 backups/
 
 # Generated dead-link reports (scripts/flag-dead-links.ts) — keep local
-reports/
+reports/*
+
+# ...except the known-gaps register. It is a durable editorial record, not a
+# generated report: it says which topics were searched for and found to have no
+# published UK guidance. Gitignored it would be lost on a fresh clone, which
+# would defeat the point of keeping a register at all.
+!reports/known-gaps.md
 
 # Generated provider-sync staging output (scripts/sync-providers.ts) — regenerated
 # each run and uploaded as a CI artifact, so it is never committed.
