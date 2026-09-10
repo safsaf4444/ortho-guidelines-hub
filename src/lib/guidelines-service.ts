@@ -3,44 +3,85 @@ import { GUIDELINES_DATA } from '../data/guidelines-data';
 import type { Guideline } from '../data/guidelines-data';
 import { toGuideline, toDbRow, type DbGuideline } from './guidelines-mapper';
 
+/** Where the rows the app is showing actually came from. */
+export type GuidelinesSource = 'live' | 'fallback';
+
+export interface GuidelinesLoad {
+  rows: Guideline[];
+  source: GuidelinesSource;
+  /** Why the fallback was used. Undefined when source is 'live'. */
+  reason?: string;
+}
+
+/** Archived rows are soft-deleted: present in the table, never shown. */
+const visible = () => GUIDELINES_DATA.filter(g => !g.archived);
+
+/**
+ * How long to wait for the initial fetch before showing the snapshot instead.
+ *
+ * Without this the app can wait forever. A blocked or black-holed request —
+ * hospital wifi that accepts the connection and then drops it, a captive
+ * portal, a firewall that discards packets rather than refusing them — never
+ * rejects, so the promise never settles and the UI holds on its loading
+ * skeleton indefinitely. Verified: blocking the Supabase host in the browser
+ * left the page loading permanently until this was added.
+ *
+ * A stale snapshot with an honest banner beats a spinner that never resolves.
+ */
+const FETCH_TIMEOUT_MS = 8000;
+
+function withTimeout<T>(work: PromiseLike<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`timed out after ${ms}ms`)), ms);
+    work.then(
+      (v) => { clearTimeout(timer); resolve(v); },
+      (e) => { clearTimeout(timer); reject(e); },
+    );
+  });
+}
+
 export const guidelinesService = {
   /**
-   * Fetch all guidelines.
+   * Fetch all guidelines, and say where they came from.
    *
-   * - Supabase configured and reachable → returns DB rows mapped to Guideline[]
-   * - Supabase not configured OR query fails  → returns a copy of GUIDELINES_DATA
+   * Returning the source alongside the rows is deliberate. Previously this
+   * returned a bare array, so "231 rows from the live database" and "231 rows
+   * from the compiled-in snapshot because the database was unreachable" were
+   * indistinguishable to the caller — and the UI showed the same thing for
+   * both. A clinician could be reading a month-old snapshot with no way to
+   * tell. The caller now knows, and can say so.
    */
-  async getAll(): Promise<Guideline[]> {
+  async getAll(): Promise<GuidelinesLoad> {
     if (!supabase) {
-      // Filtered the same way as the live query so archived entries stay
-      // hidden in offline/static mode too.
-      return GUIDELINES_DATA.filter(g => !g.archived);
+      return { rows: visible(), source: 'fallback', reason: 'No database is configured for this build.' };
     }
     try {
-      const { data, error } = await supabase
-        .from('guidelines')
-        // Archived rows are soft-deleted: they still exist in the table but
-        // must never reach the app. Excluding them HERE, in the single query
-        // every view is built from, keeps them out of the list, search,
-        // grouping, the catalogue and duplicate detection alike — there is
-        // no second read path to keep in sync.
-        .select('*')
-        .eq('archived', false)
-        .order('section')
-        .order('topic');
+      const { data, error } = await withTimeout(
+        supabase
+          .from('guidelines')
+          // Excluding archived rows HERE, in the single query every view is built
+          // from, keeps them out of the list, search, grouping, the catalogue and
+          // duplicate detection alike — there is no second read path to keep in sync.
+          .select('*')
+          .eq('archived', false)
+          .order('section')
+          .order('topic'),
+        FETCH_TIMEOUT_MS,
+      );
 
       if (error) {
         console.warn('[guidelines-service] query error — falling back to static data:', error.message);
-        return GUIDELINES_DATA.filter(g => !g.archived);
+        return { rows: visible(), source: 'fallback', reason: `The database returned an error: ${error.message}` };
       }
       if (!data || data.length === 0) {
         console.info('[guidelines-service] table is empty — falling back to static data (run npm run seed)');
-        return GUIDELINES_DATA.filter(g => !g.archived);
+        return { rows: visible(), source: 'fallback', reason: 'The database returned no rows.' };
       }
-      return (data as DbGuideline[]).map(toGuideline);
+      return { rows: (data as DbGuideline[]).map(toGuideline), source: 'live' };
     } catch (err) {
       console.warn('[guidelines-service] Supabase unreachable — falling back to static data:', err);
-      return GUIDELINES_DATA.filter(g => !g.archived);
+      const msg = err instanceof Error ? err.message : String(err);
+      return { rows: visible(), source: 'fallback', reason: `The database could not be reached: ${msg}` };
     }
   },
 

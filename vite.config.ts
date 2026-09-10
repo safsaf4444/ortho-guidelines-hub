@@ -21,10 +21,24 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
-      // New builds activate automatically — no user-facing update prompt.
-      registerType: 'autoUpdate',
-      // Plugin injects the SW registration itself; no app-code changes needed.
-      injectRegister: 'auto',
+      // 'prompt', not 'autoUpdate'.
+      //
+      // Under autoUpdate the new worker installed and claimed clients, but the
+      // page already open kept rendering the bytes it had — so a fresh deploy
+      // looked stale, with no signal that anything had changed. That is the
+      // root cause behind the stale-service-worker gotcha that has produced
+      // false "verified" results here: the site had updated, the tab had not,
+      // and nothing said so.
+      //
+      // In prompt mode the new worker waits, and src/lib/pwa-update.ts is told
+      // exactly when one is waiting. The refresh prompt is then shown only when
+      // a genuinely different build exists — never on a normal load, and never
+      // on the first visit, where onOfflineReady fires instead.
+      registerType: 'prompt',
+      // Registration is done by hand in src/lib/pwa-update.ts so the app can
+      // observe the update lifecycle. 'auto' would inject a second registration
+      // and the two would race.
+      injectRegister: null,
       // Phase 1's static public/manifest.webmanifest stays the single source of
       // truth. The plugin manages the service worker only, not the manifest.
       manifest: false,
