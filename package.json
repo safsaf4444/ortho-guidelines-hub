@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint",
+    "typecheck:scripts": "tsc --noEmit -p tsconfig.scripts.json",
     "preview": "vite preview",
     "seed": "tsx scripts/seed.ts",
     "export-static": "tsx scripts/export-static.ts",

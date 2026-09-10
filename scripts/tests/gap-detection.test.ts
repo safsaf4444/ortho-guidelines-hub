@@ -42,6 +42,10 @@ function mk(over: Partial<Guideline> & { id: string; notes?: string }): Guidelin
     topic: over.topic ?? 'Test topic',
     source: 'Test',
     type: 'National guidance',
+    // Required since the editorial-metadata migration. Fixtures use the
+    // same defaults the DB applies, so they stay representative.
+    sourceType: 'national',
+    guidanceStatus: 'current',
     summary: '',
     regionalVariation: false,
     localOverlayNeeded: false,

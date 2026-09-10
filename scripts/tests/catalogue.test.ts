@@ -41,6 +41,10 @@ function mk(id: string, source: string, section: string, topic: string): Guideli
     topic,
     source,
     type: 'National guidance',
+    // Required since the editorial-metadata migration. Fixtures use the
+    // same defaults the DB applies, so they stay representative.
+    sourceType: 'national',
+    guidanceStatus: 'current',
     summary: '',
     regionalVariation: false,
     localOverlayNeeded: false,
