@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { Search, ChevronDown, ExternalLink, Menu, X, TriangleAlert, Plus, WifiOff, Download, Database, History, ClipboardList, Table2, Pencil, Info } from 'lucide-react'
-import { GUIDELINES_DATA, Guideline, GuidelineVersion, GuidanceStatus } from './data/guidelines-data'
-import { guidelinesService } from './lib/guidelines-service'
+import { Guideline, GuidelineVersion, GuidanceStatus } from './data/guidelines-data'
+import { guidelinesService, type GuidelinesSource } from './lib/guidelines-service'
 import { changelogService, type ChangelogLoad } from './lib/changelog-service'
 import { isSupabaseEnabled } from './lib/supabase'
 import { findDuplicateCandidates, countGuidelinesWithDuplicates, pairKey, DuplicateCandidate } from './lib/duplicate-detection'
@@ -12,6 +12,7 @@ import { canWrite, writeBlockedReason } from './lib/write-access'
 import { splitPublishers, canonicalProvider, providerUrl } from './lib/providers'
 import { findGapNote } from './lib/gap-detection'
 import { buildCatalogue, catalogueRowCount } from './lib/catalogue'
+import { usePwaUpdate } from './lib/pwa-update'
 import { prepareChangeNote, isValidChangeNote, archiveNote, linkStatusNote, mergeNote, MAX_NOTE_LENGTH } from './lib/change-note'
 
 const DUPLICATES_VIEW = '__duplicates__';
@@ -258,7 +259,14 @@ function initialSectionFromHash(): string {
 }
 
 export default function App() {
-  const [guidelines, setGuidelines] = useState<Guideline[]>(GUIDELINES_DATA);
+  // Starts EMPTY, not seeded with GUIDELINES_DATA. Seeding it meant the first
+  // paint showed the compiled-in snapshot, identical in every way to a genuine
+  // fallback — so "still loading" and "the database is unreachable" looked the
+  // same, and a clinician could read a month-old snapshot believing it live.
+  const [guidelines, setGuidelines] = useState<Guideline[]>([]);
+  const [dataState, setDataState] = useState<'loading' | GuidelinesSource>('loading');
+  const [fallbackReason, setFallbackReason] = useState<string | undefined>(undefined);
+  const pwa = usePwaUpdate();
   const isOnline = useOnlineStatus();
   // Write gate, layer 2. WRITES_ENABLED lifts the build-time kill switch; a
   // write control additionally requires a live database to write to (in
@@ -270,7 +278,14 @@ export default function App() {
   // Silently replace static data with DB data when Supabase is configured.
   // Falls back to GUIDELINES_DATA automatically — see guidelines-service.ts.
   useEffect(() => {
-    guidelinesService.getAll().then(setGuidelines);
+    let cancelled = false;
+    guidelinesService.getAll().then(load => {
+      if (cancelled) return;
+      setGuidelines(load.rows);
+      setDataState(load.source);
+      setFallbackReason(load.reason);
+    });
+    return () => { cancelled = true; };
   }, []);
 
   // #/catalogue and #/about are deep-linkable. Listening for hashchange (rather
@@ -581,17 +596,28 @@ export default function App() {
               wrapping would need the header's height to grow, and multiple
               other elements (the sidebar, the mobile backdrop) hardcode
               `top-[56px]` against this header's current fixed height. */}
+          {/* Three states, never two. This badge previously read isSupabaseEnabled,
+              which only says a client was constructed — not that the fetch
+              succeeded, and not that it has finished. "Loading" and "the database
+              is unreachable, you are reading a snapshot" both showed as
+              "Supabase Live". */}
           <div
-            title={isSupabaseEnabled ? "Connected to Supabase live database" : "Operating in static fallback mode"}
+            title={
+              dataState === 'loading' ? 'Loading guidelines from the database…'
+                : dataState === 'live' ? 'Showing live data from the database.'
+                : `Showing the built-in snapshot. ${fallbackReason ?? ''}`.trim()
+            }
             className={cn(
               "hidden lg:flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border",
-              isSupabaseEnabled
-                ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+              dataState === 'loading' ? "bg-slate-50 text-slate-500 border-slate-200"
+                : dataState === 'live' ? "bg-emerald-50 text-emerald-700 border-emerald-200"
                 : "bg-amber-50 text-amber-700 border-amber-200"
             )}
           >
-            <Database className="w-3.5 h-3.5" />
-            <span>{isSupabaseEnabled ? "Supabase Live" : "Static Mode"}</span>
+            <Database className={cn("w-3.5 h-3.5", dataState === 'loading' && "animate-pulse")} />
+            <span>
+              {dataState === 'loading' ? 'Loading…' : dataState === 'live' ? 'Supabase Live' : 'Offline snapshot'}
+            </span>
           </div>
 
 
@@ -915,6 +941,26 @@ export default function App() {
               <CatalogueView guidelines={guidelines} />
             ) : currentSection === ABOUT_VIEW ? (
               <AboutView guidelines={guidelines} />
+            ) : dataState === 'loading' ? (
+              /* Loading is its own state, checked BEFORE the zero-result branch.
+                 Without this, an empty list mid-fetch fell through to
+                 "no guidelines match", which told the reader their search had
+                 failed when in fact nothing had been searched yet. */
+              <div className="mt-3" aria-busy="true" aria-live="polite">
+                <span className="sr-only">Loading guidelines…</span>
+                {[0, 1, 2].map(sectionIdx => (
+                  <div key={sectionIdx} className="mb-4">
+                    <div className="h-4 w-40 bg-slate-200 rounded animate-pulse mb-2" />
+                    {[0, 1, 2].map(cardIdx => (
+                      <div key={cardIdx} className="border border-slate-200 rounded-md bg-white px-3 py-2.5 mb-1.5">
+                        <div className="h-3.5 bg-slate-200 rounded animate-pulse mb-2" style={{ width: `${72 - cardIdx * 12}%` }} />
+                        <div className="h-2.5 w-1/3 bg-slate-100 rounded animate-pulse mb-1.5" />
+                        <div className="h-2.5 w-24 bg-slate-100 rounded animate-pulse" />
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
             ) : sortedSections.length === 0 ? (
               (() => {
                 const gapNote = findGapNote(searchQuery, guidelines);
@@ -966,6 +1012,52 @@ export default function App() {
           onDelete={handleDelete}
           isNew={isNewGuideline}
         />
+      )}
+
+      {/* Offline-snapshot notice. Persistent, not a toast: the reader is looking
+          at data of unknown age and that stays true until the database comes
+          back. It says WHY, because "Static Mode" alone never told anyone
+          whether that was a build setting or an outage. */}
+      {dataState === 'fallback' && (
+        <div
+          role="status"
+          className="fixed bottom-0 inset-x-0 z-40 bg-amber-50 border-t border-amber-200 px-4 py-2"
+        >
+          <div className="max-w-4xl mx-auto flex items-start gap-2">
+            <WifiOff className="w-3.5 h-3.5 text-amber-700 shrink-0 mt-0.5" />
+            <p className="text-[11px] text-amber-900 leading-relaxed m-0">
+              <strong>Showing the built-in snapshot, not live data.</strong>{' '}
+              {fallbackReason} Entries are the ones compiled into this build, so recent
+              edits may be missing. Everything still works; only freshness is affected.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Update prompt. Raised ONLY by onNeedRefresh — i.e. the browser has a
+          different build waiting — so it never appears on an ordinary load.
+          See src/lib/pwa-update.ts for why autoUpdate was the wrong mode. */}
+      {pwa.needRefresh && (
+        <div
+          role="status"
+          className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-3
+                     rounded-md bg-slate-900 text-white shadow-lg px-4 py-2.5 max-w-[92vw]"
+        >
+          <span className="text-[12px]">A new version of the hub is available.</span>
+          <button
+            onClick={pwa.updateNow}
+            className="text-[12px] font-medium underline underline-offset-2 hover:text-slate-200 shrink-0"
+          >
+            Reload
+          </button>
+          <button
+            onClick={pwa.dismiss}
+            title="Keep using this version"
+            className="text-[12px] text-slate-400 hover:text-slate-200 shrink-0"
+          >
+            Later
+          </button>
+        </div>
       )}
     </div>
   );
