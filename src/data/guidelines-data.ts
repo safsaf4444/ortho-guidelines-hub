@@ -50,7 +50,15 @@ export type Guideline = {
   priority?: 'high' | 'medium' | 'low';
   archived?: boolean;
   sourceAccessStatus?: 'accessible' | 'login-required' | 'broken';
-  linkVerificationStatus?: 'unchecked' | 'needs-review' | 'broken' | 'verified';
+  /**
+   * Result of the AUTOMATED reachability check only — did the URL respond?
+   * Says nothing about whether the guidance is current or endorsed; that is
+   * guidanceStatus. Machine-assignable: verified, broken, needs-review, moved,
+   * blocked. Editor-only: withdrawn, superseded (both need the page read).
+   */
+  linkVerificationStatus?:
+    | 'unchecked' | 'needs-review' | 'broken' | 'verified'
+    | 'moved' | 'withdrawn' | 'superseded' | 'blocked';
   linkLastVerified?: string;
   linkVerificationNotes?: string;
   sourceType: SourceType;

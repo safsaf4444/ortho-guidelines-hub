@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
-import { Search, ChevronDown, ExternalLink, Menu, X, TriangleAlert, Plus, WifiOff, Download, Database, History, ClipboardList, Table2, Pencil } from 'lucide-react'
-import { GUIDELINES_DATA, Guideline, GuidelineVersion } from './data/guidelines-data'
+import { Search, ChevronDown, ExternalLink, Menu, X, TriangleAlert, Plus, WifiOff, Download, Database, History, ClipboardList, Table2, Pencil, Info } from 'lucide-react'
+import { GUIDELINES_DATA, Guideline, GuidelineVersion, GuidanceStatus } from './data/guidelines-data'
 import { guidelinesService } from './lib/guidelines-service'
 import { changelogService, type ChangelogLoad } from './lib/changelog-service'
 import { isSupabaseEnabled } from './lib/supabase'
@@ -18,6 +18,7 @@ const DUPLICATES_VIEW = '__duplicates__';
 const CHANGELOG_VIEW = '__changelog__';
 const REVIEW_QUEUE_VIEW = '__review-queue__';
 const CATALOGUE_VIEW = '__catalogue__';
+const ABOUT_VIEW = '__about__';
 
 // Build-time kill switch for every write control (Add / Edit / Delete / Merge /
 // link-verification / changelog "Add note"). Now TRUE: the read-only lockdown
@@ -42,18 +43,71 @@ const WRITES_ENABLED: boolean = true;
 // supabase-schema.sql's check constraint. "Verified" read as a claim of
 // clinical endorsement, which this field never made: it is an HTTP-reachability
 // check (see scripts/flag-dead-links.ts), so the label says "Link checked".
-const LINK_STATUS_OPTIONS: { value: NonNullable<Guideline['linkVerificationStatus']>; label: string }[] = [
-  { value: 'unchecked', label: 'Not checked' },
-  { value: 'needs-review', label: 'Needs review' },
-  { value: 'broken', label: 'Broken link' },
-  { value: 'verified', label: 'Link checked' },
+// ─── The two status axes, kept deliberately apart ────────────────────────────
+// These used to be one badge, which is how a machine saying "the URL responded"
+// came to sit on a card as though it were a clinical judgement. girft-bunions
+// was the clearest case: link "verified", guidance withdrawn by GIRFT.
+//
+// Axis 1 — REACHABILITY. Did an automated request get a response? Nothing more.
+// Axis 2 — GUIDANCE STATUS. Is the guidance itself current? An editor decides.
+
+const LINK_STATUS_OPTIONS: { value: NonNullable<Guideline['linkVerificationStatus']>; label: string; hint: string }[] = [
+  { value: 'unchecked',    label: 'Not checked',    hint: 'No automated check has run against this link yet.' },
+  { value: 'verified',     label: 'Reachable',      hint: 'The link responded when last checked automatically. This says nothing about the content.' },
+  { value: 'moved',        label: 'Moved',          hint: 'The link still works but now redirects to a different document.' },
+  { value: 'needs-review', label: 'Check failed',   hint: 'The server errored or timed out. May be temporary — worth re-checking.' },
+  { value: 'broken',       label: 'Link failure',   hint: 'The link did not resolve: the page is gone or the host does not answer.' },
+  { value: 'blocked',      label: 'Cannot check',   hint: 'The host blocks automated checking, so reachability is unknown — not a sign the link is broken.' },
+  { value: 'withdrawn',    label: 'Withdrawn',      hint: 'An editor found the publisher has withdrawn this document.' },
+  { value: 'superseded',   label: 'Superseded',     hint: 'An editor found a newer version has replaced this document.' },
 ];
+
+function linkStatusLabel(status: Guideline['linkVerificationStatus']): string {
+  return LINK_STATUS_OPTIONS.find(o => o.value === status)?.label ?? 'Not checked';
+}
+function linkStatusHint(status: Guideline['linkVerificationStatus']): string {
+  return LINK_STATUS_OPTIONS.find(o => o.value === status)?.hint ?? '';
+}
 
 function linkStatusBadgeClass(status: Guideline['linkVerificationStatus']): string {
   switch (status) {
-    case 'verified': return 'border-emerald-200 bg-emerald-50 text-emerald-700';
-    case 'broken': return 'border-red-200 bg-red-50 text-red-700';
+    // Deliberately slate, not green. Green read as approval; this is only
+    // "the server answered".
+    case 'verified': return 'border-slate-300 bg-slate-50 text-slate-600';
+    case 'broken':
+    case 'withdrawn': return 'border-red-200 bg-red-50 text-red-700';
+    case 'needs-review':
+    case 'moved':
+    case 'superseded': return 'border-amber-200 bg-amber-50 text-amber-700';
+    case 'blocked': return 'border-slate-300 bg-white text-slate-500';
+    default: return 'border-slate-200 bg-slate-50 text-slate-500';
+  }
+}
+
+const GUIDANCE_STATUS_OPTIONS: { value: GuidanceStatus; label: string; hint: string }[] = [
+  { value: 'current',             label: 'Current',              hint: 'The most recent version an editor is aware of.' },
+  { value: 'superseded',          label: 'Superseded',           hint: 'A newer version of this guidance exists.' },
+  { value: 'needs-review',        label: 'Under review',         hint: 'The publisher has this under review, or an editor has flagged it.' },
+  { value: 'link-unavailable',    label: 'Source unavailable',   hint: 'The guidance exists but cannot currently be reached — for example it sits behind a members-only login.' },
+  { value: 'no-source-identified',label: 'No source identified', hint: 'An editor searched and found no published UK guidance for this topic.' },
+  { value: 'archived',            label: 'Archived',             hint: 'Removed from the catalogue by an editor. Kept and recoverable.' },
+];
+
+function guidanceStatusLabel(s: GuidanceStatus): string {
+  return GUIDANCE_STATUS_OPTIONS.find(o => o.value === s)?.label ?? s;
+}
+function guidanceStatusHint(s: GuidanceStatus): string {
+  return GUIDANCE_STATUS_OPTIONS.find(o => o.value === s)?.hint ?? '';
+}
+
+function guidanceStatusBadgeClass(s: GuidanceStatus): string {
+  switch (s) {
+    case 'current': return 'border-emerald-200 bg-emerald-50 text-emerald-700';
+    case 'superseded':
     case 'needs-review': return 'border-amber-200 bg-amber-50 text-amber-700';
+    case 'link-unavailable': return 'border-slate-300 bg-slate-50 text-slate-600';
+    case 'no-source-identified': return 'border-slate-300 bg-white text-slate-600';
+    case 'archived': return 'border-red-200 bg-red-50 text-red-700';
     default: return 'border-slate-200 bg-slate-50 text-slate-500';
   }
 }
@@ -165,12 +219,18 @@ function useOnlineStatus(): boolean {
  * pulling in @tanstack/react-router (which stays unused).
  */
 const CATALOGUE_HASH = '#/catalogue';
+const ABOUT_HASH = '#/about';
+
+function sectionFromHash(): string | null {
+  if (typeof window === 'undefined') return null;
+  const h = window.location.hash.replace(/\/+$/, '');
+  if (h === CATALOGUE_HASH) return CATALOGUE_VIEW;
+  if (h === ABOUT_HASH) return ABOUT_VIEW;
+  return null;
+}
 
 function initialSectionFromHash(): string {
-  if (typeof window === 'undefined') return 'All';
-  return window.location.hash.replace(/\/+$/, '') === CATALOGUE_HASH
-    ? CATALOGUE_VIEW
-    : 'All';
+  return sectionFromHash() ?? 'All';
 }
 
 export default function App() {
@@ -187,6 +247,19 @@ export default function App() {
   // Falls back to GUIDELINES_DATA automatically — see guidelines-service.ts.
   useEffect(() => {
     guidelinesService.getAll().then(setGuidelines);
+  }, []);
+
+  // #/catalogue and #/about are deep-linkable. Listening for hashchange (rather
+  // than only reading the hash once at mount) is what lets an in-page link to
+  // the methodology page work without prop-drilling a callback through every
+  // card — the status badges rely on this.
+  useEffect(() => {
+    const onHash = () => {
+      const s = sectionFromHash();
+      if (s) setCurrentSection(s);
+    };
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
   }, []);
   const [currentSection, setCurrentSection] = useState(initialSectionFromHash);
   const [searchQuery, setSearchQuery] = useState('');
@@ -630,6 +703,19 @@ export default function App() {
                 <span className="text-[12px] font-medium">Changelog</span>
               </button>
 
+              <button
+                onClick={() => { setCurrentSection(ABOUT_VIEW); setIsSidebarOpen(false); window.location.hash = ABOUT_HASH; }}
+                className={cn(
+                  "flex items-center gap-1.5 px-2.5 py-1.5 rounded transition-colors",
+                  currentSection === ABOUT_VIEW
+                    ? "bg-[#0F172A] text-white"
+                    : "text-slate-600 hover:bg-slate-50"
+                )}
+              >
+                <Info className="w-3 h-3 shrink-0" />
+                <span className="text-[12px] font-medium">About &amp; methodology</span>
+              </button>
+
               {sections.map(section => {
                 const count = guidelines.filter(
                   g => g.section === section || (g.crossListedIn ?? []).includes(section)
@@ -675,7 +761,7 @@ export default function App() {
               The quick-access chip row (Emergency/Trauma/Spine/Foot &
               Ankle/Paediatrics) that used to sit here was removed at the
               user's request. */}
-          {currentSection !== DUPLICATES_VIEW && currentSection !== CHANGELOG_VIEW && currentSection !== REVIEW_QUEUE_VIEW && currentSection !== CATALOGUE_VIEW && (
+          {currentSection !== DUPLICATES_VIEW && currentSection !== CHANGELOG_VIEW && currentSection !== REVIEW_QUEUE_VIEW && currentSection !== CATALOGUE_VIEW && currentSection !== ABOUT_VIEW && (
             <div className="sticky top-0 z-10 bg-[#F8FAFC] px-5 pt-3 pb-2 border-b border-slate-100 shrink-0">
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
@@ -706,7 +792,15 @@ export default function App() {
               </span>
             ) : currentSection === CHANGELOG_VIEW ? (
               <span className="text-[11px] text-slate-500">
-                Full edit history across all guidelines, newest first. Append-only — notes can't be edited or deleted.
+                {/* Scoped deliberately: append-only holds for everyone using this
+                    site, but the service-role key bypasses RLS and deleting a
+                    guideline cascades to its notes. "Can't be edited or deleted"
+                    full stop would be untrue. */}
+                Full edit history across all guidelines, newest first. Append-only — notes can't be edited or deleted through this site.
+              </span>
+            ) : currentSection === ABOUT_VIEW ? (
+              <span className="text-[11px] text-slate-500">
+                What this hub covers, how entries are reviewed, and what the status badges do and don't mean.
               </span>
             ) : currentSection === REVIEW_QUEUE_VIEW ? (
               <span className="text-[11px] text-slate-500">
@@ -795,6 +889,8 @@ export default function App() {
               <ReviewDashboard onEditCandidate={handleReviewCandidate} />
             ) : currentSection === CATALOGUE_VIEW ? (
               <CatalogueView guidelines={guidelines} />
+            ) : currentSection === ABOUT_VIEW ? (
+              <AboutView guidelines={guidelines} />
             ) : sortedSections.length === 0 ? (
               (() => {
                 const gapNote = findGapNote(searchQuery, guidelines);
@@ -1302,6 +1398,39 @@ function GuidelineCard({
             </div>
           )}
 
+          {/* What this guidance IS. Kept above the summary and visually apart
+              from the reachability badge further down, because those two things
+              were previously read as one. */}
+          <div className="flex items-center gap-1.5 flex-wrap mb-2">
+            <span
+              title={guidanceStatusHint(item.guidanceStatus)}
+              className={cn(
+                "text-[10px] px-1.5 py-px rounded border font-medium",
+                guidanceStatusBadgeClass(item.guidanceStatus)
+              )}
+            >
+              {guidanceStatusLabel(item.guidanceStatus)}
+            </span>
+            <span className="text-[10px] text-slate-500">guidance status</span>
+            <a
+              href={ABOUT_HASH}
+              onClick={e => e.stopPropagation()}
+              className="text-[10px] text-slate-500 hover:text-slate-700 underline underline-offset-2 ml-auto"
+            >
+              How we check sources
+            </a>
+          </div>
+
+          {/* Scope is rendered even when absent. Blank space would read as a
+              missing field; "not specified" records that we looked and the
+              source does not say. */}
+          <div className="flex gap-1.5 mb-1.5 text-[11px]">
+            <span className="text-slate-500 shrink-0">Scope:</span>
+            {item.scopeNote
+              ? <span className="text-slate-600">{item.scopeNote}</span>
+              : <span className="text-slate-400 italic">not specified by the source</span>}
+          </div>
+
           <p className="text-[12px] text-slate-600 leading-relaxed mb-1.5 whitespace-pre-line">
             {item.summary}
           </p>
@@ -1322,15 +1451,23 @@ function GuidelineCard({
                   Source Links
                 </div>
                 <div className="flex items-center gap-1.5 flex-wrap">
-                  <span className={cn(
-                    "text-[10px] px-1.5 py-px rounded border font-medium",
-                    linkStatusBadgeClass(linkStatus)
-                  )}>
-                    {LINK_STATUS_OPTIONS.find(o => o.value === linkStatus)?.label}
+                  <span
+                    title={linkStatusHint(linkStatus)}
+                    className={cn(
+                      "text-[10px] px-1.5 py-px rounded border font-medium",
+                      linkStatusBadgeClass(linkStatus)
+                    )}
+                  >
+                    {linkStatusLabel(linkStatus)}
                   </span>
-                  {item.linkLastVerified && (
-                    <span className="text-[10px] text-slate-500">link checked {item.linkLastVerified}</span>
-                  )}
+                  <a
+                    href={ABOUT_HASH}
+                    onClick={e => e.stopPropagation()}
+                    title="Automated reachability check. Not a review of the content, and not an endorsement."
+                    className="text-[10px] text-slate-500 hover:text-slate-700 underline underline-offset-2"
+                  >
+                    automated check
+                  </a>
                   {WRITES_ENABLED && canEdit && (
                     <>
                       <select
@@ -1455,14 +1592,45 @@ function GuidelineCard({
               fetches) only when the card is expanded. */}
           <CardChangelog guidelineId={item.id} canEdit={canEdit} />
 
-          {/* Card footer: provenance only. The Edit control that used to sit
-              at the right of this row has moved to the action row at the top
-              of the expanded body — see the comment there. */}
-          <div className="flex items-center gap-2.5 pt-1 border-t border-slate-100">
-            {item.lastChecked && (
-              <span className="text-[10px] text-slate-500">Last checked: {item.lastChecked}</span>
-            )}
-            <span className="text-[10px] text-slate-500">ID: {item.id}</span>
+          {/* Provenance — four separate facts that used to be shown as one
+              "Last checked" line, which made an automated link ping look like
+              an editorial review. They answer different questions and carry
+              different dates, so they are labelled and spaced apart.
+              Every one renders even when empty: "not recorded" is information,
+              blank space is a bug. */}
+          <div className="pt-2 mt-1 border-t border-slate-100">
+            <div className="text-[9px] font-semibold text-slate-500 uppercase tracking-widest mb-1">
+              Provenance
+            </div>
+            <dl className="grid grid-cols-2 sm:grid-cols-4 gap-x-3 gap-y-1.5">
+              <div className="flex flex-col">
+                <dt className="text-[9px] text-slate-400 uppercase tracking-wide">Publisher</dt>
+                <dd className="text-[11px] text-slate-600">{item.source}</dd>
+              </div>
+              <div className="flex flex-col">
+                <dt className="text-[9px] text-slate-400 uppercase tracking-wide">Published</dt>
+                <dd className="text-[11px] text-slate-600">
+                  {item.subGroup || <span className="text-slate-400 italic">not stated</span>}
+                </dd>
+              </div>
+              <div className="flex flex-col">
+                <dt className="text-[9px] text-slate-400 uppercase tracking-wide" title="When a person last reviewed this entry.">
+                  Editorial review
+                </dt>
+                <dd className="text-[11px] text-slate-600 tabular-nums">
+                  {item.editorialReviewDate || <span className="text-slate-400 italic">not recorded</span>}
+                </dd>
+              </div>
+              <div className="flex flex-col">
+                <dt className="text-[9px] text-slate-400 uppercase tracking-wide" title="When an automated request last confirmed the link responds. Not a content review.">
+                  Link check
+                </dt>
+                <dd className="text-[11px] text-slate-600 tabular-nums">
+                  {item.linkLastVerified || <span className="text-slate-400 italic">not checked</span>}
+                </dd>
+              </div>
+            </dl>
+            <div className="text-[10px] text-slate-400 mt-1.5">ID: {item.id}</div>
           </div>
         </div>
       )}
@@ -1972,11 +2140,130 @@ This archives the entry rather than deleting it: it disappears from the site, bu
   );
 }
 
+// ─── About / methodology ──────────────────────────────────────────────────────
+// The page the status badges link to. It exists because two things on a card
+// are easy to misread: an automated link check looks like a review, and an
+// entry's presence looks like a recommendation. Both are stated plainly here.
+
+function AboutView({ guidelines }: { guidelines: Guideline[] }) {
+  const total = guidelines.length;
+  const providers = new Set(guidelines.map(g => canonicalProvider(splitPublishers(g.source)[0] ?? g.source))).size;
+  const h2 = "text-[13px] font-semibold text-slate-800 mt-5 mb-1.5";
+  const p = "text-[12px] text-slate-600 leading-relaxed mb-2 max-w-2xl";
+  const li = "text-[12px] text-slate-600 leading-relaxed";
+
+  return (
+    <div className="mt-3 max-w-2xl">
+      <h2 className="text-[15px] font-semibold text-slate-800">About this hub &amp; how it is maintained</h2>
+      <p className={p + " mt-1.5"}>
+        A reference index of published UK orthopaedic guidance — currently {total} entries
+        from {providers} publishing bodies. It helps you find the right source document.
+        It does not reproduce guidance, and it is not a clinical decision tool.
+      </p>
+
+      <div className="border-l-2 border-amber-300 bg-amber-50 px-3 py-2 my-3">
+        <p className="text-[12px] text-amber-900 leading-relaxed m-0">
+          <strong>A checked link is not an endorsement.</strong> The link-check badge records
+          one thing: whether an automated request to the URL got a response. It is not a
+          review of the content, not a statement that the guidance is current, and not a
+          recommendation to follow it. Those judgements are the guidance status badge, and
+          ultimately yours.
+        </p>
+      </div>
+
+      <h3 className={h2}>What is in scope</h3>
+      <ul className="list-disc pl-4 space-y-1 mb-2">
+        <li className={li}>Guidance published by UK national bodies (NICE, GIRFT, NHS England) and UK specialist societies.</li>
+        <li className={li}>A small number of international sources, labelled <em>Outside UK</em>, where no UK equivalent was found.</li>
+        <li className={li}>Entries are indexed with a summary and a link. The source document is always the authority.</li>
+      </ul>
+      <p className={p}>
+        <strong>Local PRUH content is not published here yet</strong>, pending local sign-off.
+        Where you see a Local Overlay section, it currently holds national material relevant
+        to local pathway work — not PRUH-authored guidance.
+      </p>
+
+      <h3 className={h2}>The two status badges, and why there are two</h3>
+      <p className={p}>
+        They answer different questions and are produced by different things — a machine and
+        a person. Showing them as one badge is what made a withdrawn pathway look approved.
+      </p>
+      <div className="border border-slate-200 rounded-md divide-y divide-slate-100 mb-2">
+        <div className="px-3 py-2">
+          <div className="text-[11px] font-semibold text-slate-700 mb-1">Guidance status — set by an editor</div>
+          {GUIDANCE_STATUS_OPTIONS.map(o => (
+            <div key={o.value} className="flex gap-2 items-baseline py-0.5">
+              <span className={cn("text-[10px] px-1.5 py-px rounded border font-medium shrink-0", guidanceStatusBadgeClass(o.value))}>
+                {o.label}
+              </span>
+              <span className="text-[11px] text-slate-600">{o.hint}</span>
+            </div>
+          ))}
+        </div>
+        <div className="px-3 py-2">
+          <div className="text-[11px] font-semibold text-slate-700 mb-1">Link check — set automatically, weekly</div>
+          {LINK_STATUS_OPTIONS.map(o => (
+            <div key={o.value} className="flex gap-2 items-baseline py-0.5">
+              <span className={cn("text-[10px] px-1.5 py-px rounded border font-medium shrink-0", linkStatusBadgeClass(o.value))}>
+                {o.label}
+              </span>
+              <span className="text-[11px] text-slate-600">{o.hint}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+      <p className={p}>
+        Two of those link states — <em>Withdrawn</em> and <em>Superseded</em> — are only ever
+        set by a person. The automated check reads an HTTP status and never downloads the
+        page, so it cannot tell a withdrawn document from a URL that simply stopped working.
+        Claiming otherwise would be a guess presented as a finding.
+      </p>
+
+      <h3 className={h2}>How entries are reviewed</h3>
+      <ul className="list-disc pl-4 space-y-1 mb-2">
+        <li className={li}><strong>Editorial review</strong> — a person checks the entry against the source. The date is shown on each card.</li>
+        <li className={li}><strong>Link check</strong> — an automated job runs weekly and reports failures. It never changes an entry on its own; a person applies any change.</li>
+        <li className={li}><strong>Every edit is recorded.</strong> There are no accounts, so a change cannot be traced to a person — instead a written note is required on every edit, and those notes cannot be altered or removed through this site.</li>
+        <li className={li}><strong>Nothing is deleted.</strong> Removing an entry archives it. The record is kept and can be restored.</li>
+      </ul>
+      <p className={p}>
+        The two dates on a card are deliberately separate. An entry can have a link that
+        responds perfectly while the guidance behind it has been withdrawn — so a recent
+        link check tells you nothing about a stale editorial review, and vice versa.
+      </p>
+
+      <h3 className={h2}>Gaps and what they mean</h3>
+      <p className={p}>
+        Where a topic has been searched and no published UK guidance was found, an editor
+        records that explicitly as <em>No source identified</em>, with the reason. An absent
+        topic means nobody has looked yet — not that nothing exists. The two are different,
+        and only the first is a finding.
+      </p>
+
+      <h3 className={h2}>Corrections and contact</h3>
+      <p className={p}>
+        If an entry is wrong, out of date, or missing, the quickest fix is to edit it here —
+        every card has an Edit control and asks for a note explaining the change. For
+        anything that needs a conversation rather than an edit, raise it with the PRUH
+        orthopaedic team, or open an issue on the project repository.
+      </p>
+      <p className="text-[11px] text-slate-500 mb-2">
+        National reference only. Not a substitute for clinical judgement or local trust policy.
+      </p>
+    </div>
+  );
+}
+
 // ─── Duplicates Panel ─────────────────────────────────────────────────────────
 // Review-only surface: heuristic matches, opened per pair for editorial
 // judgement. Three actions per pair — merge into the chosen canonical
-// record, keep both (dismiss), or delete the redundant one outright.
+// record, keep both (dismiss), or archive the redundant one.
 // Nothing here runs automatically or in bulk.
+//
+// NOTE: none of these actions deletes anything. The anon role has no DELETE
+// policy on `guidelines` (supabase-migration-soft-delete-and-mandatory-notes.sql),
+// so archiving is the only outcome available — the copy below says so rather
+// than promising a permanent removal the database would refuse to perform.
 
 function DuplicatesPanel({
   candidates, canEdit, onOpen, onDismiss, onMerge, onDeleteOne,
@@ -2035,15 +2322,17 @@ function DuplicatePairCard({
       `Merge "${duplicate.topic}" into "${canonical.topic}"?`,
       newVersionCount > 0 ? `${newVersionCount} new link(s) will be added.` : 'No new links to add.',
       newSections.length > 0 ? `Will also appear in: ${newSections.join(', ')}.` : null,
-      `"${duplicate.topic}" will then be permanently deleted.`,
+      `"${duplicate.topic}" will then be archived — hidden from the hub, but kept and recoverable.`,
     ].filter(Boolean);
     if (window.confirm(lines.join('\n'))) {
       onMerge(canonical, duplicate);
     }
   };
 
-  const handleDeleteDuplicate = () => {
-    if (window.confirm(`Delete "${duplicate.topic}" without merging? This permanently removes it and cannot be undone.`)) {
+  const handleArchiveDuplicate = () => {
+    if (window.confirm(`Archive "${duplicate.topic}" without merging?
+
+It will be hidden from the hub. The record is kept and can be restored.`)) {
       onDeleteOne(duplicate);
     }
   };
@@ -2117,10 +2406,10 @@ function DuplicatePairCard({
             Merge into "{canonical.topic}"
           </button>
           <button
-            onClick={handleDeleteDuplicate}
+            onClick={handleArchiveDuplicate}
             className="px-2.5 py-1 border border-red-200 text-red-600 rounded text-[11px] font-medium hover:bg-red-50 transition-colors"
           >
-            Delete "{duplicate.topic}" without merging
+            Archive "{duplicate.topic}" without merging
           </button>
           <span className="text-[10px] text-slate-500 ml-auto">
             {newVersionCount > 0 ? `+${newVersionCount} link${newVersionCount === 1 ? '' : 's'}` : 'no new links'}

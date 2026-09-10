@@ -18,6 +18,7 @@
  *
  * Verdict -> status mapping (per URL):
  *   OK             -> verified
+ *   REDIRECTED     -> moved         (resolves, but to a different document)
  *   CLIENT_ERROR   -> broken        (4xx, hard evidence the target is gone)
  *   DNS_FAILURE    -> broken        (host does not resolve)
  *   SERVER_ERROR   -> needs-review  (5xx may be transient)
@@ -25,9 +26,18 @@
  *   BLOCKED_WAF    -> (no opinion)  existing human status is preserved
  *   KNOWN_BLOCKED  -> (no opinion)  no request was made at all
  *
+ * `withdrawn` and `superseded` are valid stored states but are NEVER produced
+ * here. Both mean something about the document, not the connection, and this
+ * pipeline only ever sees an HTTP status — see the LinkStatus docblock below.
+ * An editor sets them by hand.
+ *
  * An entry has many URLs (versions[]). The worst verdict wins:
- *   broken > needs-review > verified > (no opinion)
+ *   withdrawn > superseded > broken > needs-review > moved > verified > (none)
  * An entry whose URLs are ALL "no opinion" is left completely untouched.
+ *
+ * Blocked and moved entries are additionally counted in the run summary, so a
+ * WAF wall or a silently relocated document is visible to a reviewer even
+ * though the first is never auto-applied.
  */
 import { join } from 'path';
 import { readFileSync, readdirSync, writeFileSync, existsSync, mkdirSync } from 'fs';
@@ -38,28 +48,61 @@ import { GUIDELINES_DATA } from '../src/data/guidelines-data';
 const REPORTS_DIR = join(process.cwd(), 'reports');
 
 export type Verdict =
-  | 'OK' | 'CLIENT_ERROR' | 'SERVER_ERROR' | 'TIMEOUT'
+  | 'OK' | 'REDIRECTED' | 'CLIENT_ERROR' | 'SERVER_ERROR' | 'TIMEOUT'
   | 'DNS_FAILURE' | 'BLOCKED_WAF' | 'KNOWN_BLOCKED';
 
-/** The schema's check constraint on link_verification_status. */
-export type LinkStatus = 'unchecked' | 'needs-review' | 'broken' | 'verified';
+/**
+ * The schema's check constraint on link_verification_status.
+ *
+ * This records the result of an AUTOMATED REACHABILITY CHECK and nothing else.
+ * It is not a statement that the guidance is current, correct or endorsed —
+ * `guidance_status` carries that, and the two are shown as separate badges.
+ *
+ * Machine-assignable by this mapper:
+ *   verified | broken | needs-review | moved
+ * Editor-only, never produced here:
+ *   withdrawn | superseded — both require reading the page to know that a
+ *   document was pulled or replaced. flag-dead-links.ts deliberately performs a
+ *   status-only check and never downloads page bodies, so it cannot tell the
+ *   difference between "withdrawn" and "the URL simply 404s". Inferring either
+ *   from an HTTP status would be a guess presented as a finding.
+ *   blocked — see BLOCKED_WAF below.
+ */
+export type LinkStatus =
+  | 'unchecked' | 'needs-review' | 'broken' | 'verified'
+  | 'moved' | 'withdrawn' | 'superseded' | 'blocked';
 
 /** null = the checker has no opinion; never overrides a human verdict. */
 export function verdictToStatus(v: Verdict): LinkStatus | null {
   switch (v) {
     case 'OK': return 'verified';
+    // The link resolves, but to a different document than the catalogue names.
+    // Still reachable, so not a failure — but an editorial fact worth acting on.
+    case 'REDIRECTED': return 'moved';
     case 'CLIENT_ERROR':
     case 'DNS_FAILURE': return 'broken';
     case 'SERVER_ERROR':
     case 'TIMEOUT': return 'needs-review';
+    // Deliberately still "no opinion", NOT 'blocked'. A WAF block is not
+    // evidence about the document — flag-dead-links.ts says so explicitly — and
+    // every live row carries a dated human verification note. Auto-writing
+    // 'blocked' here would let a bot challenge overwrite a human verdict. The
+    // blocked count is surfaced in the report summary instead, so it is visible
+    // without being applied; an editor sets 'blocked' by hand if they agree.
     case 'BLOCKED_WAF':
     case 'KNOWN_BLOCKED': return null;
     default: return null;
   }
 }
 
+// Worst-wins ordering. 'moved' outranks 'verified' (it needs an editor's
+// attention) but is below the states that mean the link did not work at all.
+// The editor-only states sit at the top: if a human has already recorded that a
+// document is withdrawn or superseded, no automated verdict should displace it.
 const SEVERITY: Record<LinkStatus, number> = {
-  'broken': 3, 'needs-review': 2, 'verified': 1, 'unchecked': 0,
+  'withdrawn': 6, 'superseded': 5,
+  'broken': 4, 'needs-review': 3, 'moved': 2, 'verified': 1,
+  'blocked': 1, 'unchecked': 0,
 };
 
 /** Worst-wins across an entry's URLs. null when no URL yielded an opinion. */
@@ -115,7 +158,7 @@ export interface Proposal {
 export function buildProposals(
   csvRows: string[][],
   data: readonly { id: string; topic: string; source: string; linkVerificationStatus?: string }[],
-): { proposals: Proposal[]; unchanged: number; noOpinion: number } {
+): { proposals: Proposal[]; unchanged: number; noOpinion: number; blockedEntries: string[]; movedEntries: string[] } {
   const header = csvRows[0] ?? [];
   const col = (n: string) => header.indexOf(n);
   const iId = col('guideline_id');
@@ -124,11 +167,17 @@ export function buildProposals(
   const iDetail = col('detail');
 
   const byId = new Map<string, { status: LinkStatus | null; note: string }[]>();
+  // Reported but never auto-applied — see verdictToStatus for why a bot block
+  // must not overwrite a human verdict.
+  const blockedSet = new Set<string>();
+  const movedSet = new Set<string>();
   for (const r of csvRows.slice(1)) {
     const id = r[iId];
     if (!id) continue;
     const verdict = r[iVerdict] as Verdict;
     const status = verdictToStatus(verdict);
+    if (verdict === 'BLOCKED_WAF' || verdict === 'KNOWN_BLOCKED') blockedSet.add(id);
+    if (verdict === 'REDIRECTED') movedSet.add(id);
     const list = byId.get(id) ?? [];
     list.push({ status, note: `${verdict} ${r[iDetail] ?? ''} ${r[iUrl] ?? ''}`.trim() });
     byId.set(id, list);
@@ -153,7 +202,13 @@ export function buildProposals(
       evidence: checks.filter(c => c.status === proposed).map(c => c.note),
     });
   }
-  return { proposals, unchanged, noOpinion };
+  return {
+    proposals,
+    unchanged,
+    noOpinion,
+    blockedEntries: [...blockedSet].sort(),
+    movedEntries: [...movedSet].sort(),
+  };
 }
 
 function main() {
@@ -164,12 +219,15 @@ function main() {
   }
   console.log(`\nReading verdicts from: ${csvPath}`);
   const rows = parseCsv(readFileSync(csvPath, 'utf-8'));
-  const { proposals, unchanged, noOpinion } = buildProposals(rows, GUIDELINES_DATA);
+  const { proposals, unchanged, noOpinion, blockedEntries, movedEntries } =
+    buildProposals(rows, GUIDELINES_DATA);
 
   console.log('\n──────── Proposed linkVerificationStatus changes (REPORT ONLY) ────────');
   console.log(`  Entries in dataset            : ${GUIDELINES_DATA.length}`);
   console.log(`  Already correct (no change)   : ${unchanged}`);
   console.log(`  Untouched (checker no opinion): ${noOpinion}`);
+  console.log(`  Blocked to automated checking : ${blockedEntries.length}  (reported, never auto-applied)`);
+  console.log(`  Redirected to a new location  : ${movedEntries.length}  (proposed as 'moved')`);
   console.log(`  PROPOSED CHANGES              : ${proposals.length}\n`);
   for (const p of proposals) {
     console.log(`  [${p.id}]  ${p.current} -> ${p.proposed}`);
