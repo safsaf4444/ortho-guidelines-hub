@@ -5,7 +5,7 @@
  * This file has no Vite or browser dependencies so it can be used from
  * both src/ and the scripts/ seed script.
  */
-import type { Guideline, GuidelineVersion } from '../data/guidelines-data';
+import type { Guideline, GuidelineVersion, SourceType, GuidanceStatus } from '../data/guidelines-data';
 
 // ─── DB row type (matches supabase-schema.sql column names) ──────────────────
 
@@ -30,6 +30,11 @@ export interface DbGuideline {
   link_last_verified: string | null;  // Postgres date → 'YYYY-MM-DD' string
   link_verification_notes: string | null;
   versions: GuidelineVersion[];  // JSONB array
+  source_type: SourceType;             // NOT NULL, default 'national'
+  guidance_status: GuidanceStatus;     // NOT NULL, default 'current'
+  scope_note: string | null;
+  editorial_review_date: string | null; // Postgres date → 'YYYY-MM-DD'
+  inclusion_reason: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -58,6 +63,11 @@ export function toGuideline(row: DbGuideline): Guideline {
     linkLastVerified:    row.link_last_verified ?? undefined,
     linkVerificationNotes: row.link_verification_notes ?? undefined,
     versions:            row.versions,
+    sourceType:          row.source_type,
+    guidanceStatus:      row.guidance_status,
+    scopeNote:           row.scope_note ?? undefined,
+    editorialReviewDate: row.editorial_review_date ?? undefined,
+    inclusionReason:     row.inclusion_reason ?? undefined,
   };
 }
 
@@ -85,5 +95,10 @@ export function toDbRow(g: Guideline): Omit<DbGuideline, 'created_at' | 'updated
     link_last_verified:   g.linkLastVerified || null,
     link_verification_notes: g.linkVerificationNotes ?? null,
     versions:             g.versions,
+    source_type:          g.sourceType ?? 'national',
+    guidance_status:      g.guidanceStatus ?? 'current',
+    scope_note:           g.scopeNote ?? null,
+    editorial_review_date: g.editorialReviewDate || null,
+    inclusion_reason:     g.inclusionReason ?? null,
   };
 }

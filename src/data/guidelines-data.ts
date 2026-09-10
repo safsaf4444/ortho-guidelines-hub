@@ -1,12 +1,36 @@
 // AUTO-GENERATED from the Supabase `guidelines` table by scripts/export-static.ts.
 // Do not edit by hand — change the database and run `npm run export-static`.
-// Generated: 2026-09-04 — 231 records.
+// Generated: 2026-09-10 — 231 records.
 
 export type GuidelineVersion = {
   label: string;
   date?: string;
   url: string;
 };
+
+/** Who published this, and at what level. See supabase-migration-editorial-metadata.sql. */
+export type SourceType =
+  | 'national'
+  | 'specialist-society'
+  | 'local-pruh'
+  | 'quick-reference'
+  | 'external-non-uk';
+
+/**
+ * Editorial state of the GUIDANCE itself.
+ *
+ * Deliberately separate from linkVerificationStatus, which only records
+ * whether a URL responded to an automated request. A reachable link says
+ * nothing about whether the guidance is current, and nothing at all about
+ * clinical endorsement.
+ */
+export type GuidanceStatus =
+  | 'current'
+  | 'superseded'
+  | 'archived'
+  | 'needs-review'
+  | 'link-unavailable'
+  | 'no-source-identified';
 
 export type Guideline = {
   id: string;
@@ -29,6 +53,14 @@ export type Guideline = {
   linkVerificationStatus?: 'unchecked' | 'needs-review' | 'broken' | 'verified';
   linkLastVerified?: string;
   linkVerificationNotes?: string;
+  sourceType: SourceType;
+  guidanceStatus: GuidanceStatus;
+  /** Age group / setting / specialty, ONLY where the source states one. Undefined means the source does not say — never 'all patients'. */
+  scopeNote?: string;
+  /** When a human last reviewed this entry. Distinct from linkLastVerified (an automated check). */
+  editorialReviewDate?: string;
+  /** Why this entry is here, or why it holds a non-current status. Required by the DB on superseded / archived / needs-review / no-source-identified. */
+  inclusionReason?: string;
 };
 
 export const GUIDELINES_DATA: Guideline[] = [
@@ -61,7 +93,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-bisphosphonates-ta464",
@@ -92,7 +128,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bostaa-dexa-position",
@@ -124,7 +164,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.bostaa.ac.uk/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-29",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-denosumab-ta204",
@@ -155,7 +199,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "fls-db",
@@ -187,7 +235,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://nhfd.co.uk/FFFAP/Resources.nsf/pages/FLS",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "iof-capture-the-fracture",
@@ -218,7 +270,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.capturethefracture.org/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "external-non-uk",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-29",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "naif-inpatient-falls",
@@ -249,7 +305,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.rcp.ac.uk/improving-care/national-clinical-audits/falls-and-fragility-fracture-audit-programme-fffap/national-audit-of-inpatient-falls-naif/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nogg-osteoporosis-guideline",
@@ -285,7 +345,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nogg.org.uk",
         "label": "Resource centre: /resource-centre (prefix"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-osteoporosis-risk-cg146",
@@ -317,7 +381,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-osteoporosis-qs149",
@@ -349,7 +417,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-raloxifene-ta160",
@@ -380,7 +452,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-raloxifene-teriparatide-ta161",
@@ -411,7 +487,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-romosozumab-ta791",
@@ -442,7 +522,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "ros-clinical-quality-toolkits",
@@ -487,7 +571,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://theros.org.uk/for-healthcare-professionals/clinical-quality-hub/clinical-quality-toolkits/clinical-publications-and-resources/",
         "label": "Clinical publications and resources"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-29",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "ros-osteoporosis-quality-standards",
@@ -518,7 +606,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://theros.org.uk/healthcare-professionals/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "ros-fls-clinical-standards",
@@ -554,7 +646,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://theros.org.uk/healthcare-professionals/clinical-quality-hub/fracture-liaison-services/implementation-toolkit/",
         "label": "FLS Implementation Toolkit"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bhs-adult-hip-dysplasia",
@@ -585,7 +681,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://britishhipsociety.com/resources/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-apixaban-vte-ta245",
@@ -617,7 +717,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-arthroscopic-fai-htg273",
@@ -649,7 +753,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bhs-girft-hip-arthroplasty-op-record",
@@ -681,7 +789,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://britishhipsociety.com/resources/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bhs-revision-hip-standards",
@@ -718,7 +830,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://britishhipsociety.com/Portals/0/Downloads/Revision-Hip-Network/",
         "label": "Dual consultant: .../BHSSS-Dual-Consultant.pdf (all prefixed"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-dabigatran-vte-ta157",
@@ -750,7 +866,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-digital-oa-htg766",
@@ -783,7 +903,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-itb-lengthening-gtps-htg246",
@@ -814,7 +938,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bess-ebi-list-2-guidance",
@@ -846,7 +974,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://bess.ac.uk/patient-care-pathways-and-guidelines/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-ecswt-gtps-htg248",
@@ -878,7 +1010,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bhs-fai-standard",
@@ -909,7 +1045,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://britishhipsociety.com/resources/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "girft-group-and-save-hip-knee",
@@ -941,7 +1081,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://gettingitrightfirsttime.co.uk/academy-resources/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-mis-thr-htg236",
@@ -972,7 +1116,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "ebi-mri-hip-arthritis",
@@ -1001,7 +1149,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://ebi.aomrc.org.uk/specialty/musculoskeletal-spine/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-29",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nhs-ebi-programme",
@@ -1048,7 +1200,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.boa.ac.uk/resource/nhs-england-evidence-based-interventions-publication-and-response-from-the-boa.html",
         "label": "BOA response"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-open-fai-htg270",
@@ -1079,7 +1235,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "girft-orthopaedic-surgery-report",
@@ -1110,7 +1270,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.boa.ac.uk/standards-guidance/getting-it-right-first-time.html",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-osteoarthritis-ng226",
@@ -1144,7 +1308,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-osteoarthritis-qs87",
@@ -1177,7 +1345,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-joint-replacement-ng157",
@@ -1210,7 +1382,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-joint-replacement-qs206",
@@ -1243,7 +1419,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-rivaroxaban-vte-ta170",
@@ -1275,7 +1455,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-supercapsular-tha-htg626",
@@ -1306,7 +1490,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bhs-surgical-prioritisation",
@@ -1338,7 +1526,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://britishhipsociety.com/resources/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-thr-resurfacing-ta304",
@@ -1369,7 +1561,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "arterial-injury-msk-trauma",
@@ -1404,7 +1600,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.boa.ac.uk/asset/6C475A69-3056-4149-98DB80A87C962786/",
         "label": "Archived (pre-June 2026)"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bass-cauda-equina-standards",
@@ -1438,7 +1638,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://gettingitrightfirsttime.co.uk/wp-content/uploads/2026/04/National-Suspected-Cauda-Equina-Pathway-March-2026.pdf",
         "label": "Current operative pathway (GIRFT, co-badged BASS)"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "compartment-syndrome",
@@ -1473,7 +1677,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.boa.ac.uk/asset/2A3DBE24-B921-4395-92631F3BE3160528/",
         "label": "Archived (pre-July 2025)"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "pelvic-fracture",
@@ -1508,7 +1716,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.boa.ac.uk/asset/86C72EFF-26AA-4CEC-98D1E85CDA3DAC6C/",
         "label": "Urological Trauma companion (Aug 2016)"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-spinal-metastases-mscc-ng234",
@@ -1540,7 +1752,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "girft-cauda-equina-pathway",
@@ -1582,7 +1798,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://gettingitrightfirsttime.co.uk/wp-content/uploads/2023/02/National-Suspected-Cauda-Equina-Pathway-February-2023-FINAL-V1-1.pdf",
         "label": "Superseded v1 Feb 2023"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bofas-achilles-acute-rupture",
@@ -1622,7 +1842,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.bofas.org.uk/hyperbook/mid-hindfoot/achilles-tendinopathy",
         "label": "Achilles tendinopathy"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bofas-hyperbook-trauma",
@@ -1657,7 +1881,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.bofas.org.uk",
         "label": "Turf toe: /hyperbook/trauma/turf-toe-injury (all prefixed"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bofas-pathways-of-care",
@@ -1689,7 +1917,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.bofas.org.uk/clinician/research/bofas-publications",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bofas-registry",
@@ -1720,7 +1952,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.bofas.org.uk/clinician/research/bofas-publications",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bofas-round-table-consensus",
@@ -1751,7 +1987,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.bofas.org.uk/clinician/research/bofas-publications",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-29",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "girft-bunions",
@@ -1777,7 +2017,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://gettingitrightfirsttime.co.uk/academy-resources/pathways/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "needs-review",
+    "editorialReviewDate": "2026-07-29",
+    "inclusionReason": "GIRFT lists this pathway as \"Currently under review\" on its pathways index (recorded July 2026). Held as needs-review until GIRFT republishes; the entry is kept so the topic is not silently absent from the catalogue."
   },
   {
     "id": "bofas-diabetic-foot-charcot",
@@ -1820,7 +2064,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.bofas.org.uk/hyperbook/trauma/ankle-fractures/diabetic-ankle-fractures",
         "label": "Diabetic ankle fractures"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bofas-fame-statement",
@@ -1851,7 +2099,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.bofas.org.uk/clinician/research/bofas-publications",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bofas-flatfoot-commissioning",
@@ -1883,7 +2135,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.bofas.org.uk/clinician/research/bofas-publications",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bofas-hallux-valgus",
@@ -1917,7 +2173,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.bofas.org.uk",
         "label": "Morton's neuroma: /hyperbook/forefoot/mortons-neuroma (prefix"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-ankle-distraction-htg393",
@@ -1949,7 +2209,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "ankle-fracture",
@@ -1981,7 +2245,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.boa.ac.uk/standards-guidance/boasts.html",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "end-stage-ankle-arthritis",
@@ -2012,7 +2280,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.boa.ac.uk/standards-guidance/boasts/specialty-standards-specs.html",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-hallux-mtp-replacement-htg87",
@@ -2043,7 +2315,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bofas-midfoot-hindfoot",
@@ -2077,7 +2353,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.bofas.org.uk",
         "label": "Tarsal tunnel: /hyperbook/mid-hindfoot/tarsal-tunnel-syndrome (prefix"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bofas-diabetic-foot-guidelines",
@@ -2108,7 +2388,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.bofas.org.uk/clinician/research/bofas-publications",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bofas-total-ankle-replacement-statement",
@@ -2138,7 +2422,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.bofas.org.uk/clinician/research/bofas-publications",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bofas-vte-position-statement",
@@ -2169,7 +2457,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.bofas.org.uk/clinician/research/bofas-publications",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bofas-weightbearing-foot-ankle",
@@ -2205,7 +2497,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.bofas.org.uk/hyperbook/miscellaneous/post-operative-rehabilitation",
         "label": "Post-operative rehabilitation"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "girft-carpal-tunnel",
@@ -2231,7 +2527,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://gettingitrightfirsttime.co.uk/academy-resources/pathways/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-29",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "girft-trigger-digit",
@@ -2261,7 +2561,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://gettingitrightfirsttime.co.uk/surgical_specialties/plastic-surgery-burns/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "girft-wrist-ganglion",
@@ -2291,7 +2595,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://gettingitrightfirsttime.co.uk/surgical_specialties/plastic-surgery-burns/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bssh-best-guidelines",
@@ -2346,7 +2654,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://journals.sagepub.com/doi/full/10.1177/17531934241274612",
         "label": "Journal summary (Thumb UCL, J Hand Surg Eur 2024)"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-29",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bssh-hand-conditions-reference",
@@ -2381,7 +2693,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.bssh.ac.uk",
         "label": "Hand injuries index: /patients/conditions/hand_injuries (prefix"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bssh-hand-trauma-standards",
@@ -2421,7 +2737,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.bssh.ac.uk/_userfiles/pages/files/professionals/GIRFT/GIRFT-scaphoid.pdf",
         "label": "GIRFT scaphoid companion"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-29",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "ebi-carpal-tunnel-syndrome-release",
@@ -2451,7 +2771,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://ebi.aomrc.org.uk/specialty/musculoskeletal-spine/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-29",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bssh-crps-guidelines",
@@ -2482,7 +2806,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.bssh.ac.uk/professionals/guidelines.aspx",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "girft-dupuytrens",
@@ -2512,7 +2840,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://gettingitrightfirsttime.co.uk/surgical_specialties/plastic-surgery-burns/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "ebi-dupuytrens-contracture-release",
@@ -2541,7 +2873,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://ebi.aomrc.org.uk/specialty/musculoskeletal-spine/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-29",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "ebi-ganglion-excision",
@@ -2570,7 +2906,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://ebi.aomrc.org.uk/specialty/musculoskeletal-spine/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-29",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "girft-bite-wounds-pathway",
@@ -2601,7 +2941,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://gettingitrightfirsttime.co.uk/surgical_specialties/plastic-surgery-burns/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "girft-hand-lacerations",
@@ -2632,7 +2976,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://gettingitrightfirsttime.co.uk/surgical_specialties/plastic-surgery-burns/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "girft-hand-surgery-outside-theatres",
@@ -2664,7 +3012,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://gettingitrightfirsttime.co.uk/surgical_specialties/plastic-surgery-burns/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "distal-radius-fracture",
@@ -2695,7 +3047,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.boa.ac.uk/standards-guidance/boasts.html",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bssh-distal-radial-fractures",
@@ -2730,7 +3086,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.bssh.ac.uk",
         "label": "Fragility fractures: /professionals/drfs_fragility_fractures.aspx (prefix"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-mcp-ip-replacement-htg66",
@@ -2761,7 +3121,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "girft-plastic-hand-burn-report",
@@ -2792,7 +3156,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://gettingitrightfirsttime.co.uk/surgical_specialties/plastic-surgery-burns/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "girft-scaphoid-fracture-pathway",
@@ -2827,7 +3195,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.bssh.ac.uk/_userfiles/pages/files/professionals/GIRFT/GIRFT-scaphoid.pdf",
         "label": "BSSH-hosted copy"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-druj-replacement-htg451",
@@ -2858,7 +3230,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-total-wrist-replacement-htg173",
@@ -2889,7 +3265,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-tmc-replacement-htg67",
@@ -2920,7 +3300,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "girft-traumatic-amputation-hand",
@@ -2951,7 +3335,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://gettingitrightfirsttime.co.uk/surgical_specialties/plastic-surgery-burns/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "ebi-trigger-finger-release",
@@ -2980,7 +3368,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://ebi.aomrc.org.uk/specialty/musculoskeletal-spine/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-29",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bssh-vte-guidelines",
@@ -3011,7 +3403,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.bssh.ac.uk/professionals/guidelines.aspx",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bssh-walant-anaesthesia",
@@ -3049,7 +3445,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.bssh.ac.uk/professionals/regional_anaesthesia.aspx",
         "label": "Regional anaesthesia"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "acute-periprosthetic-joint-infection",
@@ -3081,7 +3481,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.boa.ac.uk/standards-guidance/boasts.html",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bajir-infection-registry",
@@ -3116,7 +3520,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://bajir.org/uk-pji-group/",
         "label": "UK PJI Group (predecessor)"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bajis-professional-resources",
@@ -3151,7 +3559,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://inform.bristol.ac.uk/resources-for-clinicians/",
         "label": "INFORM clinician resources (Bristol)"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "ebjis-peripheral-bone-infection-adults",
@@ -3186,7 +3598,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://pubmed.ncbi.nlm.nih.gov/30675635/",
         "label": "PubMed"
       }
-    ]
+    ],
+    "sourceType": "external-non-uk",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "fracture-related-infection",
@@ -3217,7 +3633,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.boa.ac.uk/standards-guidance/boasts.html",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bhs-periprosthetic-joint-infection",
@@ -3252,7 +3672,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "http://bajis.org/wp-content/uploads/2026/03/BHSSS-PJI.pdf",
         "label": "Stale BAJIS mirror (DO NOT USE)"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "boos-metastatic-bone-disease-policy",
@@ -3287,7 +3711,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.boa.ac.uk/asset/B047D54A%2D170C%2D4C57%2D87C9C5DFAC4641E7/",
         "label": "BOASt - Management of MBD (2022)"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "metastatic-bone-disease",
@@ -3319,7 +3747,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.boa.ac.uk/standards-guidance/boasts.html",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "msk-soft-tissue-infection-nec-fasc",
@@ -3351,7 +3783,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.boa.ac.uk/standards-guidance/boasts.html",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "periprosthetic-joint-infection-specs",
@@ -3382,7 +3818,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.boa.ac.uk/standards-guidance/boasts/specialty-standards-specs.html",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bess-pji-shoulder-elbow",
@@ -3413,7 +3853,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://bess.ac.uk/patient-care-pathways-and-guidelines/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bsg-bone-sarcoma-guidelines",
@@ -3453,7 +3897,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://clinicalsarcomaresearch.biomedcentral.com/articles/10.1186/s13569-016-0047-1",
         "label": "2016 superseded version (as linked by BOOS)"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bsg-soft-tissue-sarcoma-guidelines",
@@ -3487,7 +3935,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://clinicalsarcomaresearch.biomedcentral.com/articles/10.1186/s13569-016-0060-4",
         "label": "2016 superseded"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bsg-ultrasound-soft-tissue-masses",
@@ -3518,7 +3970,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://britishsarcomagroup.org.uk/guidelines/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-aci-chondrosphere-ta508",
@@ -3550,7 +4006,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "acl-injury-management",
@@ -3586,7 +4046,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.boa.ac.uk/asset/88A4C3E3%2DDF3E%2D4E51%2DA92E7D2F86D7D82A/",
         "label": "Accompanying Best Practice Book"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "acl-skeletally-immature",
@@ -3618,7 +4082,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.boa.ac.uk/standards-guidance/boasts.html",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bostaa-acl-postop-protocols",
@@ -3658,7 +4126,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://bostaa.ac.uk/James-Lind-Alliance-First-Time-Soft-Tissue-Knee-Injuries-Priority-Setting-Partne",
         "label": "JLA soft tissue knee injuries PSP"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-aposhealth-knee-htg671",
@@ -3689,7 +4161,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-rf-chondroplasty-htg340",
@@ -3720,7 +4196,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "ebi-arthroscopic-surgery-meniscal-tears",
@@ -3749,7 +4229,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://ebi.aomrc.org.uk/specialty/musculoskeletal-spine/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-29",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-trochleoplasty-htg328",
@@ -3780,7 +4264,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-aci-ta477",
@@ -3812,7 +4300,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "first-time-lateral-patellar-dislocation",
@@ -3844,7 +4336,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.boa.ac.uk/standards-guidance/boasts.html",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-focal-resurfacing-htg635",
@@ -3875,7 +4371,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-genicular-embolisation-htg595",
@@ -3906,7 +4406,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-joint-distraction-knee-htg381",
@@ -3937,7 +4441,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "ebi-knee-arthroscopy-osteoarthritis",
@@ -3966,7 +4474,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://ebi.aomrc.org.uk/specialty/musculoskeletal-spine/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-29",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "ebi-knee-mri-suspected-meniscal-tears",
@@ -3996,7 +4508,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://ebi.aomrc.org.uk/specialty/musculoskeletal-spine/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-29",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "ebi-knee-mri-osteoarthritis-suggestive",
@@ -4026,7 +4542,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://ebi.aomrc.org.uk/specialty/musculoskeletal-spine/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-29",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-mr-therapy-knee-htg588",
@@ -4057,7 +4577,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bask-meniscal-surgery-guidelines",
@@ -4088,7 +4612,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://baskonline.com/professional/meniscal-surgery-guidelines/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-29",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-mini-incision-tkr-htg220",
@@ -4119,7 +4647,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-mosaicplasty-htg463",
@@ -4150,7 +4682,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-meniscal-scaffold-htg289",
@@ -4181,7 +4717,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-prp-knee-htg497",
@@ -4213,7 +4753,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-rf-denervation-knee-htg686",
@@ -4245,7 +4789,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-shock-absorber-knee-htg366",
@@ -4276,7 +4824,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-single-step-scaffold-htg728",
@@ -4308,7 +4860,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bssh-hand-trauma-network",
@@ -4348,7 +4904,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.bssh.ac.uk/professionals/hand_surgery_in_the_uk.aspx",
         "label": "Hand Surgery in the UK (handbook)"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nhfd-exemplar-local-pathways",
@@ -4407,7 +4967,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nhfd.co.uk/FFFAP/Resources.nsf/doc?open&Worcester,+Fast-track+flow-chart.pdf",
         "label": "Worcester Fast-track flow-chart"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-29",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nhfd-dataset-v16",
@@ -4446,7 +5010,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.crownaudit.org/FFFAP/nhfd.nsf",
         "label": "Crown Audit data entry portal (login)"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nhfd-improvement-repository",
@@ -4477,7 +5045,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.fffap.org.uk/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-29",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-pffd-reconstruction-htg189",
@@ -4509,7 +5081,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bscos-patient-information",
@@ -4539,7 +5115,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.bscos.org.uk/public/guidelines-consensus-projects",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bscos-practice-guidelines-members",
@@ -4569,7 +5149,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.bscos.org.uk/public/guidelines-consensus-projects",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "link-unavailable",
+    "editorialReviewDate": "2026-07-29",
+    "inclusionReason": "Primary source is inside the BSCOS members-only area, so it is not reachable without membership. Kept because the publicly accessible BSCOS consensus projects cover part of the same ground and are linked on this entry."
   },
   {
     "id": "bscos-paediatric-boasts",
@@ -4599,7 +5183,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.bscos.org.uk/public/guidelines-consensus-projects",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-29",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "paediatric-msk-infection",
@@ -4631,7 +5219,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.boa.ac.uk/standards-guidance/boasts.html",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bscos-ddh-consensus",
@@ -4670,7 +5262,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://boneandjoint.org.uk/Article/10.1302/0301-620X.105B2.BJJ-2022-0893.R1",
         "label": "BJJ article"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "paediatric-forearm-fracture",
@@ -4701,7 +5297,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.boa.ac.uk/standards-guidance/boasts.html",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bscos-flexible-flatfoot-consensus",
@@ -4731,7 +5331,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.bscos.org.uk/public/guidelines-consensus-projects",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-29",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bscos-itw-consensus",
@@ -4761,7 +5365,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.bscos.org.uk/public/guidelines-consensus-projects",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-scfe-open-reduction-htg365",
@@ -4792,7 +5400,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bscos-msk-infection-consensus",
@@ -4823,7 +5435,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.bscos.org.uk/public/guidelines-consensus-projects/consensus-project/musculoskeletal-infection-steering-group",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "girft-paediatric-trauma-orthopaedics-report",
@@ -4854,7 +5470,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://gettingitrightfirsttime.co.uk/surgical_specialties/paediatrictrauma-and-orthopaedic-surgery/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "paediatric-supracondylar-fracture",
@@ -4886,7 +5506,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.boa.ac.uk/standards-guidance/boasts.html",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bscos-weightbearing-consensus",
@@ -4925,7 +5549,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.bscos.org.uk/Portals/0/assets/Consensus/Mobilisation-and-weightbearing-after-orthopaedic-surgery-musculoskeletal-injury-BOAST.pdf",
         "label": "BOAST guideline (Aug 2024)"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-29",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bssh-hand-trauma-app",
@@ -4956,7 +5584,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.bssh.ac.uk/professionals/guidelines.aspx",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "quick-reference",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bess-shoulder-diagnosis-poster",
@@ -4987,7 +5619,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://bess.ac.uk/patient-care-pathways-and-guidelines/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "quick-reference",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bofas-radiology",
@@ -5023,7 +5659,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.bofas.org.uk",
         "label": "Bone tumours: /hyperbook/radiology/6-bone-tumours (prefix"
       }
-    ]
+    ],
+    "sourceType": "quick-reference",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "frax-calculator",
@@ -5058,7 +5698,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nogg.org.uk/manual-data-entry",
         "label": "NOGG manual data entry"
       }
-    ]
+    ],
+    "sourceType": "quick-reference",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-gaitsmart-htg716",
@@ -5090,7 +5734,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "ebi-arthroscopic-shoulder-decompression-subacromial",
@@ -5119,7 +5767,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://ebi.aomrc.org.uk/specialty/musculoskeletal-spine/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-29",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bess-atraumatic-shoulder-instability",
@@ -5150,7 +5802,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://bess.ac.uk/patient-care-pathways-and-guidelines/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "girft-elective-total-elbow-replacement",
@@ -5180,7 +5836,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://gettingitrightfirsttime.co.uk/surgical_specialties/orthopaedic-surgery/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bess-subacromial-exercises",
@@ -5210,7 +5870,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://bess.ac.uk/patient-care-pathways-and-guidelines/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bess-frozen-shoulder",
@@ -5241,7 +5905,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://bess.ac.uk/patient-care-pathways-and-guidelines/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-29",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bess-glenohumeral-osteoarthritis",
@@ -5272,7 +5940,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://bess.ac.uk/patient-care-pathways-and-guidelines/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bess-elbow-replacement-spg",
@@ -5303,7 +5975,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://bess.ac.uk/patient-care-pathways-and-guidelines/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "ebi-scans-shoulder-pain-guided-injections",
@@ -5333,7 +6009,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://ebi.aomrc.org.uk/specialty/musculoskeletal-spine/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-29",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bess-shoulder-pain-primary-intermediate-care",
@@ -5364,7 +6044,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://bess.ac.uk/patient-care-pathways-and-guidelines/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-shoulder-resurfacing-htg227",
@@ -5395,7 +6079,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bess-subacromial-shoulder-pain",
@@ -5430,7 +6118,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://bess.ac.uk/wp-content/uploads/2020/06/Subacromial-Shoulder-Commissioning-Guide_final1.pdf",
         "label": "Commissioning Guide - Subacromial Pain (2015)"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bess-tennis-elbow",
@@ -5461,7 +6153,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://bess.ac.uk/patient-care-pathways-and-guidelines/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "girft-shoulder-arthroscopy-rotator-cuff",
@@ -5487,7 +6183,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://gettingitrightfirsttime.co.uk/academy-resources/pathways/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "needs-review",
+    "editorialReviewDate": "2026-07-29",
+    "inclusionReason": "GIRFT lists this pathway as \"Currently under review\" on its pathways index (recorded July 2026). Held as needs-review until GIRFT republishes; the entry is kept so the topic is not silently absent from the catalogue."
   },
   {
     "id": "girft-trauma-total-elbow-replacement",
@@ -5517,7 +6217,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://gettingitrightfirsttime.co.uk/surgical_specialties/orthopaedic-surgery/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bess-traumatic-anterior-shoulder-instability",
@@ -5549,7 +6253,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://bess.ac.uk/patient-care-pathways-and-guidelines/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-ai-vertebral-fracture-htg760",
@@ -5581,7 +6289,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "spine-assessment-trauma",
@@ -5621,7 +6333,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.boa.ac.uk/asset/85DDCC65-F5F8-4993-AC435E7110486F4F/",
         "label": "Archived Spinal Clearance"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-balloon-kyphoplasty-htg108",
@@ -5653,7 +6369,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bass-condition-booklets",
@@ -5688,7 +6408,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://spinesurgeons.ac.uk",
         "label": "Degenerative scoliosis: /Booklet-Degenerative-Scoliosis (prefix"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bass-patient-information",
@@ -5722,7 +6446,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://spinesurgeons.ac.uk",
         "label": "BASS NICE guidelines page: /NICE-Guidelines (prefix"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-29",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bass-british-spine-registry",
@@ -5753,7 +6481,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://spinesurgeons.ac.uk/BSR",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-chronic-pain-ng193",
@@ -5785,7 +6517,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "ros-vertebral-fracture-identification",
@@ -5817,7 +6553,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://theros.org.uk/for-healthcare-professionals/clinical-quality-hub/clinical-quality-toolkits/clinical-publications-and-resources/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-craniocaudal-implant-vcf-htg422",
@@ -5849,7 +6589,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-eos-imaging-htg274",
@@ -5881,7 +6625,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "ebi-fusion-surgery-axial-low-back-pain",
@@ -5910,7 +6658,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://ebi.aomrc.org.uk/specialty/musculoskeletal-spine/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-29",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-ifuse-si-joint-htg488",
@@ -5942,7 +6694,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "ebi-injections-isolated-low-back-pain",
@@ -5971,7 +6727,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://ebi.aomrc.org.uk/specialty/musculoskeletal-spine/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-29",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-lateral-interbody-fusion-htg431",
@@ -6002,7 +6762,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-low-back-pain-ng59",
@@ -6034,7 +6798,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "ebi-low-back-pain-imaging",
@@ -6065,7 +6833,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://ebi.aomrc.org.uk/specialty/musculoskeletal-spine/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-29",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "ebi-lumbar-discectomy",
@@ -6094,7 +6866,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://ebi.aomrc.org.uk/specialty/musculoskeletal-spine/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-29",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "girft-lumbar-facet-joint-injection",
@@ -6125,7 +6901,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://gettingitrightfirsttime.co.uk/surgical_specialties/spinal-surgery/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-29",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "girft-lumbar-nerve-root-block",
@@ -6156,7 +6936,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://gettingitrightfirsttime.co.uk/surgical_specialties/spinal-surgery/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-29",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "ebi-lumbar-radiofrequency-facet-denervation",
@@ -6185,7 +6969,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://ebi.aomrc.org.uk/specialty/musculoskeletal-spine/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-29",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-si-joint-fusion-htg436",
@@ -6216,7 +7004,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-lumbar-neurostimulation-htg641",
@@ -6247,7 +7039,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "girft-acdf-disc-replacement",
@@ -6277,7 +7073,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://gettingitrightfirsttime.co.uk/surgical_specialties/spinal-surgery/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-29",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "girft-posterior-fusion",
@@ -6307,7 +7107,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://gettingitrightfirsttime.co.uk/surgical_specialties/spinal-surgery/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-29",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-percutaneous-vertebroplasty-htg3",
@@ -6338,7 +7142,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "girft-posterior-lumbar-decompression-discectomy",
@@ -6368,7 +7176,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://gettingitrightfirsttime.co.uk/surgical_specialties/spinal-surgery/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-29",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "girft-spinal-services-report",
@@ -6399,7 +7211,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://gettingitrightfirsttime.co.uk/surgical_specialties/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bss-ais-sports-consensus",
@@ -6434,7 +7250,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.medrxiv.org/content/10.1101/2025.03.23.25324479v1",
         "label": "Original medRxiv preprint (Mar 2025, superseded by the PLOS ONE version)"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-29",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-transaxial-fusion-htg478",
@@ -6465,7 +7285,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "traumatic-spinal-cord-injury",
@@ -6497,7 +7321,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.boa.ac.uk/standards-guidance/boasts.html",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "ukssb-spine-societies-board",
@@ -6527,7 +7355,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://spinesurgeons.ac.uk/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-29",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "ebi-vertebral-augmentation-osteoporotic-fractures",
@@ -6557,7 +7389,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://ebi.aomrc.org.uk/specialty/musculoskeletal-spine/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-29",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "girft-vertebral-fragility-fracture",
@@ -6589,7 +7425,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://gettingitrightfirsttime.co.uk/surgical_specialties/spinal-surgery/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-29",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-vertebroplasty-kyphoplasty-ta279",
@@ -6621,7 +7461,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "girft-adult-orthopaedic-trauma-report",
@@ -6653,7 +7497,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://gettingitrightfirsttime.co.uk/surgical_specialties/orthopaedic-surgery/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-ai-fracture-detection-htg739",
@@ -6685,7 +7533,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "blrs-limb-reconstruction",
@@ -6716,7 +7568,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.boa.ac.uk/standards-guidance.html",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "boa-bgs-blue-book",
@@ -6747,7 +7603,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.bgs.org.uk/care-of-patients-with-fragility-fracture-blue-book",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "older-frail-trauma-patient",
@@ -6779,7 +7639,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.boa.ac.uk/standards-guidance/boasts.html",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-complex-fractures-ng37",
@@ -6811,7 +7675,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-exogen-htg296",
@@ -6843,7 +7711,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bpt-fragility-hip-femur-fracture",
@@ -6879,7 +7751,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.england.nhs.uk/long-read/25-26-nhsps-annex-b-guidance-on-currencies/",
         "label": "Superseded FY2025/26 Annex B guidance (previous Primary URL)"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-29",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-hip-fracture-cg124",
@@ -6911,7 +7787,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-hip-fracture-qs16",
@@ -6943,7 +7823,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-lower-limb-lengthening-htg613",
@@ -6975,7 +7859,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-upper-limb-lengthening-htg621",
@@ -7007,7 +7895,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-lipus-delayed-nonunion-htg481",
@@ -7039,7 +7931,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-lipus-fresh-high-risk-htg480",
@@ -7070,7 +7966,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-lipus-fresh-low-risk-htg479",
@@ -7101,7 +8001,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "mobilisation-weightbearing",
@@ -7133,7 +8037,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.boa.ac.uk/standards-guidance/boasts.html",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nhfd-annual-report-appendices-2025",
@@ -7200,7 +8108,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nhfd.co.uk/reportopen/Leads+and+governance+survey+2025",
         "label": "Leads & governance survey"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nhfd-annual-report-2025",
@@ -7248,7 +8160,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://nhfd.co.uk/20/hipfractureR.nsf/docs/2025Report",
         "label": "All years index"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nhfd-kpis",
@@ -7292,7 +8208,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://nhfd.co.uk/20/NHFDcharts.nsf/fmDashboard?readform",
         "label": "Dashboards and ratings"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nhfd-resource-repository",
@@ -7323,7 +8243,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.fffap.org.uk/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-29",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "girft-non-ambulatory-fragility-fracture",
@@ -7355,7 +8279,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://gettingitrightfirsttime.co.uk/academy-resources/pathways/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-29",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nice-noncomplex-fractures-ng38",
@@ -7387,7 +8315,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nice.org.uk/guidance/conditions-and-diseases/musculoskeletal-conditions",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "open-fractures",
@@ -7419,7 +8351,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.boa.ac.uk/standards-guidance/boasts.html",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "ots-orthopaedic-trauma-society",
@@ -7454,7 +8390,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://orthopaedictrauma.org.uk/policy/",
         "label": "OTS policy page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-29",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "outpatient-oncall-fracture-services",
@@ -7490,7 +8430,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.boa.ac.uk/asset/7DED8F00-987E-42D5-A389E739B1E03B47/",
         "label": "Archived (Fracture clinic services)"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "peripheral-nerve-injury",
@@ -7522,7 +8466,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.boa.ac.uk/standards-guidance/boasts.html",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "bhs-periprosthetic-fracture",
@@ -7554,7 +8502,11 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://britishhipsociety.com/resources/",
         "label": "Fallback / index page"
       }
-    ]
+    ],
+    "sourceType": "specialist-society",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-28",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   },
   {
     "id": "nhfd-weightbearing-guidance",
@@ -7590,6 +8542,10 @@ export const GUIDELINES_DATA: Guideline[] = [
         "url": "https://www.nhfd.co.uk/FFFAP/Resources.nsf/doc?open&NHFD_Weightbearing_Briefing_202408.pdf",
         "label": "Attempted direct deep link (returns 'Error - Not found!' on automated fetch, but renders as a live thumbnail titled 'Weightbearing guidance' on the parent page)"
       }
-    ]
+    ],
+    "sourceType": "national",
+    "guidanceStatus": "current",
+    "editorialReviewDate": "2026-07-29",
+    "inclusionReason": "Included in the verified master set of 231 entries loaded from the audited workbook (data audit, 2026-08-22). Provenance backfill — not an individual editorial judgement."
   }
 ];
