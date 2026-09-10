@@ -93,6 +93,30 @@ const GUIDANCE_STATUS_OPTIONS: { value: GuidanceStatus; label: string; hint: str
   { value: 'archived',            label: 'Archived',             hint: 'Removed from the catalogue by an editor. Kept and recoverable.' },
 ];
 
+const SOURCE_TYPE_OPTIONS: { value: Guideline['sourceType']; label: string }[] = [
+  { value: 'national',           label: 'National (NICE / GIRFT / NHSE)' },
+  { value: 'specialist-society', label: 'UK specialist society' },
+  { value: 'local-pruh',         label: 'Local — PRUH' },
+  { value: 'quick-reference',    label: 'Quick reference' },
+  { value: 'external-non-uk',    label: 'Outside UK' },
+];
+
+/**
+ * Statuses that cannot be set without an explanation.
+ *
+ * Mirrors the database's guidelines_inclusion_reason_required CHECK exactly. If
+ * these two ever disagree, the form lets an editor build a row the database
+ * then rejects — so they are kept side by side deliberately. The DB is the
+ * boundary; this is the part that explains itself before you hit Save.
+ */
+const REASON_REQUIRED_STATUSES: GuidanceStatus[] = [
+  'superseded', 'archived', 'needs-review', 'no-source-identified',
+];
+
+export function inclusionReasonRequired(s: GuidanceStatus): boolean {
+  return REASON_REQUIRED_STATUSES.includes(s);
+}
+
 function guidanceStatusLabel(s: GuidanceStatus): string {
   return GUIDANCE_STATUS_OPTIONS.find(o => o.value === s)?.label ?? s;
 }
@@ -1842,6 +1866,13 @@ function EditModal({
   const [note, setNote] = useState('');
   const noteOk = isValidChangeNote(note);
 
+  // A non-current status has to be explained. Mirrors the database CHECK, so
+  // Save is blocked here rather than letting the write fail at PostgREST with
+  // a 23514 the editor would have to decode.
+  const reasonRequired = inclusionReasonRequired(form.guidanceStatus);
+  const reasonOk = !reasonRequired || (form.inclusionReason ?? '').trim().length > 0;
+  const canSave = noteOk && reasonOk;
+
   const writable = canWrite(WRITES_ENABLED, canEdit);
   const blockedReason = writeBlockedReason(WRITES_ENABLED, canEdit);
 
@@ -1950,6 +1981,82 @@ function EditModal({
                 {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
               </select>
             </div>
+          </div>
+
+          {/* ── Editorial metadata ──────────────────────────────────────────
+              What the guidance IS, kept apart from the link fields below,
+              which only record whether a URL responded. */}
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className={lbl}>Source type</label>
+              <select
+                value={form.sourceType}
+                onChange={e => set('sourceType', e.target.value as Guideline['sourceType'])}
+                className={inp}
+              >
+                {SOURCE_TYPE_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className={lbl}>Guidance status</label>
+              <select
+                value={form.guidanceStatus}
+                onChange={e => set('guidanceStatus', e.target.value as GuidanceStatus)}
+                className={inp}
+              >
+                {GUIDANCE_STATUS_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            </div>
+          </div>
+          <p className="text-[10px] text-slate-500 -mt-1 mb-1.5">
+            {guidanceStatusHint(form.guidanceStatus)}
+          </p>
+
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className={lbl}>Editorial review date</label>
+              <input
+                type="date"
+                value={form.editorialReviewDate ?? ''}
+                onChange={e => set('editorialReviewDate', e.target.value)}
+                className={inp}
+              />
+              <p className="text-[10px] text-slate-400 mt-0.5">When a person last checked this entry.</p>
+            </div>
+            <div>
+              <label className={lbl}>Scope</label>
+              <input
+                type="text"
+                value={form.scopeNote ?? ''}
+                onChange={e => set('scopeNote', e.target.value)}
+                placeholder="e.g. adults 16+, secondary care"
+                className={inp}
+              />
+              <p className="text-[10px] text-slate-400 mt-0.5">
+                Only what the source states. Leave blank if it does not say.
+              </p>
+            </div>
+          </div>
+
+          <div className="mb-1.5">
+            <label className={lbl}>
+              Inclusion / status reason{reasonRequired && <span className="text-red-600"> *</span>}
+            </label>
+            <textarea
+              value={form.inclusionReason ?? ''}
+              onChange={e => set('inclusionReason', e.target.value)}
+              rows={2}
+              placeholder={reasonRequired
+                ? `Why is this "${guidanceStatusLabel(form.guidanceStatus)}"? Required.`
+                : 'Why this entry is in the catalogue (optional while status is Current).'}
+              className={cn(inp, "resize-none", reasonRequired && !reasonOk && "border-red-300")}
+            />
+            {reasonRequired && !reasonOk && (
+              <p className="text-[10px] text-red-600 mt-0.5">
+                A reason is required for “{guidanceStatusLabel(form.guidanceStatus)}”. The database
+                rejects this status without one, so Save is disabled until it is filled in.
+              </p>
+            )}
           </div>
 
           {/* Link Verification Status · Last Verified */}
@@ -2110,11 +2217,15 @@ This archives the entry rather than deleting it: it disappears from the site, bu
             {writable ? (
               <button
                 onClick={() => onSave(form, note)}
-                disabled={!noteOk}
-                title={noteOk ? undefined : "Add a change note before saving"}
+                disabled={!canSave}
+                title={
+                  !reasonOk ? `A reason is required for "${guidanceStatusLabel(form.guidanceStatus)}"`
+                    : !noteOk ? 'Add a change note before saving'
+                    : undefined
+                }
                 className={cn(
                   "py-1.5 px-4 rounded text-[12px] font-medium transition-colors",
-                  noteOk
+                  canSave
                     ? "bg-[#0F172A] text-white hover:bg-slate-800"
                     : "bg-slate-200 text-slate-500 cursor-not-allowed"
                 )}>

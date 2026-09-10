@@ -95,7 +95,14 @@ const app = readFileSync('src/App.tsx', 'utf8');
 check('App.tsx archives instead of removing', app.includes('guidelinesService.archive(') && !app.includes('guidelinesService.remove('));
 check('the merge path archives the losing row rather than deleting it', app.includes('archive(duplicate.id)'));
 check('every persist supplies a note (persistGuideline takes one)', /persistGuideline = async \(updated: Guideline, isNew: boolean, note: string\)/.test(app));
-check('the Save button is gated on a valid note', app.includes('disabled={!noteOk}'));
+// Save is now gated on BOTH a valid change note and, where the chosen guidance
+// status demands it, an inclusion reason. canSave is the conjunction of the two.
+check('the Save button is gated on a valid note', app.includes('const canSave = noteOk && reasonOk;'));
+check('the Save button is disabled via that combined gate', app.includes('disabled={!canSave}'));
+check('a non-current guidance status requires a reason before saving',
+  app.includes('const reasonRequired = inclusionReasonRequired(form.guidanceStatus);'));
+check('the required-reason list mirrors the database CHECK exactly',
+  /REASON_REQUIRED_STATUSES: GuidanceStatus\[\] = \[\s*'superseded', 'archived', 'needs-review', 'no-source-identified',/.test(app));
 
 // The archived predicate itself, against a fixture (the live dataset has no
 // archived rows, so asserting on it would pass vacuously).
