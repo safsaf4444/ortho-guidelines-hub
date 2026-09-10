@@ -1,16 +1,24 @@
 /**
  * scripts/tests/write-access.test.ts
  * ──────────────────────────────────
- * Offline tests for the local-only editor write gate: src/lib/write-access.ts's
- * WRITES_ENABLED × LOCAL_EDITOR_MODE gating logic, plus a build-output safety
- * net for the one invariant this whole design rests on — that a production
- * bundle never contains the service-role key.
+ * Offline tests for the write gate, under the PUBLIC EDITING model.
  *
- * Replaces the former auth-editor.test.ts. The magic-link sign-in, the editor
- * UUID allowlist and their modules (src/lib/auth.ts, src/lib/magic-link.ts,
- * src/lib/editor-allowlist.ts) were removed when editing became a local-only
- * capability: there is no account, no sign-in and no allowlist to test any
- * more. See git history for the previous version.
+ * ⚠ Read this before "fixing" a failure here. Editing on this site is public
+ * and unauthenticated by deliberate decision of the site owner: `guidelines`
+ * carries insert/update/delete RLS policies for the anon role, so any visitor
+ * can add, edit or delete clinical guideline content. See SECURITY.md and
+ * supabase-migration-public-write-access.sql.
+ *
+ * This file therefore NO LONGER asserts that the public cannot write — that
+ * assumption is intentionally false now. What it still guards is the thing
+ * that must remain true regardless of who may write:
+ *
+ *   public write access is granted by RLS, NEVER by shipping a secret key.
+ *
+ * If the service-role key ever appears in a build, that is a real incident:
+ * it bypasses RLS entirely, so the rollback in
+ * supabase-migration-public-write-access.sql would no longer close the write
+ * path, and the key would also grant access to everything else in the project.
  *
  * Run:   npx tsx scripts/tests/write-access.test.ts   (or: npm run test:offline)
  * Exit:  0 = all assertions passed, 1 = at least one failure.
@@ -36,25 +44,25 @@ function eq(name: string, actual: unknown, expected: unknown) {
   check(name, a === e, `expected ${e}, got ${a}`);
 }
 
-console.log('\n[1] canWrite — both conditions required, neither sufficient');
+console.log('\n[1] canWrite — kill switch AND a live database, both required');
 
-eq('local editor on a dev build CAN write', canWrite(true, true), true);
-eq('local editor cannot write while WRITES_ENABLED is false', canWrite(false, true), false);
-eq('a deployed/public session cannot write even with WRITES_ENABLED true', canWrite(true, false), false);
+eq('live DB with writes enabled can write', canWrite(true, true), true);
+eq('kill switch off blocks writing even with a live DB', canWrite(false, true), false);
+eq('static/offline fallback cannot write', canWrite(true, false), false);
 eq('neither condition met', canWrite(false, false), false);
 
 console.log('\n[2] writeBlockedReason — the two failure modes stay distinguishable');
 
 eq('not blocked when both hold', writeBlockedReason(true, true), null);
 eq(
-  'the kill switch wins over local-editor mode — one clear reason, not a stacked one',
+  'the kill switch wins — one clear reason, not a stacked one',
   writeBlockedReason(false, true),
   'Read-only mode — publication is disabled.'
 );
 eq(
-  'a public/deployed session is told editing is local-only, not shown a raw Supabase error',
+  'offline/static mode is explained as such, not as a permission problem',
   writeBlockedReason(true, false),
-  'Editing is available only when running the hub locally.'
+  'Editing needs the live database — not available in offline/static mode.'
 );
 eq(
   'kill switch also wins when neither condition holds',
@@ -62,31 +70,42 @@ eq(
   'Read-only mode — publication is disabled.'
 );
 
-console.log('\n[3] The deployed site is read-only by construction, not by policy');
+console.log('\n[3] Write access comes from RLS, not from a shipped secret');
 
-// This is the load-bearing invariant. WRITES_ENABLED is true in src/App.tsx,
-// so the ONLY thing keeping the public site read-only is that its bundle has
-// no service-role key and therefore reports LOCAL_EDITOR_MODE === false.
 const appSrc = readFileSync('src/App.tsx', 'utf8');
 check(
-  'App.tsx derives canEdit from LOCAL_EDITOR_MODE, not from any sign-in state',
-  /const canEdit = LOCAL_EDITOR_MODE;/.test(appSrc),
+  'App.tsx gates on isSupabaseEnabled — no local-editor / sign-in gate remains',
+  /const canEdit = isSupabaseEnabled;/.test(appSrc) && !appSrc.includes('LOCAL_EDITOR_MODE'),
 );
 check(
   'no sign-in / allowlist module has crept back into App.tsx',
   !/useEditorAuth|EditorAuthControl|editor-allowlist|VITE_EDITOR_UUIDS/.test(appSrc),
 );
 
-const viteConfig = readFileSync('vite.config.ts', 'utf8');
+// Comments are stripped first: vite.config.ts deliberately DOCUMENTS the
+// removed key-injection mechanism by name, and a naive substring check would
+// match that prose and fail. What matters is that no live code injects a key.
+const viteConfigCode = readFileSync('vite.config.ts', 'utf8')
+  .split(String.fromCharCode(10))
+  .filter(line => !line.trim().startsWith('//'))
+  .join('!');
 check(
-  'vite.config.ts still gates the injected key on `command === \'serve\'`',
-  /command === 'serve'/.test(viteConfig) && /__LOCAL_EDITOR_KEY__/.test(viteConfig),
+  'vite.config.ts injects NO key into the bundle at all',
+  !viteConfigCode.includes('__LOCAL_EDITOR_KEY__')
+    && !viteConfigCode.includes('localEditorKeyPlugin')
+    && !viteConfigCode.includes('SUPABASE_SERVICE_ROLE_KEY')
+    && !viteConfigCode.includes('loadEnv')
+    && !viteConfigCode.includes('define:'),
 );
 
-// Safety net over the real build output. Skipped when dist/ is absent so the
-// offline suite stays runnable without a build; when dist/ IS present (as it
-// is in the verification sequence: tsc -b, test:offline, build, test:offline)
-// this is the assertion that would actually catch a leaked key.
+const supabaseSrc = readFileSync('src/lib/supabase.ts', 'utf8');
+check(
+  'the client is built from the anon key only',
+  supabaseSrc.includes('anonKey') && !supabaseSrc.includes('__LOCAL_EDITOR_KEY__'),
+);
+
+// The load-bearing check. Skipped when dist/ is absent so the suite stays
+// runnable without a build; run `npm run build` first to exercise it.
 const serviceKey = (() => {
   if (!existsSync('.env.local')) return null;
   const m = readFileSync('.env.local', 'utf8').match(/^SUPABASE_SERVICE_ROLE_KEY=(.+)$/m);
@@ -96,8 +115,6 @@ const serviceKey = (() => {
 
 if (!existsSync('dist')) {
   console.log('  SKIP  dist/ not built — run `npm run build` then re-run to check the bundle');
-} else if (!serviceKey) {
-  console.log('  SKIP  no service-role key in .env.local — nothing to search the bundle for');
 } else {
   const files: string[] = [];
   (function walk(dir: string) {
@@ -108,14 +125,18 @@ if (!existsSync('dist')) {
     }
   })('dist');
 
-  const leaked = files.filter(f => {
-    try { return readFileSync(f, 'utf8').includes(serviceKey); } catch { return false; }
-  });
-  check(
-    `the service-role key appears in NONE of the ${files.length} built files in dist/`,
-    leaked.length === 0,
-    leaked.length ? `LEAKED IN: ${leaked.join(', ')}` : '',
-  );
+  if (serviceKey) {
+    const leaked = files.filter(f => {
+      try { return readFileSync(f, 'utf8').includes(serviceKey); } catch { return false; }
+    });
+    check(
+      `the service-role key appears in NONE of the ${files.length} built files in dist/`,
+      leaked.length === 0,
+      leaked.length ? `LEAKED IN: ${leaked.join(', ')}` : '',
+    );
+  } else {
+    console.log('  SKIP  no service-role key in .env.local — nothing to search the bundle for');
+  }
 
   const jwtLike = files.filter(f => {
     try { return /"role"\s*:\s*"service_role"|eyJ[A-Za-z0-9_-]{20,}\.eyJ[A-Za-z0-9_-]{20,}/.test(readFileSync(f, 'utf8')); } catch { return false; }
@@ -125,31 +146,11 @@ if (!existsSync('dist')) {
     jwtLike.length === 0,
     jwtLike.length ? `SUSPECT: ${jwtLike.join(', ')}` : '',
   );
-}
 
-// The removed magic-link sign-in UI must not reappear in a build. Gated only
-// on dist/ existing, not on the key, so it runs even without a configured
-// .env.local.
-//
-// Deliberately asserts on OUR OWN user-facing strings, never on Supabase
-// client method names: @supabase/auth-js bundles the whole GoTrue client, so
-// `signInWithOtp` (along with signInWithPassword, signInWithOAuth, …) is
-// present in dist/ as vendored library code and always will be. That is inert
-// — there are no Auth users, and `guidelines` has no write policy for the
-// authenticated role either, so holding a session grants nothing.
-if (existsSync('dist')) {
-  const distFiles: string[] = [];
-  (function walk(dir: string) {
-    for (const e of readdirSync(dir, { withFileTypes: true })) {
-      const full = join(dir, e.name);
-      if (e.isDirectory()) walk(full);
-      else distFiles.push(full);
-    }
-  })('dist');
-  const distText = distFiles
+  const distText = files
     .filter(f => f.endsWith('.js') || f.endsWith('.html') || f.endsWith('.css'))
     .map(f => { try { return readFileSync(f, 'utf8'); } catch { return ''; } })
-    .join(''); 
+    .join('');
 
   for (const dead of [
     'Editor sign in',

@@ -25,31 +25,29 @@ The app works without a database (falls back to static data), but to enable data
 
 ## Security — current status
 
-**Status: the public site is read-only. Editing is a local-only capability —
-there is no sign-in, and no account exists.**
+**Status: guideline content is PUBLICLY EDITABLE. Anyone can add, edit or
+delete entries on the live site, with no sign-in.**
 
-- **Database, live:** `supabase-migration-readonly-lockdown.sql` and
-  `supabase-migration-add-changelog-with-rls.sql` have both been run.
-  `public.guidelines` has RLS enabled with a single public read-only `SELECT`
-  policy and **no** insert/update/delete policy; `public.guideline_changelog`
-  is the same shape (public `SELECT`, no write policy, so it is append-only
-  for every non-service caller). Nobody can write through the public anon key,
-  the Data API, or the deployed app. The `service_role` key bypasses RLS, so
-  `scripts/*.ts` keep working.
-- **App:** editing is enabled (`WRITES_ENABLED = true`) but additionally
-  requires `LOCAL_EDITOR_MODE`, which is true only under `npm run dev` with
-  `SUPABASE_SERVICE_ROLE_KEY` in `.env.local`. `vite.config.ts` injects that
-  key only when serving; every build substitutes an empty string, so the
-  deployed bundle carries only the public anon key. Run the hub locally and
-  the Add/Edit/Delete/Merge controls and the changelog "Add note" box appear;
-  the deployed site never shows them.
-- **Removed:** magic-link sign-in, the editor UUID allowlist and
-  `VITE_EDITOR_UUIDS`. See [SECURITY.md](SECURITY.md) for the full access
-  model, the evidence it was verified against, and rollback steps.
+This is a deliberate decision by the site owner, not an oversight. Read
+[SECURITY.md](SECURITY.md) before changing anything in this area.
+
+- **Database, live:** `guidelines` has RLS enabled with public `SELECT`,
+  `INSERT`, `UPDATE` and `DELETE` policies for the `anon` role
+  (`supabase-migration-public-write-access.sql`). `guideline_changelog` has
+  public `SELECT` and `INSERT`, and deliberately no `UPDATE`/`DELETE`, so it
+  stays append-only — anyone can add a note, nobody can alter or remove one.
+- **App:** write controls render for every visitor. `WRITES_ENABLED = true`
+  plus `isSupabaseEnabled` is all that gates them, and neither is a security
+  control — the permission lives in RLS. Setting `WRITES_ENABLED = false`
+  hides the buttons but does NOT close the write path; only dropping the RLS
+  policies does that.
+- **No secret is shipped.** Public writes are granted via RLS using the
+  ordinary public anon key. The service-role key is not in any bundle, and
+  `scripts/tests/write-access.test.ts` fails the build if it ever appears.
 
   Browsing, search, filtering, section/provider grouping, cross-references,
   the read-only Pending Review dashboard, the catalogue and the static
-  fallback are unchanged for all visitors.
+  fallback are unchanged.
 
 ## Data remediation ordering
 

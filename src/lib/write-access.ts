@@ -4,23 +4,23 @@
  * in App.tsx (refuse to call Supabase), so the two can never disagree.
  *
  * Two independent conditions, both required:
- *   - writesEnabled:  a hardcoded build-time kill switch (see App.tsx).
- *   - localEditorMode: this bundle was served by `vite dev` with a
- *     service-role key present, i.e. the hub is running locally on an
- *     editor's machine (see src/lib/supabase.ts).
+ *   - writesEnabled:   a hardcoded build-time kill switch (see App.tsx). The
+ *     one remaining way to turn editing off everywhere without a DB change.
+ *   - supabaseEnabled: a live database is actually configured. In static
+ *     fallback mode `supabase` is null and every write would throw, so there
+ *     is no point offering the control.
  *
- * There is no sign-in, no account and no editor allowlist: editing is a
- * local-only capability, and the deployed public site has
- * localEditorMode === false baked in at build time.
+ * NOTE: neither condition is an access control any more, and this module is
+ * NOT a security boundary. Write permission is granted publicly at the
+ * database layer — `guidelines` carries insert/update/delete RLS policies for
+ * the anon role — so any visitor to the deployed site can edit, and could do
+ * so with curl even if this gate returned false. See SECURITY.md.
  *
- * Neither this function nor its callers are the real boundary. The real
- * boundary is that the deployed bundle only ever holds the public anon key,
- * and `guidelines` has no write policy for it — so a public visitor cannot
- * write even by calling the API directly with devtools open. This is the
- * UI/app-layer gate that avoids showing a control that would fail anyway.
+ * This is now purely a UI-consistency gate: it decides whether to *show* the
+ * controls, not who is *allowed* to use them.
  */
-export function canWrite(writesEnabled: boolean, localEditorMode: boolean): boolean {
-  return writesEnabled && localEditorMode;
+export function canWrite(writesEnabled: boolean, supabaseEnabled: boolean): boolean {
+  return writesEnabled && supabaseEnabled;
 }
 
 /**
@@ -28,8 +28,8 @@ export function canWrite(writesEnabled: boolean, localEditorMode: boolean): bool
  * blocked. Distinguishes the two failure modes so the UI can explain the
  * right one instead of a generic "not allowed" or a raw Supabase error.
  */
-export function writeBlockedReason(writesEnabled: boolean, localEditorMode: boolean): string | null {
-  if (canWrite(writesEnabled, localEditorMode)) return null;
+export function writeBlockedReason(writesEnabled: boolean, supabaseEnabled: boolean): string | null {
+  if (canWrite(writesEnabled, supabaseEnabled)) return null;
   if (!writesEnabled) return 'Read-only mode — publication is disabled.';
-  return 'Editing is available only when running the hub locally.';
+  return 'Editing needs the live database — not available in offline/static mode.';
 }

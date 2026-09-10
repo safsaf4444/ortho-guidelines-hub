@@ -1,127 +1,179 @@
 # Security — access model
 
+## Summary
+
+**Guideline content on this site is publicly editable by anyone, with no
+sign-in.** Any visitor to https://safsaf4444.github.io/ortho-guidelines-hub/
+can add and edit clinical guideline entries. So can anyone using the REST
+API directly, with no browser involved.
+
+Two safeguards bound the damage a single edit can do: entries can be
+**archived but not deleted**, and **every edit requires a change note**. See
+"Safeguards" below. Neither restricts who may edit.
+
+This is a **deliberate, explicit decision by the site owner**, taken after the
+trade-off was set out in full. It is not an oversight, a misconfiguration, or
+a bug. If you are reviewing this repository and expected a read-only public
+site, that was the previous model — see "History" below.
+
 ## Current live state (verified against the Supabase project, not assumed)
 
-Verified 8 September 2026 by querying `pg_policies`/`pg_class` directly and by
-attempting real writes with the public anon key (see "Evidence" below).
+Verified 9 September 2026 by querying `pg_policies` and by performing a real
+insert/update/delete round-trip with the public anon key.
 
-- `public.guidelines` — RLS **enabled**, exactly one policy:
-  `guidelines_public_read` (SELECT, `anon`+`authenticated`, `using (true)`),
-  applied by `supabase-migration-readonly-lockdown.sql`. **There is no
-  insert/update/delete policy, so every write by anon or authenticated is
-  denied.** 231 rows.
-- `public.guideline_changelog` — created by
-  `supabase-migration-add-changelog-with-rls.sql`. RLS **enabled**, exactly one
-  policy: `changelog_public_read` (SELECT). **No write policy**, so inserts,
-  updates and deletes are denied for anon and authenticated alike — append-only
-  is enforced at the database layer for every non-service caller.
-- `auth.users` — **0 rows, and expected to stay that way.** This app has no
-  sign-in of any kind.
+| Table | RLS | Policies | Effect for an anonymous visitor |
+|---|---|---|---|
+| `public.guidelines` | enabled | `guidelines_public_read` (SELECT), `guidelines_public_insert` (INSERT), `guidelines_public_update` (UPDATE) — **no DELETE policy** | read, create and edit; **cannot destroy a row** |
+| `public.guideline_changelog` | enabled | `changelog_public_read` (SELECT), `changelog_public_insert` (INSERT), plus a not-blank CHECK constraint | read and append a non-empty note; **cannot** edit or delete existing notes |
 
-## Access model (intentional)
+`auth.users` is empty and expected to stay empty. There is no sign-in of any
+kind in the application.
 
-**Reads are public.** All 231 guidelines, the changelog, and the read-only
-Pending Review dashboard. This is by design and unaffected by everything below.
+## What this means in practice
 
-**Writes are local-only.** Editing happens when a maintainer runs the hub on
-their own machine with `npm run dev`. The deployed site at
-`safsaf4444.github.io/ortho-guidelines-hub/` has no write path at all.
+- The anon key is public by design — it ships in every JS bundle and is a
+  literal in `src/lib/supabase.ts` and `.github/workflows/deploy.yml`. It is
+  not a secret and cannot be made one.
+- Therefore a single `curl` command with that key can modify or delete any of
+  the 231 guideline rows. No browser, no UI, no rate limit.
+- **There is no record of who made a change.** No accounts, no IP logging in
+  the application layer, no attribution. `guidelines.updated_at` records only
+  *when* a row last changed.
+- Deletion is **not** possible — see "Safeguards" below. The worst a visitor
+  can do is archive an entry or overwrite its text, both of which are
+  recoverable.
+- The exposure is a property of the database, not of the deployed frontend.
+  It began the moment the RLS policies were applied and is unaffected by which
+  bundle is deployed or by the `WRITES_ENABLED` flag in the app.
 
-Three independent layers, outer to inner:
+### What still holds
 
-1. **Database (authoritative).** RLS is enabled on both tables and neither has
-   a write policy. A direct REST call with the public anon key cannot write,
-   regardless of anything in the app. This is the real security boundary.
-2. **Bundle contents (structural).** The write path needs the service-role key,
-   which bypasses RLS. That key is injected into the client **only** by
-   `vite.config.ts`'s `localEditorKeyPlugin`, and only when
-   `command === 'serve'`. Every `vite build` — local or CI — substitutes the
-   empty string. A deployed bundle therefore holds only the public anon key,
-   and cannot write even if its UI were forced to render.
-3. **UI gate (convenience).** Every write control is gated
-   `WRITES_ENABLED && canEdit`, where `canEdit` is `LOCAL_EDITOR_MODE` from
-   `src/lib/supabase.ts` — true only when a service-role key was injected.
-   Centralised in `src/lib/write-access.ts` so the controls and the write
-   handlers can never disagree.
+- **The changelog is append-only.** `guideline_changelog` has an INSERT policy
+  but deliberately no UPDATE or DELETE policy, so with RLS enabled Postgres
+  denies both. Anyone can add a note; nobody can alter or remove one through
+  the public API. This is the only tamper-resistant record in the system.
+- **No secret key is shipped.** Public write access is granted by RLS, which is
+  the correct mechanism. The service-role key is not in any bundle — see the
+  regression test below. This matters: if it ever were shipped, dropping the
+  RLS policies would no longer close the write path.
+- **Backups exist** under `backups/` (gitignored, local only). With soft
+  delete in place these are now the second line of recovery rather than the
+  first — un-archiving is. Worth confirming they are current regardless.
 
-Note that layer 3 is *not* a security boundary and no longer removes the write
-UI from the production bundle (the gate reads a runtime import inside
-components, so the minifier cannot fold it). The write markup ships inert:
-it never renders, because `canEdit` is false at the root and threaded down, and
-every write it could attempt is denied by layer 1 anyway.
+## Safeguards
+
+Two limits sit on top of public write access. Neither restricts *who* may
+edit — that is deliberately unrestricted — they limit how much damage a single
+edit can do and make sure it leaves a trace.
+
+### 1. Soft delete
+
+`guidelines` has **no DELETE policy**, so a `DELETE` from anon affects zero
+rows however it is issued. The app's "Remove" action performs
+`UPDATE ... SET archived = true` instead. The row physically remains and is
+restored with one statement:
+
+```sql
+select id, topic from public.guidelines where archived = true;   -- find
+update public.guidelines set archived = false where id = '<id>'; -- restore
+```
+
+`guidelinesService.getAll()` filters on `archived = false`, and it is the only
+read path in the app, so archived entries are absent from the list, search,
+grouping, the catalogue and duplicate detection without any per-view work. The
+merge flow archives the losing row rather than deleting it, for the same reason.
+
+This converts the one irreversible action into a reversible one: vandalism now
+costs a single UPDATE to undo, not a restore from backup.
+
+### 2. Mandatory change notes
+
+There are no accounts, so a change can never be attributed to a person. A
+required note is what replaces attribution: every write records **what**
+changed and **why**, even though **who** is unknowable.
+
+- **In the UI** — the edit and add form has a required Change note field and
+  the Save button stays disabled until it is non-empty.
+- **In the database** — `guideline_changelog_description_not_blank`
+  (`length(btrim(description)) > 0`) rejects empty and whitespace-only notes,
+  so this holds for direct API callers too, not only the UI. Verified: empty
+  and whitespace notes return `23514`, a missing field returns `23502`.
+- **Single-click actions** ("Mark link checked today", the link-status
+  dropdown, archiving, merging) generate their own note, prefixed
+  `Automatic:`, so the invariant "every write leaves a changelog entry" holds
+  without demanding typed prose for one click.
+- Notes are append-only and capped at 500 characters.
+
+#### What the note requirement does and does not guarantee
+
+Stated plainly, because the difference matters:
+
+- **Guaranteed:** no note can be blank, whoever writes it and however.
+- **Not guaranteed:** that every guideline change is accompanied by a note.
+  PostgREST issues the guideline write and the note write as two separate
+  requests, so someone using curl can `PATCH` a guideline and simply never
+  post a note. The UI always writes both, and reports loudly if the note fails
+  after the guideline succeeded — but the UI is not the only way in.
+
+Closing that gap needs both writes moved into a single `SECURITY DEFINER`
+function (an RPC that takes the patch and the note, validates the note, and
+writes both in one transaction) with direct `UPDATE`/`INSERT` on `guidelines`
+then revoked from anon. That is the correct fix and is not yet implemented.
 
 ## Keys
 
-- The **anon key** is public by design — it ships in the browser bundle and is
-  a literal in `src/lib/supabase.ts` and `.github/workflows/deploy.yml`. RLS is
-  what protects writes, not the secrecy of this key.
-- The **service_role key** bypasses RLS. It is used by:
-  - `scripts/*.ts` server-side, in GitHub Actions (seed, upsert-verified,
-    export-static, detect-changes, approve-change, dedupe-db); and
-  - **the local dev browser build only** — this is new, and is what makes
-    local editing work without any sign-in.
-
-  It lives in `.env.local`, which is gitignored (`*.local`). It is **not** a
-  `VITE_`-prefixed variable, deliberately: prefixed variables are exposed to
-  client code in every mode, which is exactly the property this key must not
-  have. The only route into a bundle is the serve-gated plugin above.
-
-  `.github/workflows/deploy.yml` does not pass it, and must never be changed to.
+- **anon key** — public, ships in the browser bundle. Now carries full
+  read/write/delete permission on `guidelines` via the policies above.
+- **service_role key** — bypasses RLS. Used only by `scripts/*.ts` server-side
+  and in GitHub Actions. It is **not** used by the browser client at all any
+  more, in any mode, and must never be added to
+  `.github/workflows/deploy.yml`.
 
 ### Regression test
 
-`scripts/tests/write-access.test.ts` (in `npm run test:offline`) greps the
-entire built `dist/` tree for the service-role key and for any JWT-shaped
-string whenever a build is present, and asserts the serve-only gate is still in
-`vite.config.ts`. Run `npm run build` before `npm run test:offline` to exercise
-it.
+`scripts/tests/write-access.test.ts` (in `npm run test:offline`) asserts that
+no service-role key and no JWT-shaped string appears anywhere in a built
+`dist/`, that `vite.config.ts` injects no key into the bundle, and that the
+removed sign-in UI has not returned. It deliberately no longer asserts that the
+public cannot write — that assumption is now intentionally false.
 
-## Evidence (8 September 2026)
+## Rollback — closing public write access again
 
-Writes attempted against the live project using the public anon key — the exact
-key in the deployed bundle:
+Immediate, takes effect for every client at once, no redeploy required:
 
-| Attempt | Result |
-|---|---|
-| `PATCH /guidelines?id=eq.pelvic-fracture` | HTTP 200, **0 rows affected** — RLS `USING` matched nothing |
-| `DELETE /guidelines?id=eq.pelvic-fracture` | HTTP 200, **0 rows affected**; table still 231 rows |
-| `POST /guideline_changelog` | HTTP 401, `42501 new row violates row-level security policy` |
-| `GET /guideline_changelog` | HTTP 200 — public read works as intended |
+```sql
+begin;
+  drop policy if exists guidelines_public_insert  on public.guidelines;
+  drop policy if exists guidelines_public_update  on public.guidelines;
+  drop policy if exists guidelines_public_delete  on public.guidelines;
+  drop policy if exists changelog_public_insert   on public.guideline_changelog;
+commit;
+```
 
-Note the update/delete cases return **200, not 403**. PostgREST reports zero
-matched rows rather than an authorization error when RLS filters the row set.
-The row was confirmed byte-identical afterwards. A 200 here is not a successful
-write.
+This restores the previous posture: public read, no writes for anon. The read
+policies are untouched, so the site keeps working as a reference. Setting
+`WRITES_ENABLED = false` in `src/App.tsx` hides the write controls but does
+**not** close the write path — only dropping the policies does that.
 
-## What was removed, and why
+## History
 
-Magic-link sign-in (`signInWithOtp`), the editor UUID allowlist and the
-`VITE_EDITOR_UUIDS` build variable were **removed**, not disabled. The modules
-`src/lib/auth.ts`, `src/lib/magic-link.ts`, `src/lib/editor-allowlist.ts` and
-`src/components/EditorAuthControl.tsx` are deleted; see git history.
+This site has had four access models. The current one is the fourth.
 
-That design required an `auth.uid() = any(array[...])` write policy on
-`guidelines` — i.e. a write path reachable from the public internet, guarded by
-one account's credentials. Local-only editing needs no accounts, no allowlist
-to keep in sync between app and database, no redirect URLs, no email delivery,
-and adds **no** write policy. The public security posture is identical to the
-read-only lockdown that preceded it.
-
-The trade-off accepted: anyone holding both a checkout and the service-role key
-can edit. That is the same trust boundary the `scripts/*.ts` tooling has always
-had.
-
-## Rollback
-
-- **App layer:** a normal `git revert`. No data migration is involved.
-- **Disable editing everywhere, including locally:** set `WRITES_ENABLED` to
-  `false` in `src/App.tsx`, or remove `SUPABASE_SERVICE_ROLE_KEY` from
-  `.env.local`. Either is sufficient on its own.
-- **Database:** the commented `ROLLBACK` block at the bottom of
-  `supabase-migration-add-changelog-with-rls.sql` drops `changelog_public_read`
-  and the `guideline_changelog` table. It does not touch
-  `guidelines_public_read`, which predates it. `guidelines` is not modified by
-  that migration at all, so there is nothing to undo on it.
-- **Make the changelog non-public:** `drop policy changelog_public_read on
-  public.guideline_changelog;`. Reads then fail closed and the app degrades to
-  its honest "not available" state (`src/lib/changelog-load.ts`).
+1. **Read-only lockdown** (`supabase-migration-readonly-lockdown.sql`) — RLS
+   on, a single public SELECT policy, no writes for anyone.
+2. **Local-only editing** — editing worked when a maintainer ran the app on
+   their own machine with a service-role key injected by `vite dev`; the
+   deployed site had no write path and no write policy existed. Magic-link
+   sign-in and an editor UUID allowlist were built and then removed in favour
+   of this; see git history for `src/lib/auth.ts`,
+   `src/lib/editor-allowlist.ts` and `src/components/EditorAuthControl.tsx`.
+3. **Public editing** (current) —
+   `supabase-migration-public-write-access.sql` grants anon
+   insert/update/delete, and the app's write controls render for every
+   visitor. The service-role injection was removed entirely, so local and
+   production now use the identical anon client and identical permissions.
+4. **Public editing, bounded** (current) —
+   `supabase-migration-soft-delete-and-mandatory-notes.sql` revokes the anon
+   DELETE policy granted in (3) and adds the not-blank CHECK on change
+   notes. Editing stays open to everyone; destroying a row and making an
+   unexplained edit through the UI both stop being possible.
