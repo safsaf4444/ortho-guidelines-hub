@@ -300,6 +300,10 @@ export default function App() {
       regionalVariation: false,
       localOverlayNeeded: false,
       versions: [],
+      // New entries start as national/current. The editor picks the real
+      // values in the form; these only keep the object well-typed until then.
+      sourceType: 'national',
+      guidanceStatus: 'current',
     });
     setIsNewGuideline(true);
   };

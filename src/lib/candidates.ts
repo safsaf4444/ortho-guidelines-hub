@@ -185,6 +185,14 @@ export function changeReasonLabel(reason: ChangeReason): string {
  * human reviewer, not this pipeline, so it's left blank/placeholder rather
  * than guessed. The modal's Save path enforces read-only separately — this
  * function only builds the prefilled draft, it never persists anything.
+ *
+ * The editorial-metadata fields follow the same rule. guidanceStatus is
+ * 'needs-review', which is not a guess — a pipeline-discovered candidate is
+ * by definition awaiting review — and inclusionReason records that
+ * provenance, which also satisfies the DB constraint requiring a reason on
+ * that status. sourceType has no blank member in its union, so it carries
+ * the same default the database uses; the reviewer must confirm it, exactly
+ * like the empty `section` and `type` above.
  */
 export function candidateToGuidelineDraft(candidate: DisplayCandidate): Guideline {
   return {
@@ -199,5 +207,8 @@ export function candidateToGuidelineDraft(candidate: DisplayCandidate): Guidelin
     lastChecked: new Date().toISOString().split('T')[0],
     status: 'To source',
     versions: candidate.sourceUrl ? [{ label: 'Source', url: candidate.sourceUrl }] : [],
+    sourceType: 'national',
+    guidanceStatus: 'needs-review',
+    inclusionReason: `Discovered by the ${candidate.provider} sync adapter and awaiting editorial review. Not yet confirmed as in scope.`,
   };
 }
