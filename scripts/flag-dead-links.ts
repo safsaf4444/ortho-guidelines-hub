@@ -57,6 +57,7 @@ const MAX_ATTEMPTS = 2; // one initial attempt + at most one retry
 
 export type Verdict =
   | 'OK'
+  | 'REDIRECTED'
   | 'CLIENT_ERROR'
   | 'SERVER_ERROR'
   | 'TIMEOUT'
@@ -73,6 +74,8 @@ export interface Result {
   domain: string;
   verdict: Verdict;
   httpStatus: string; // numeric status, or '' when no response was received
+  /** Where the request actually landed. Differs from `url` only on a meaningful redirect. */
+  finalUrl: string;
   detail: string;
   attempts: number;
 }
@@ -106,6 +109,35 @@ export function looksLikeWaf(status: number, headers?: Headers): boolean {
   return false;
 }
 
+/**
+ * Normalises a URL for redirect comparison. A link is only 'moved' if it
+ * landed somewhere a human would call a different page — an http->https
+ * upgrade, a www prefix, a trailing slash or hostname casing are all the
+ * same document and must not be reported as a move, or the weekly report
+ * would be almost entirely noise.
+ */
+export function normaliseForRedirect(u: string): string | null {
+  try {
+    const p = new URL(u);
+    const lower = p.hostname.toLowerCase();
+    const host = lower.startsWith('www.') ? lower.slice(4) : lower;
+    let path = p.pathname;
+    while (path.endsWith('/')) path = path.slice(0, -1);
+    return host + path + p.search;
+  } catch {
+    return null;
+  }
+}
+
+/** True when the final URL is a genuinely different document from the requested one. */
+export function isMeaningfulRedirect(requested: string, final: string): boolean {
+  if (!final) return false;
+  const a = normaliseForRedirect(requested);
+  const b = normaliseForRedirect(final);
+  if (a === null || b === null) return false;
+  return a !== b;
+}
+
 export function classifyHttpStatus(status: number, headers?: Headers): Verdict {
   if (status >= 200 && status < 400) return 'OK';
   if (looksLikeWaf(status, headers)) return 'BLOCKED_WAF';
@@ -116,6 +148,8 @@ export function classifyHttpStatus(status: number, headers?: Headers): Verdict {
 
 /** Only transient classes are retried. 4xx and WAF blocks never are. */
 export function isRetryableVerdict(v: Verdict): boolean {
+  // REDIRECTED is a successful response, just at a different address — retrying
+  // would land in exactly the same place.
   return v === 'TIMEOUT' || v === 'DNS_FAILURE' || v === 'SERVER_ERROR';
 }
 
@@ -169,6 +203,8 @@ export interface CheckDeps {
 export interface CheckOutcome {
   verdict: Verdict;
   httpStatus: string;
+  /** Where the request actually landed; '' when no response was received. */
+  finalUrl: string;
   detail: string;
   attempts: number;
 }
@@ -201,15 +237,23 @@ async function attemptOnce(url: string, deps: Required<Pick<CheckDeps, 'fetchImp
     if (res.status === 405 || res.status === 501 || (res.status >= 400 && res.status !== 404)) {
       res = await run('GET');
     }
-    const verdict = classifyHttpStatus(res.status, res.headers);
-    return { verdict, httpStatus: String(res.status), detail: `HTTP ${res.status}`, attempts: 1 };
+    let verdict = classifyHttpStatus(res.status, res.headers);
+    const finalUrl = res.url ?? '';
+    // A 2xx reached via a redirect to a DIFFERENT document is reported as
+    // REDIRECTED rather than OK: the link still works, but it no longer points
+    // where the catalogue says it does, which is an editorial fact worth seeing.
+    if (verdict === 'OK' && isMeaningfulRedirect(url, finalUrl)) {
+      verdict = 'REDIRECTED';
+      return { verdict, httpStatus: String(res.status), finalUrl, detail: `HTTP ${res.status} -> ${finalUrl}`, attempts: 1 };
+    }
+    return { verdict, httpStatus: String(res.status), finalUrl, detail: `HTTP ${res.status}`, attempts: 1 };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     // AbortError → our timeout fired; anything else here is DNS/connection level.
     if (/abort/i.test(msg)) {
-      return { verdict: 'TIMEOUT', httpStatus: '', detail: `timeout (>${timeoutMs}ms)`, attempts: 1 };
+      return { verdict: 'TIMEOUT', httpStatus: '', finalUrl: '', detail: `timeout (>${timeoutMs}ms)`, attempts: 1 };
     }
-    return { verdict: 'DNS_FAILURE', httpStatus: '', detail: `network/DNS: ${msg}`, attempts: 1 };
+    return { verdict: 'DNS_FAILURE', httpStatus: '', finalUrl: '', detail: `network/DNS: ${msg}`, attempts: 1 };
   }
 }
 
@@ -250,12 +294,12 @@ export function loadBlockedDomains(): Set<string> {
 export function buildCsv(results: Result[]): string {
   const header = [
     'guideline_id', 'topic', 'source', 'link_label', 'url', 'domain',
-    'verdict', 'http_status', 'detail', 'attempts',
+    'verdict', 'http_status', 'final_url', 'detail', 'attempts',
   ];
   const lines = [header.join(',')];
   for (const r of results) {
     lines.push(
-      [r.id, r.topic, r.source, r.label, r.url, r.domain, r.verdict, r.httpStatus, r.detail, String(r.attempts)]
+      [r.id, r.topic, r.source, r.label, r.url, r.domain, r.verdict, r.httpStatus, r.finalUrl, r.detail, String(r.attempts)]
         .map(csvCell)
         .join(','),
     );
@@ -264,7 +308,7 @@ export function buildCsv(results: Result[]): string {
 }
 
 const ALL_VERDICTS: Verdict[] = [
-  'OK', 'CLIENT_ERROR', 'SERVER_ERROR', 'TIMEOUT', 'DNS_FAILURE', 'BLOCKED_WAF', 'KNOWN_BLOCKED',
+  'OK', 'REDIRECTED', 'CLIENT_ERROR', 'SERVER_ERROR', 'TIMEOUT', 'DNS_FAILURE', 'BLOCKED_WAF', 'KNOWN_BLOCKED',
 ];
 
 export function tally(results: Result[]): Record<Verdict, number> {
@@ -299,6 +343,7 @@ async function main() {
           ...base,
           verdict: 'KNOWN_BLOCKED',
           httpStatus: '',
+          finalUrl: '',
           detail: 'domain in blocked-sources.json — no request made',
           attempts: 0,
         });
@@ -309,7 +354,14 @@ async function main() {
       if (domain) await limiter.acquire(domain);
       const outcome = await checkUrl(url);
       results.push({ ...base, ...outcome });
-      process.stdout.write(outcome.verdict === 'OK' ? '.' : outcome.verdict === 'BLOCKED_WAF' ? 'w' : '✗');
+      // A redirect is not a failure — it gets its own marker so a run full of
+      // moved links does not read as a run full of dead ones.
+      process.stdout.write(
+        outcome.verdict === 'OK' ? '.'
+          : outcome.verdict === 'REDIRECTED' ? '>'
+          : outcome.verdict === 'BLOCKED_WAF' ? 'w'
+          : '✗',
+      );
     }
   }
   process.stdout.write('\n');
