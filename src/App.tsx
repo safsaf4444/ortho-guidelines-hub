@@ -378,7 +378,8 @@ export default function App() {
   const toggleSection = (section: string) => {
     setCollapsedSections(prev => {
       const next = new Set(prev);
-      next.has(section) ? next.delete(section) : next.add(section);
+      if (next.has(section)) next.delete(section);
+      else next.add(section);
       return next;
     });
   };
@@ -555,9 +556,24 @@ export default function App() {
 
       {/* Header */}
       <header className="h-[56px] bg-white border-b border-slate-200 flex items-center justify-between px-5 shrink-0 z-50">
-        <div className="flex items-center gap-3">
-          <button className="md:hidden text-slate-600" onClick={() => setIsSidebarOpen(!isSidebarOpen)}>
-            <Menu className="w-5 h-5" />
+        {/* min-w-0 lets the title's `truncate` actually engage; without it
+            this group kept its full width and overflowed the header by 1px
+            at 375px. */}
+        <div className="flex items-center gap-3 min-w-0">
+          {/* Icon-only, so it needs a name. The name says what a tap will do
+              and aria-expanded reports the drawer's state. w-11/h-11 is a 44px
+              tap target; -mx-3 cancels the extra 24px so the header lays out
+              exactly as it did with the bare 20px icon (it has no spare width
+              at 375px). */}
+          <button
+            type="button"
+            className="md:hidden -mx-3 w-11 h-11 shrink-0 flex items-center justify-center rounded text-slate-600"
+            onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+            aria-label={isSidebarOpen ? 'Close sections menu' : 'Open sections menu'}
+            aria-expanded={isSidebarOpen}
+            aria-controls="sections-drawer"
+          >
+            <Menu className="w-5 h-5" aria-hidden="true" />
           </button>
           <div className="bg-[#0F172A] text-white w-7 h-7 rounded flex items-center justify-center font-semibold text-sm shrink-0">
             O
@@ -670,7 +686,7 @@ export default function App() {
         )}
 
         {/* Sidebar */}
-        <aside className={cn(
+        <aside id="sections-drawer" aria-label="Sections" className={cn(
           "w-[240px] bg-white border-r border-slate-200 flex flex-col justify-between overflow-y-auto shrink-0 transition-transform duration-300 z-40",
           "fixed md:relative top-[56px] md:top-0 bottom-0 left-0",
           isSidebarOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
@@ -683,7 +699,7 @@ export default function App() {
               <button
                 onClick={() => { setCurrentSection('All'); setIsSidebarOpen(false); }}
                 className={cn(
-                  "flex justify-between items-center px-2.5 py-1.5 rounded transition-colors",
+                  "flex justify-between items-center px-2.5 py-1.5 min-h-[44px] md:min-h-0 rounded transition-colors",
                   currentSection === 'All'
                     ? "bg-[#0F172A] text-white"
                     : "text-slate-600 hover:bg-slate-50"
@@ -692,7 +708,7 @@ export default function App() {
                 <span className="text-[12px] font-medium">All guidelines</span>
                 <span className={cn(
                   "px-1.5 py-px rounded text-[11px] font-medium",
-                  currentSection === 'All' ? "bg-white/20 text-white" : "bg-slate-100 text-slate-500"
+                  currentSection === 'All' ? "bg-white/20 text-white" : "bg-slate-100 text-slate-600"
                 )}>
                   {guidelines.length}
                 </span>
@@ -704,7 +720,7 @@ export default function App() {
                 onClick={() => { setCurrentSection(CATALOGUE_VIEW); setIsSidebarOpen(false); }}
                 title="Dense table of every entry — provider, then section, then title"
                 className={cn(
-                  "flex justify-between items-center gap-1.5 px-2.5 py-1.5 rounded transition-colors",
+                  "flex justify-between items-center gap-1.5 px-2.5 py-1.5 min-h-[44px] md:min-h-0 rounded transition-colors",
                   currentSection === CATALOGUE_VIEW
                     ? "bg-[#0F172A] text-white"
                     : "text-slate-600 hover:bg-slate-50"
@@ -716,7 +732,7 @@ export default function App() {
                 </span>
                 <span className={cn(
                   "px-1.5 py-px rounded text-[11px] font-medium shrink-0",
-                  currentSection === CATALOGUE_VIEW ? "bg-white/20 text-white" : "bg-slate-100 text-slate-500"
+                  currentSection === CATALOGUE_VIEW ? "bg-white/20 text-white" : "bg-slate-100 text-slate-600"
                 )}>
                   {guidelines.length}
                 </span>
@@ -725,7 +741,7 @@ export default function App() {
               <button
                 onClick={() => { setCurrentSection(DUPLICATES_VIEW); setIsSidebarOpen(false); }}
                 className={cn(
-                  "flex justify-between items-center px-2.5 py-1.5 rounded transition-colors",
+                  "flex justify-between items-center px-2.5 py-1.5 min-h-[44px] md:min-h-0 rounded transition-colors",
                   currentSection === DUPLICATES_VIEW
                     ? "bg-[#0F172A] text-white"
                     : "text-slate-600 hover:bg-slate-50"
@@ -743,7 +759,7 @@ export default function App() {
               <button
                 onClick={() => { setCurrentSection(CHANGELOG_VIEW); setIsSidebarOpen(false); }}
                 className={cn(
-                  "flex items-center gap-1.5 px-2.5 py-1.5 rounded transition-colors",
+                  "flex items-center gap-1.5 px-2.5 py-1.5 min-h-[44px] md:min-h-0 rounded transition-colors",
                   currentSection === CHANGELOG_VIEW
                     ? "bg-[#0F172A] text-white"
                     : "text-slate-600 hover:bg-slate-50"
@@ -756,7 +772,7 @@ export default function App() {
               <button
                 onClick={() => { setCurrentSection(ABOUT_VIEW); setIsSidebarOpen(false); window.location.hash = ABOUT_HASH; }}
                 className={cn(
-                  "flex items-center gap-1.5 px-2.5 py-1.5 rounded transition-colors",
+                  "flex items-center gap-1.5 px-2.5 py-1.5 min-h-[44px] md:min-h-0 rounded transition-colors",
                   currentSection === ABOUT_VIEW
                     ? "bg-[#0F172A] text-white"
                     : "text-slate-600 hover:bg-slate-50"
@@ -776,14 +792,14 @@ export default function App() {
                     key={section}
                     onClick={() => { setCurrentSection(section); setIsSidebarOpen(false); }}
                     className={cn(
-                      "flex justify-between items-center px-2.5 py-1.5 rounded transition-colors",
+                      "flex justify-between items-center px-2.5 py-1.5 min-h-[44px] md:min-h-0 rounded transition-colors",
                       isActive ? "bg-[#0F172A] text-white" : "text-slate-600 hover:bg-slate-50"
                     )}
                   >
                     <span className="text-[12px]">{section}</span>
                     <span className={cn(
                       "px-1.5 py-px rounded text-[11px] font-medium",
-                      isActive ? "bg-white/20 text-white" : "bg-slate-100 text-slate-500"
+                      isActive ? "bg-white/20 text-white" : "bg-slate-100 text-slate-600"
                     )}>
                       {count}
                     </span>
@@ -1063,6 +1079,27 @@ export default function App() {
   );
 }
 
+// ─── Summary framing ──────────────────────────────────────────────────────────
+
+/**
+ * Rendered directly above every expanded summary (browse card and catalogue).
+ * Summaries are editorial descriptions and some read as instructions — see
+ * reports/summary-tone-audit — so this frames them without rewriting any.
+ * Kept quiet on purpose: "Open source guidance" must stay the most prominent
+ * thing in an expanded entry.
+ */
+function AboutThisSource() {
+  return (
+    <div className="border-l-2 border-slate-300 pl-2 mb-1.5">
+      <p className="text-[11px] font-semibold text-slate-700 leading-snug">About this source</p>
+      <p className="text-[11px] text-slate-600 leading-snug">
+        This editorial description helps identify the source guidance. Refer to the original
+        document, use clinical judgement, and follow local escalation processes.
+      </p>
+    </div>
+  );
+}
+
 // ─── Editorial catalogue (unlisted, #/catalogue) ──────────────────────────────
 
 /**
@@ -1159,8 +1196,24 @@ function CatalogueView({ guidelines }: { guidelines: Guideline[] }) {
                             isOpen && "bg-slate-50"
                           )}
                         >
-                          <span className="flex-1 min-w-0 truncate text-slate-800" title={item.topic}>
-                            {item.topic}
+                          <span className="flex-1 min-w-0 flex items-center gap-1.5">
+                            <span className="min-w-0 truncate text-slate-800" title={item.topic}>
+                              {item.topic}
+                            </span>
+                            {/* Only non-current statuses are shown: the Link check
+                                column says whether a URL answered, which is no
+                                evidence the guidance is current (girft-bunions). */}
+                            {item.guidanceStatus && item.guidanceStatus !== 'current' && (
+                              <span
+                                title={`Guidance status: ${guidanceStatusHint(item.guidanceStatus)}`}
+                                className={cn(
+                                  "shrink-0 inline-block px-1.5 py-px rounded border text-[10px] font-medium",
+                                  guidanceStatusBadgeClass(item.guidanceStatus)
+                                )}
+                              >
+                                {guidanceStatusLabel(item.guidanceStatus)}
+                              </span>
+                            )}
                           </span>
                           <span className={cn(COL.type, "shrink-0 truncate text-slate-500")} title={item.type}>
                             {item.type}
@@ -1223,7 +1276,10 @@ function CatalogueView({ guidelines }: { guidelines: Guideline[] }) {
                             )}
 
                             {item.summary && (
-                              <p className="text-slate-600 leading-relaxed mb-1.5 whitespace-pre-line">{item.summary}</p>
+                              <>
+                                <AboutThisSource />
+                                <p className="text-slate-600 leading-relaxed mb-1.5 whitespace-pre-line">{item.summary}</p>
+                              </>
                             )}
                             {item.notes && (
                               <p className="text-slate-500 italic mb-1.5 whitespace-pre-line">{item.notes}</p>
@@ -1547,6 +1603,7 @@ function GuidelineCard({
               : <span className="text-slate-400 italic">not specified by the source</span>}
           </div>
 
+          {item.summary && <AboutThisSource />}
           <p className="text-[12px] text-slate-600 leading-relaxed mb-1.5 whitespace-pre-line">
             {item.summary}
           </p>
@@ -1593,7 +1650,8 @@ function GuidelineCard({
                           ...item,
                           linkVerificationStatus: e.target.value as Guideline['linkVerificationStatus'],
                         })}
-                        className="text-[10px] border border-slate-200 rounded px-1 py-0.5 bg-white focus:outline-none"
+                        aria-label="Set link check status"
+                        className="text-[10px] border border-slate-200 rounded px-1 py-0.5 bg-white focus:outline-none focus:ring-2 focus:ring-slate-500"
                       >
                         {LINK_STATUS_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                       </select>
