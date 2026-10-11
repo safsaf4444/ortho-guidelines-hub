@@ -2,6 +2,7 @@ import { supabase } from './supabase';
 import { GUIDELINES_DATA } from '../data/guidelines-data';
 import type { Guideline } from '../data/guidelines-data';
 import { toGuideline, toDbRow, type DbGuideline } from './guidelines-mapper';
+import { isZeroRowWrite, refusedOrMissingMessage } from './write-result';
 
 /** Where the rows the app is showing actually came from. */
 export type GuidelinesSource = 'live' | 'fallback';
@@ -116,7 +117,7 @@ export const guidelinesService = {
       .eq('id', guideline.id)
       .select('id');
     if (error) throw asPersistError('update', error);
-    if (!data || data.length === 0) throw refusedOrMissing('update', guideline.id);
+    if (isZeroRowWrite(data)) throw new Error(refusedOrMissingMessage('update', guideline.id));
   },
 
   /**
@@ -146,24 +147,10 @@ export const guidelinesService = {
       .eq('id', id)
       .select('id');
     if (error) throw asPersistError('archive', error);
-    if (!data || data.length === 0) throw refusedOrMissing('archive', id);
+    if (isZeroRowWrite(data)) throw new Error(refusedOrMissingMessage('archive', id));
   },
 };
 
-/**
- * The error for a write that returned no error and changed nothing.
- *
- * Deliberately names both possible causes instead of guessing. The client
- * cannot tell them apart — RLS does not report that it filtered a row — and
- * naming the likely one first is more useful than a bare "0 rows affected".
- */
-function refusedOrMissing(op: string, id: string): Error {
-  return new Error(
-    `${op} affected no rows for "${id}". Either the database refused the write `
-    + '(the signed-in account is not on the editor allowlist, or the session expired) '
-    + 'or that entry no longer exists. Nothing was saved.'
-  );
-}
 
 // Supabase/PostgREST errors carry the useful detail (code/details/hint) on the
 // error object itself, not just `.message`. Log the raw object so it's visible
