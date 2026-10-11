@@ -110,8 +110,11 @@ async function describeProcessedState(stagedId: string): Promise<string> {
           + 'the catalogue.';
     }
     if (row.review_status === 'rejected') {
-      return 'It was already REJECTED, so it was never published and nothing has been added to the '
-        + 'catalogue.';
+      // Deliberately says nothing about publication. A rejected queue row
+      // records a decision about THIS candidate; it is not evidence that
+      // equivalent guidance is absent from the catalogue, which may hold the
+      // same document filed under another candidate or added by hand.
+      return 'This candidate is already rejected. This attempt made no changes.';
     }
     return `Its current status is "${row.review_status}".`;
   } catch {
