@@ -345,6 +345,20 @@ check('an unconfirmed reject is not reported as a refusal',
 check('persistent Reject and temporary Hide are separate controls',
   /Reject…/.test(dash) && /Hide\n/.test(dash) && /Writes nothing, and the card returns on reload/.test(dash));
 check('Reject is offered only for a candidate with a queue row', /canReject=\{Boolean\(candidate\.stagedId\)\}/.test(dash));
+// A re-wrapped error loses `error.code`, and the code is the only proof the
+// server answered. Without carrying the refusal across, the dashboard labels a
+// flat 42501 "not an approved editor" as "Save could not be confirmed" — i.e.
+// reports a decided refusal as an unknown outcome.
+const rejectStart = staged.indexOf('async reject(stagedId: string, reason: string)');
+const rejectFn = rejectStart < 0 ? '' : staged.slice(rejectStart, rejectStart + 2600);
+check('reject re-wraps errors without losing the confirmed-refusal signal',
+  rejectFn.length > 0
+  && /classifyWriteFailure\(error\) === 'refused' \? markRefused\(thrown\)/.test(rejectFn),
+  'a re-wrapped server refusal would be misreported as an unconfirmed write');
+check('the not-an-editor refusal is tagged as refused',
+  /throw keepRefusal\(new Error\(NOT_AN_EDITOR_MESSAGE\)\)/.test(rejectFn));
+check('an answered failure with any other code is tagged as refused too',
+  rejectFn.includes('throw keepRefusal(') && rejectFn.includes('new Error(`Reject failed'));
 
 console.log('\n[5] The editor’s unsaved draft survives a failure');
 
