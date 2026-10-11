@@ -10,8 +10,23 @@
  * no way for a client to inject into the review queue. See
  * supabase/migrations/20261011_create_staging_and_editor_roles.sql.
  *
- * It writes nothing to `guidelines`. Publishing stays a human action, through
- * approve_staged_guideline() in the app.
+ * ── "STAGING ONLY" IS A PROPERTY OF THIS SCRIPT, NOT OF THE CREDENTIAL ───
+ * Stated precisely, because the distinction is easy to lose and load-bearing:
+ *
+ * This script writes nothing to `guidelines` and never calls the approve RPC,
+ * so publishing stays a human action. But the key it runs with COULD do both.
+ * Verified against the live database: `service_role` has rolbypassrls = true,
+ * holds INSERT and UPDATE on `public.guidelines`, UPDATE on
+ * `public.staged_guidelines`, and EXECUTE on approve_staged_guideline(). RLS
+ * and the editor allowlist do not apply to it at all.
+ *
+ * The workflow's `permissions: contents: read` does NOT constrain any of that
+ * — it is a GitHub token scope and limits only what the job may do to the
+ * REPOSITORY. It says nothing about database privileges.
+ *
+ * So the guarantee is: this code does not publish. It is not: the credential
+ * cannot publish. Anyone changing this file is changing a privileged path —
+ * review it as one.
  *
  * ─── INSERT-IF-ABSENT, NEVER OVERWRITE ──────────────────────────────────────
  * This is the load-bearing decision in this file, and the one thing not to
@@ -231,9 +246,17 @@ async function main() {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
-  // ON CONFLICT DO NOTHING on candidate_id — see the header comment. `select`
-  // returns only the rows actually inserted, which is what makes "3 new this
-  // week" reportable rather than guessed at.
+  // ONE statement for every row: supabase-js sends a single
+  // INSERT ... ON CONFLICT (candidate_id) DO NOTHING, and a single Postgres
+  // statement is atomic, so either every new candidate is filed or none is.
+  // That atomicity comes from it being one statement — there is no explicit
+  // transaction here. DO NOT introduce chunking (slicing `rows` into batches)
+  // without wrapping the batches in an RPC or a transaction: separate
+  // statements can partially succeed, and a half-filed queue is a review list
+  // nobody can trust.
+  //
+  // `select` returns only the rows actually inserted, which is what makes
+  // "3 new this week" reportable rather than guessed at.
   const { data, error } = await supabase
     .from('staged_guidelines')
     .upsert(rows, { onConflict: 'candidate_id', ignoreDuplicates: true })

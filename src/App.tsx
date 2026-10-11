@@ -499,20 +499,20 @@ export default function App() {
    *     it means a change landed unlogged. Closing that gap for ordinary
    *     edits needs a second RPC; see FOLLOW-UPS.md.
    */
-  const persistGuideline = async (updated: Guideline, isNew: boolean, note: string) => {
+  const persistGuideline = async (updated: Guideline, isNew: boolean, note: string): Promise<boolean> => {
     // Enforced at the source, not just by hiding the Save button: even if
     // something calls this directly, it must not reach Supabase unless all
     // three gate conditions hold. The database would refuse the write anyway;
     // this keeps the local optimistic update from claiming otherwise.
     if (!canWrite(gate)) {
       console.warn(`[persistGuideline] Ignored — ${writeBlockedReason(gate)} No local or database change made.`);
-      return;
+      return false;
     }
     const prepared = prepareChangeNote(note);
     if (!prepared.ok) {
       console.warn(`[persistGuideline] Refused — ${prepared.error} No change made.`);
       alert(prepared.error);
-      return;
+      return false;
     }
     // ── Staged candidate: one atomic call, and NOT optimistic ──────────────
     // The local update is withheld until the RPC returns. Publishing is the
@@ -525,6 +525,7 @@ export default function App() {
         await stagedService.approve(stagedCandidateId, updated, prepared.note);
         setGuidelines(prev => [...prev, updated]);
         setStagedCandidateId(null);
+        return true;
       } catch (err) {
         console.error('[persistGuideline] Approve failed — nothing was published:', err);
         const msg = err instanceof Error ? err.message : String(err);
@@ -533,30 +534,70 @@ export default function App() {
           + 'Nothing was saved: the guideline, the change note and the queue entry were all rolled '
           + 'back together, so the candidate is still pending and can be retried.'
         );
+        return false;
       }
-      return;
     }
 
-    // Update local state immediately
-    setGuidelines(prev =>
-      isNew ? [...prev, updated] : prev.map(g => g.id === updated.id ? updated : g)
-    );
+    // ── Confirm first, THEN show it ─────────────────────────────────
+    // The displayed catalogue used to change before this request was even
+    // made, so a refused or failed write left the edit on screen looking
+    // saved. Under the editor allowlist a refusal is a normal outcome — an
+    // expired session is enough — and guidelines-service.update cannot report
+    // one as an error at all unless it counts affected rows. So nothing is
+    // shown as saved until the database confirms it.
+    //
+    // The cost is a visible wait on each save, including the single-click
+    // link-status action. That is the right way round for clinical content:
+    // slower, and never wrong about what is stored.
     try {
       if (isNew) {
         await guidelinesService.create(updated);
       } else {
         await guidelinesService.update(updated);
       }
-      try {
-        await changelogService.create({ guidelineId: updated.id, description: prepared.note });
-      } catch (noteErr) {
-        console.error('[persistGuideline] Guideline saved but the change note failed:', noteErr);
-      }
     } catch (err) {
       console.error('[persistGuideline] Failed to persist guideline to Supabase:', err);
       const msg = err instanceof Error ? err.message : String(err);
-      alert(`⚠️ DATABASE SAVE WARNING:\n\nFailed to save to Supabase database!\n\nReason: ${msg}\n\nYour changes are visible in this browser tab for now, but will be lost if you refresh. Please check your Supabase connection.`);
+      alert(
+        `NOT SAVED
+
+${msg}
+
+`
+        + 'The catalogue is unchanged and your edit is still open, so you can correct it and try '
+        + 'again. Nothing was written to the database.'
+      );
+      // Returning false keeps the modal open with the draft intact — see
+      // handleSave. The catalogue is deliberately left untouched.
+      return false;
     }
+
+    // Written and confirmed. Only now does the UI claim it.
+    setGuidelines(prev =>
+      isNew ? [...prev, updated] : prev.map(g => g.id === updated.id ? updated : g)
+    );
+
+    // The guideline IS saved by this point, so a note failure must not be
+    // reported as a failed edit and must not reopen the form — retrying would
+    // write the guideline a second time. It is still said out loud, because a
+    // change that landed unlogged is what the changelog exists to prevent.
+    try {
+      await changelogService.create({ guidelineId: updated.id, description: prepared.note });
+    } catch (noteErr) {
+      console.error('[persistGuideline] Guideline saved but the change note failed:', noteErr);
+      const noteMsg = noteErr instanceof Error ? noteErr.message : String(noteErr);
+      alert(
+        `SAVED, BUT NOT LOGGED
+
+The guideline was saved. Its change note was not:
+${noteMsg}
+
+`
+        + 'The edit is live with no entry in the change history. Add a note from the card to '
+        + 'restore the audit trail.'
+      );
+    }
+    return true;
   };
 
   const handleExportJSON = () => {
@@ -570,9 +611,17 @@ export default function App() {
     URL.revokeObjectURL(url);
   };
 
-  const handleSave = (updated: Guideline, note: string) => {
-    setEditingGuideline(null);
-    persistGuideline(updated, isNewGuideline, note);
+  /**
+   * Closes the modal ONLY once the write is confirmed.
+   *
+   * It used to close first and persist afterwards, so a failed save threw away
+   * the editor's work: the form was gone, the alert named a database error, and
+   * the only way to retry was to retype the whole entry. A failure now leaves
+   * the draft exactly where it was.
+   */
+  const handleSave = async (updated: Guideline, note: string) => {
+    const saved = await persistGuideline(updated, isNewGuideline, note);
+    if (saved) setEditingGuideline(null);
   };
 
   // Fast, in-card update path for link verification review — no modal round-trip.
@@ -2114,7 +2163,8 @@ function EditModal({
   existingIds: ReadonlySet<string>;
   /** Which of the three gate conditions is unmet, or null when writable. */
   blockedReason: string | null;
-  onSave: (g: Guideline, note: string) => void;
+  /** Resolves when the write has been attempted; the modal stays open if it failed. */
+  onSave: (g: Guideline, note: string) => void | Promise<void>;
   onClose: () => void;
   onDelete: (id: string) => void;
   isNew: boolean;
@@ -2136,6 +2186,10 @@ function EditModal({
   // src/lib/change-note.ts and the guideline_changelog not-blank CHECK), so
   // the form and the constraint can never disagree about what counts as empty.
   const [note, setNote] = useState('');
+  // Prevents a second submit while the first is still in flight. The modal
+  // now stays open until the write is confirmed, so the button is reachable
+  // for as long as the request takes.
+  const [submitting, setSubmitting] = useState(false);
   const noteOk = isValidChangeNote(note);
 
   // A non-current status has to be explained. Mirrors the database CHECK, so
@@ -2160,7 +2214,7 @@ function EditModal({
   // the existing rows and the manual Add flow keep working unchanged.
   const idLooksPlaceholder = isNew && idOk && isPlaceholderGuidelineId(form.id);
 
-  const canSave = noteOk && reasonOk && idOk;
+  const canSave = noteOk && reasonOk && idOk && !submitting;
 
   // `canEdit` is already canWrite(gate) from App, so it IS the writable
   // answer. blockedReason is passed in rather than recomputed because the
@@ -2548,7 +2602,15 @@ This archives the entry rather than deleting it: it disappears from the site, bu
           <div className="flex gap-2">
             {writable ? (
               <button
-                onClick={() => onSave(form, note)}
+                onClick={async () => {
+                  if (!canSave) return;
+                  setSubmitting(true);
+                  try {
+                    await onSave(form, note);
+                  } finally {
+                    setSubmitting(false);
+                  }
+                }}
                 disabled={!canSave}
                 title={
                   !reasonOk ? `A reason is required for "${guidanceStatusLabel(form.guidanceStatus)}"`
@@ -2561,7 +2623,7 @@ This archives the entry rather than deleting it: it disappears from the site, bu
                     ? "bg-[#0F172A] text-white hover:bg-slate-800"
                     : "bg-slate-200 text-slate-500 cursor-not-allowed"
                 )}>
-                {isStagedCandidate ? 'Publish Guideline' : 'Save Guideline'}
+                {submitting ? 'Saving…' : isStagedCandidate ? 'Publish Guideline' : 'Save Guideline'}
               </button>
             ) : (
               <button
