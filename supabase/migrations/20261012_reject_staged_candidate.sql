@@ -86,7 +86,23 @@ begin
   -- Mandatory: a DEFINER function runs with the owner's rights, so without
   -- this check the anon key could reject. Same allowlist as the RLS policies
   -- and as approve_staged_guideline, so this is not a way around either.
-  if not public.is_editor() then
+  --
+  -- `is not true`, NOT `if not public.is_editor()`. is_editor() is
+  -- `select auth.uid() = any (array[...])`, and `NULL = any(...)` evaluates to
+  -- NULL, not false. So for any caller with no JWT the function returns NULL,
+  -- `not NULL` is NULL, and a plain `if not ...` branch DOES NOT FIRE --- the
+  -- guard falls through and the rejection proceeds with reviewed_by = NULL.
+  --
+  -- Verified against production on 11 October 2026: auth.uid() null,
+  -- is_editor() -> NULL, (not is_editor()) is true -> false.
+  --
+  -- anon is blocked anyway by the EXECUTE revoke below, which is why an
+  -- anon-denial test passes without exercising this at all. service_role is
+  -- the caller that matters: it holds EXECUTE on approve_staged_guideline in
+  -- production despite the same `revoke ... from public`, because Supabase
+  -- grants it separately. An unattributable rejection is precisely what this
+  -- feature exists to prevent, so the guard must be null-safe.
+  if public.is_editor() is not true then
     raise exception 'reject_staged_candidate: not an approved editor'
       using errcode = '42501';
   end if;
@@ -169,7 +185,12 @@ commit;
 --   select r.rolname, has_function_privilege(
 --            r.rolname, 'public.reject_staged_candidate(uuid,text)', 'EXECUTE')
 --     from pg_roles r where r.rolname in ('anon','authenticated','service_role');
---   -- expect anon = false
+--   -- expect anon = false, authenticated = true.
+--   -- service_role is expected TRUE, not false: `revoke ... from public` does
+--   -- not remove Supabase's separate grant to it (confirmed on
+--   -- approve_staged_guideline in production). It is held off by the null-safe
+--   -- is_editor() guard in the body, not by the grant --- which is why that
+--   -- guard uses `is not true`.
 -- ============================================================================
 
 
