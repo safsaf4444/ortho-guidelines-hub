@@ -5,9 +5,20 @@ on:
     # Runs every Sunday at 02:00 UTC
     - cron: '0 2 * * 0'
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: >-
+          Verification mode. When true, discovery runs and the candidate report
+          is still uploaded, but NOTHING is written to Supabase — the staging
+          step only logs what it would file. Leave true unless you deliberately
+          want this manual run to add rows to the review queue.
+        type: boolean
+        default: true
+        required: false
 
-# Read-only by design: this pipeline discovers and reports, it never writes back
-# to the repo. Declared explicitly so the intent survives any change to the
+# The discovery pass is read-only and never writes back to the repo. The
+# staging step writes to Supabase, not to git, so no write scope is needed
+# here either. Declared explicitly so the intent survives any change to the
 # repository-level default permissions.
 permissions:
   contents: read
@@ -23,19 +34,48 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          # Kept in step with detect-changes.yml (Node 22 for native WebSocket
-          # support). This pipeline itself makes no Supabase calls.
+          # Node 22 for native WebSocket support, which the Supabase client
+          # needs — on Node 20 it fails with "Node.js 20 detected without
+          # native WebSocket support". Kept in step with detect-changes.yml.
           node-version: 22
           cache: 'npm'
 
       - name: Install dependencies
         run: npm ci
 
+      # Discovery only: no Supabase connection, no repo writes. Produces
+      # candidates.json.
       - name: Run Provider Sync Probe (Dry-run)
         run: npx tsx scripts/sync-providers.ts
-        
+
+      # Uploaded BEFORE staging, so a failure in the staging step still leaves
+      # the discovery evidence downloadable for diagnosis.
       - name: Upload Candidate Report
         uses: actions/upload-artifact@v4
         with:
           name: sync-candidates
           path: candidates.json
+
+      # Files newly discovered candidates into public.staged_guidelines for
+      # editor review.
+      #
+      # The service-role key is required and not incidental: staged_guidelines
+      # has no INSERT policy for any browser-reachable role, so this key is the
+      # only way in. That is what keeps the review queue un-injectable from the
+      # public site.
+      #
+      # Writes ON CONFLICT DO NOTHING, so a candidate an editor has already
+      # accepted or rejected is NOT reset to pending by the next weekly run —
+      # see the header comment in scripts/stage-candidates.ts.
+      #
+      # Nothing here touches `guidelines`. Publishing stays a human action in
+      # the app, through approve_staged_guideline().
+      - name: File candidates into the review queue
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          # Empty on the schedule trigger (the input does not exist there),
+          # which the script treats as false — so scheduled runs file candidates
+          # as intended. Only a manual dispatch can set this to true.
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: npx tsx scripts/stage-candidates.ts

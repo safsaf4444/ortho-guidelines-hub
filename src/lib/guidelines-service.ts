@@ -92,36 +92,78 @@ export const guidelinesService = {
     if (error) throw asPersistError('create', error);
   },
 
-  /** Update an existing guideline in Supabase. Throws if Supabase is unconfigured or write fails. */
+  /**
+   * Update an existing guideline in Supabase. Throws if Supabase is
+   * unconfigured, the write fails, or the write silently affected no rows.
+   *
+   * THE ZERO-ROW CASE IS NOT PARANOIA. A blocked INSERT returns error 42501,
+   * but a blocked UPDATE does not: RLS filters the row out of the statement's
+   * scope, so PostgREST reports a successful update of nothing at all. With
+   * writes now gated on `public.is_editor()`, every refusal on this path looks
+   * like success unless the affected rows are counted — and the UI would tell
+   * an editor their clinical edit was saved when the database had discarded it.
+   *
+   * `.select('id')` is what makes the count observable. A zero-length result
+   * means either RLS refused the write or the id does not exist; both are
+   * genuine failures for a caller that just tried to save an edit, so both
+   * throw.
+   */
   async update(guideline: Guideline): Promise<void> {
     if (!supabase) throw new Error('Supabase client is not initialized. Check your connection / environment variables.');
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from('guidelines')
       .update(toDbRow(guideline))
-      .eq('id', guideline.id);
+      .eq('id', guideline.id)
+      .select('id');
     if (error) throw asPersistError('update', error);
+    if (!data || data.length === 0) throw refusedOrMissing('update', guideline.id);
   },
 
   /**
    * Soft-delete a guideline: mark it archived rather than removing the row.
    *
    * There is no hard-delete path any more, and there cannot be one from the
-   * browser: the anon role has no DELETE policy on `guidelines` (see
-   * supabase-migration-soft-delete-and-mandatory-notes.sql), so a DELETE would
-   * silently affect zero rows. Since anyone can edit this site without signing
-   * in, that is deliberate — vandalism becomes a one-line UPDATE to undo
-   * rather than a restore from backup:
+   * browser: NO role has a DELETE policy on `guidelines` (see
+   * supabase-migration-soft-delete-and-mandatory-notes.sql, and the
+   * archive-only model preserved by
+   * supabase/migrations/20261011_create_staging_and_editor_roles.sql), so a
+   * DELETE would silently affect zero rows. Removal is therefore always
+   * recoverable with a one-line UPDATE rather than a restore from backup:
    *     update public.guidelines set archived = false where id = '<id>';
    *
    * Writes only the `archived` flag, not the whole row, so archiving can never
    * accidentally clobber a concurrent edit to another field.
+   *
+   * Counts affected rows for the same reason `update` does: a refusal on this
+   * path returns no error, and reporting a successful archive of nothing would
+   * make a row vanish from the UI while remaining live in the database.
    */
   async archive(id: string): Promise<void> {
     if (!supabase) throw new Error('Supabase client is not initialized. Check your connection / environment variables.');
-    const { error } = await supabase.from('guidelines').update({ archived: true }).eq('id', id);
+    const { data, error } = await supabase
+      .from('guidelines')
+      .update({ archived: true })
+      .eq('id', id)
+      .select('id');
     if (error) throw asPersistError('archive', error);
+    if (!data || data.length === 0) throw refusedOrMissing('archive', id);
   },
 };
+
+/**
+ * The error for a write that returned no error and changed nothing.
+ *
+ * Deliberately names both possible causes instead of guessing. The client
+ * cannot tell them apart — RLS does not report that it filtered a row — and
+ * naming the likely one first is more useful than a bare "0 rows affected".
+ */
+function refusedOrMissing(op: string, id: string): Error {
+  return new Error(
+    `${op} affected no rows for "${id}". Either the database refused the write `
+    + '(the signed-in account is not on the editor allowlist, or the session expired) '
+    + 'or that entry no longer exists. Nothing was saved.'
+  );
+}
 
 // Supabase/PostgREST errors carry the useful detail (code/details/hint) on the
 // error object itself, not just `.message`. Log the raw object so it's visible
