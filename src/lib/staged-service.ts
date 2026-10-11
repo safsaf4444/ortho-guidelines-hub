@@ -1,6 +1,11 @@
 import { supabase } from './supabase';
 import { isNotAnEditorError, NOT_AN_EDITOR_MESSAGE } from './editor-session';
-import { ALREADY_PROCESSED_CODE, markAlreadyProcessed } from './write-result';
+import {
+  ALREADY_PROCESSED_CODE,
+  classifyWriteFailure,
+  markAlreadyProcessed,
+  markRefused,
+} from './write-result';
 import { toDbRow } from './guidelines-mapper';
 import type { Guideline } from '../data/guidelines-data';
 import type { ChangeReason, CandidateVersionLink, DisplayCandidate } from './candidates';
@@ -245,8 +250,19 @@ export const stagedService = {
 
     if (error) {
       console.error('[staged-service] reject failed — raw error:', error);
-      if (isNotAnEditorError(error)) throw new Error(NOT_AN_EDITOR_MESSAGE);
+      // Every branch below re-wraps the raw error for readability, which DROPS
+      // `error.code` — and the code is the only evidence that the server
+      // answered at all. classifyWriteFailure() would then read the clean
+      // Error as 'unconfirmed' and the dashboard would tell the editor "could
+      // not be confirmed" about a decision the database had plainly made. So
+      // the raw error is classified first and the refusal carried across, the
+      // same way asPersistError() does it in guidelines-service.ts.
+      const keepRefusal = (thrown: Error): Error =>
+        classifyWriteFailure(error) === 'refused' ? markRefused(thrown) : thrown;
+
+      if (isNotAnEditorError(error)) throw keepRefusal(new Error(NOT_AN_EDITOR_MESSAGE));
       if (error.code === ALREADY_PROCESSED_CODE) {
+        // markAlreadyProcessed already implies refused.
         throw markAlreadyProcessed(new Error(
           `This candidate is no longer pending, so it was NOT rejected. `
           + await describeProcessedState(stagedId),
@@ -255,9 +271,13 @@ export const stagedService = {
       // 23514 is the reason-required check. Named because the generic
       // PostgREST text would send the editor looking for a database fault.
       if (error.code === '23514') {
-        throw new Error('A reason is required to reject a candidate. Nothing was changed.');
+        throw keepRefusal(new Error('A reason is required to reject a candidate. Nothing was changed.'));
       }
-      throw new Error(`Reject failed${error.code ? ` (${error.code})` : ''}: ${error.message}`);
+      // P0002 (no such candidate) lands here, as does any other answered
+      // failure. All are refusals: nothing was written.
+      throw keepRefusal(
+        new Error(`Reject failed${error.code ? ` (${error.code})` : ''}: ${error.message}`),
+      );
     }
     return data as string;
   },
