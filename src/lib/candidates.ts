@@ -1,4 +1,5 @@
 import type { Guideline } from '../data/guidelines-data';
+import { proposeGuidelineId } from './guideline-id';
 
 /**
  * UI-side mirror of the ingestion candidate schema owned by
@@ -204,9 +205,21 @@ export function changeReasonLabel(reason: ChangeReason): string {
  * the same default the database uses; the reviewer must confirm it, exactly
  * like the empty `section` and `type` above.
  */
-export function candidateToGuidelineDraft(candidate: DisplayCandidate): Guideline {
+export function candidateToGuidelineDraft(
+  candidate: DisplayCandidate,
+  existingIds: Iterable<string> = [],
+): Guideline {
   return {
-    id: `candidate-${candidate.candidateId}`,
+    // A readable slug the editor reviews before saving, NOT the candidate's
+    // content hash. This id becomes a permanent primary key and the changelog's
+    // foreign key the moment the draft is published, so
+    // `candidate-boa-new-guideline-3f9a1c4e7b22` would be permanent too. See
+    // src/lib/guideline-id.ts.
+    //
+    // `existingIds` defaults to empty so a caller with no catalogue to hand
+    // still gets a sensible slug; it then carries no collision guarantee, which
+    // is why the modal validates again against the real set before saving.
+    id: proposeGuidelineId(candidate.provider, candidate.topic, existingIds),
     section: '',
     topic: candidate.topic,
     source: candidate.provider,

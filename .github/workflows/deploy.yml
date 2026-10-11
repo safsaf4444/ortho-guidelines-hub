@@ -42,17 +42,33 @@ jobs:
       - name: Build
         run: npm run build
         env:
-          # Public values only, on purpose. The anon key is public by design
-          # and RLS is what protects writes (SECURITY.md).
+          # Public configuration ONLY. These two values are the entire client
+          # configuration, and both are safe to ship in a public bundle.
           #
-          # DO NOT add SUPABASE_SERVICE_ROLE_KEY here, and do not add a
-          # VITE_-prefixed copy of it. Editing is a local-only capability:
-          # vite.config.ts injects that key only when serving, so this build
-          # produces a bundle that physically cannot write. Passing it here
-          # would put a write path on the public internet.
+          # HOW AUTHORISATION ACTUALLY WORKS. This bundle CAN initiate writes:
+          # an editor signs in through the app (email + password) and the
+          # resulting session accompanies every request. What decides whether a
+          # write is allowed is PostgreSQL Row Level Security plus the editor
+          # allowlist in `public.is_editor()` — enforced in the database, not
+          # by this workflow, not by the bundle, and not by possession of a key.
+          # An unauthenticated visitor holding the anon key can only read.
+          # See SECURITY.md.
           #
-          # VITE_EDITOR_UUIDS is intentionally absent too — the editor
-          # allowlist it configured no longer exists.
+          # The anon key is therefore a routing credential, not a permission.
+          # It is public by design and cannot be made secret: it ships in every
+          # build and is a literal fallback below.
+          #
+          # NEVER add SUPABASE_SERVICE_ROLE_KEY here, and never add a
+          # VITE_-prefixed copy of it under any name. That key BYPASSES RLS
+          # entirely, so shipping it would hand every visitor full write access
+          # to all 231 clinical rows and make the allowlist irrelevant.
+          # scripts/tests/write-access.test.ts fails the build if a
+          # service-role key, a JWT-shaped string, or an editor account UUID
+          # appears anywhere in dist/.
+          #
+          # No editor identity belongs here either. The allowlist lives in the
+          # database so it can be changed without a redeploy; mirroring it into
+          # the bundle would create a second source of truth that can drift.
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL || 'https://xutjahmbyrvifcltpxxu.supabase.co' }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY || 'sb_publishable_MdOTKiEJr1RMUuMEY2lJNQ_Lhggiv3M' }}
 

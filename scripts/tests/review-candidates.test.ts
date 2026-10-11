@@ -169,7 +169,20 @@ eq('draft.source is the candidate provider', draft.source, 'BOA');
 eq('draft.versions has exactly one entry from sourceUrl', draft.versions, [{ label: 'Source', url: 'https://example.test/draft-source.pdf' }]);
 eq('draft.section is left blank for human editorial judgement', draft.section, '');
 eq('draft.summary is left blank — never invented from a candidate', draft.summary, '');
-check('draft.id is derived from candidateId, not reused as a live guideline id', draft.id === 'candidate-boa-new-guideline-abc123');
+// The id is now a readable slug proposed from provider + topic, NOT the
+// candidate's content hash. It becomes a permanent primary key and the
+// changelog's foreign key on publication, so `candidate-boa-new-guideline-abc123`
+// would have been permanent too. See src/lib/guideline-id.ts.
+eq('draft.id is a readable slug from provider and topic', draft.id, 'boa-draft-topic-verbatim');
+check('draft.id carries no candidate hash', !draft.id.includes('abc123') && !draft.id.startsWith('candidate-'));
+eq(
+  'draft.id avoids an id already in use',
+  candidateToGuidelineDraft(
+    { candidateId: 'c', topic: 'Draft Topic Verbatim', provider: 'BOA', changeReason: 'NEW_GUIDELINE', sourceUrl: '', fromLegacyFallback: false },
+    ['boa-draft-topic-verbatim'],
+  ).id,
+  'boa-draft-topic-verbatim-2',
+);
 
 const draftNoUrl = candidateToGuidelineDraft({
   candidateId: 'x',

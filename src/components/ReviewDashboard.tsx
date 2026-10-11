@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ExternalLink, RefreshCw } from 'lucide-react';
-import type { Guideline } from '../data/guidelines-data';
 import {
-  candidateToGuidelineDraft,
   changeReasonLabel,
   filterOutRejected,
   type DisplayCandidate,
@@ -52,7 +50,12 @@ export default function ReviewDashboard({
    * worth repeating because the answer will have changed.
    */
   signedIn: boolean;
-  onEditCandidate: (draft: Guideline, stagedId?: string) => void;
+  /**
+   * Hands the whole candidate up, not a prefilled draft. Building the draft
+   * needs the full set of existing guideline ids to propose a non-colliding
+   * one, and that belongs to App, not to a review list.
+   */
+  onEditCandidate: (candidate: DisplayCandidate) => void;
 }) {
   const [load, setLoad] = useState<StagedLoad | 'loading'>('loading');
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
@@ -175,7 +178,7 @@ export default function ReviewDashboard({
             <CandidateCard
               key={candidate.candidateId}
               candidate={candidate}
-              onEdit={() => onEditCandidate(candidateToGuidelineDraft(candidate), candidate.stagedId)}
+              onEdit={() => onEditCandidate(candidate)}
               onDismiss={() => handleDismiss(candidate.candidateId, candidate.topic)}
             />
           ))}

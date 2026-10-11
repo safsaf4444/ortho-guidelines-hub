@@ -152,6 +152,18 @@ export const stagedService = {
     if (error) {
       console.error('[staged-service] approve failed — raw error:', error);
       if (isNotAnEditorError(error)) throw new Error(NOT_AN_EDITOR_MESSAGE);
+      // 23505 is a unique violation, which on this path means the chosen id is
+      // already taken. The form checks that too, but it can only see the
+      // archived-filtered list it was given, so an id free in the UI can still
+      // belong to an archived row. Named explicitly because "duplicate key
+      // value violates unique constraint guidelines_pkey" tells an editor
+      // nothing about what to do next.
+      if (error.code === '23505') {
+        throw new Error(
+          `That ID ("${guideline.id}") is already used by another entry — possibly an archived one, `
+          + 'which the form cannot see. Nothing was published. Change the ID and try again.'
+        );
+      }
       throw new Error(`Publish failed${error.code ? ` (${error.code})` : ''}: ${error.message}`);
     }
     return data as string;
