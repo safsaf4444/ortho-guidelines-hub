@@ -288,6 +288,64 @@ check('the 55000 message no longer asserts publication unconditionally',
 check('a genuine rollback refusal still says it is retryable',
   /still pending and can be retried/.test(persist));
 
+console.log('\n[4f] Persistent rejection: attributed, reasoned, and distinct from Hide');
+
+const sql = readFileSync('supabase/migrations/20261012_reject_staged_candidate.sql', 'utf8');
+check('the RPC is SECURITY DEFINER', /create or replace function public\.reject_staged_candidate[^]*?security definer/.test(sql));
+check('search_path is pinned', /set search_path = public, pg_temp/.test(sql));
+check('it checks the editor allowlist', /if not public\.is_editor\(\) then/.test(sql));
+// Must use a whitespace-aware test, NOT length(btrim(...)). btrim with no
+// second argument strips spaces only, so a tab or newline passes as non-blank —
+// the local suite caught exactly that, accepting "   \n\t " as a reason.
+// Plain substring matching: the patterns contain backslashes, and escaping
+// them through a regex literal is how the first version of this assertion came
+// to test for two backslashes instead of one.
+check('it requires a non-blank reason', sql.includes("p_reason !~ '\\S'"));
+check('the blank test is whitespace-aware, not space-only',
+  !sql.includes('length(btrim(p_reason)) = 0'), 'btrim() alone misses tabs and newlines');
+check('the stored reason is trimmed of all whitespace',
+  sql.includes("btrim(p_reason, E' \\t\\r\\n')"));
+// Lock BEFORE the state test is what serialises a concurrent approve+reject.
+const lockAt = sql.indexOf('for update');
+const stateAt = sql.indexOf("review_status <> 'pending'");
+check('it locks the row BEFORE testing state', lockAt > 0 && stateAt > 0 && lockAt < stateAt,
+  `lock at ${lockAt}, state test at ${stateAt}`);
+check('only a pending candidate may be rejected', /review_status <> 'pending'[^]*?errcode = '55000'/.test(sql));
+check('it records status, reason, timestamp and reviewer', /review_status = 'rejected'/.test(sql)
+  && /review_note   = btrim\(p_reason, E/.test(sql)
+  && /reviewed_at   = now\(\)/.test(sql)
+  && /reviewed_by   = auth\.uid\(\)/.test(sql));
+// The defining property: a rejection publishes nothing.
+const fnBody = /create or replace function public\.reject_staged_candidate[^]*?\n\$\$;/.exec(sql)?.[0] ?? '';
+check('the function body never touches public.guidelines', fnBody.length > 0 && !/public\.guidelines\b/.test(fnBody));
+check('the function body never touches guideline_changelog', fnBody.length > 0 && !/guideline_changelog/.test(fnBody));
+check('database references are schema-qualified', /from public\.staged_guidelines/.test(fnBody)
+  && /update public\.staged_guidelines/.test(fnBody));
+check('EXECUTE is revoked from public and anon, granted to authenticated only',
+  /revoke all on function public\.reject_staged_candidate\(uuid, text\) from public/.test(sql)
+  && /revoke all on function public\.reject_staged_candidate\(uuid, text\) from anon/.test(sql)
+  && /grant execute on function public\.reject_staged_candidate\(uuid, text\) to authenticated/.test(sql));
+check('a reason is required at the DATABASE layer too, not only in the form',
+  /staged_guidelines_rejection_needs_note/.test(sql) && /review_status <> 'rejected'\s*\n?\s*or \(review_note is not null/.test(sql));
+check('the migration adds no new policy', !/create policy/.test(sql));
+
+const dash = readFileSync('src/components/ReviewDashboard.tsx', 'utf8');
+check('the service exposes reject()', /async reject\(stagedId: string, reason: string\)/.test(staged));
+check('reject handles the already-processed state via read-back',
+  /no longer pending, so it was NOT rejected/.test(staged) && /describeProcessedState/.test(staged));
+check('the dashboard confirms the target by name', /Reject <span className="font-semibold">\{candidate\.topic\}<\/span>\?/.test(dash));
+check('a reason is required before the confirm button enables',
+  /disabled=\{reject\.busy \|\| reject\.reason\.trim\(\)\.length === 0\}/.test(dash));
+check('success is shown only after the RPC resolves',
+  /await stagedService\.reject\([^]*?setRejected\(/.test(dash));
+check('the reason survives a failure', /\.\.\.rejecting,\s*\n\s*busy: false,/.test(dash));
+check('an unconfirmed reject is not reported as a refusal',
+  /classifyWriteFailure\(err\) !== 'refused'/.test(dash) && /UNCONFIRMED_SAVE_MESSAGE/.test(dash));
+// Hide and Reject must not read as the same action.
+check('persistent Reject and temporary Hide are separate controls',
+  /Reject…/.test(dash) && /Hide\n/.test(dash) && /Writes nothing, and the card returns on reload/.test(dash));
+check('Reject is offered only for a candidate with a queue row', /canReject=\{Boolean\(candidate\.stagedId\)\}/.test(dash));
+
 console.log('\n[5] The editor’s unsaved draft survives a failure');
 
 const handleSave = /const handleSave = async[^]*?\n  \};/.exec(app)?.[0] ?? '';
