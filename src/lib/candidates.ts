@@ -86,6 +86,16 @@ export interface CandidatesPayload {
 /** A candidate normalised for display, regardless of which schema it came from. */
 export interface DisplayCandidate {
   candidateId: string;
+  /**
+   * The `staged_guidelines.id` uuid, when this candidate came from that table
+   * (see src/lib/staged-service.ts). It is the only identifier
+   * `approve_staged_guideline()` accepts, so its presence is also what marks a
+   * candidate as publishable through the atomic RPC.
+   *
+   * Absent for candidates read from a candidates.json payload, which have no
+   * row in the queue and therefore nothing to approve.
+   */
+  stagedId?: string;
   topic: string;
   provider: string;
   providerName?: string;

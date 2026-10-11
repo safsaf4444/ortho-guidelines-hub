@@ -8,7 +8,10 @@ import { findDuplicateCandidates, countGuidelinesWithDuplicates, pairKey, Duplic
 import { computeMerge } from './lib/dedupe'
 import { cn } from './lib/utils'
 import ReviewDashboard from './components/ReviewDashboard'
-import { canWrite, writeBlockedReason } from './lib/write-access'
+import EditorAuthControl from './components/EditorAuthControl'
+import { useEditorSession } from './lib/editor-session'
+import { stagedService } from './lib/staged-service'
+import { canWrite, writeBlockedReason, type WriteGate } from './lib/write-access'
 import { splitPublishers, canonicalProvider, providerUrl } from './lib/providers'
 import { findGapNote } from './lib/gap-detection'
 import { buildCatalogue, catalogueRowCount } from './lib/catalogue'
@@ -22,21 +25,23 @@ const CATALOGUE_VIEW = '__catalogue__';
 const ABOUT_VIEW = '__about__';
 
 // Build-time kill switch for every write control (Add / Edit / Delete / Merge /
-// link-verification / changelog "Add note"). Now TRUE: the read-only lockdown
-// that stood while editor ownership was undecided has been lifted.
+// link-verification / changelog "Add note").
 //
-// ⚠ Editing is PUBLIC. Every visitor to the deployed site can add, edit and
-// delete guidelines, with no sign-in. That is granted at the database layer:
-// `guidelines` carries insert/update/delete RLS policies for the anon role
-// (supabase-migration-public-write-access.sql), and the public anon key in
-// this bundle is enough to use them. A deliberate decision by the site owner
-// — see SECURITY.md.
+// Editing requires signing in as a named editor. That is enforced at the
+// database layer: `guidelines` and `guideline_changelog` carry write policies
+// gated on `public.is_editor()`, a hardcoded allowlist of editor account
+// UUIDs, and the anon key alone grants only SELECT
+// (supabase/migrations/20261011_create_staging_and_editor_roles.sql).
 //
-// This flag is therefore no longer a security control, only a convenience:
-// set it to false to hide every write control everywhere. Doing so does NOT
-// close the write path — anyone can still write via the REST API with the
-// public key. To actually revoke public writes, drop the RLS policies (the
-// rollback block in supabase-migration-public-write-access.sql).
+// This replaced a period of PUBLIC unauthenticated editing, during which any
+// visitor could add, edit or delete clinical guideline rows with the published
+// anon key. Do not reinstate that; see SECURITY.md for the history.
+//
+// This flag remains a convenience, not the security control: set it to false
+// to hide every write control everywhere. Doing so hides the UI but is not
+// what prevents a write — the allowlist is. To revoke write access outright,
+// empty `public.is_editor()` (one statement, shown at the foot of the
+// migration); to revoke it for one person, remove their UUID from it.
 const WRITES_ENABLED: boolean = true;
 
 // Display labels only — the underlying field name and stored values
@@ -268,12 +273,24 @@ export default function App() {
   const [fallbackReason, setFallbackReason] = useState<string | undefined>(undefined);
   const pwa = usePwaUpdate();
   const isOnline = useOnlineStatus();
-  // Write gate, layer 2. WRITES_ENABLED lifts the build-time kill switch; a
-  // write control additionally requires a live database to write to (in
-  // static fallback mode every write would throw). There is no sign-in,
-  // account or allowlist: editing is open to everyone, everywhere.
+  const session = useEditorSession();
+
+  // Write gate. Three independent conditions, all required: the build-time
+  // kill switch, a live database to write to (in static fallback mode every
+  // write would throw), and an editor session — because every write policy
+  // calls auth.uid(), so a signed-out write is refused by Postgres.
   // See src/lib/write-access.ts.
-  const canEdit = isSupabaseEnabled;
+  const gate: WriteGate = {
+    writesEnabled: WRITES_ENABLED,
+    dbAvailable: isSupabaseEnabled,
+    signedIn: session.signedIn,
+  };
+
+  // What the UI uses to decide whether to OFFER a write control. Prop-drilled
+  // under the old name so every existing `WRITES_ENABLED && canEdit` site now
+  // requires a signed-in editor too, with no further plumbing. It is a
+  // prediction of the database's answer, not the decision itself.
+  const canEdit = canWrite(gate);
 
   // Silently replace static data with DB data when Supabase is configured.
   // Falls back to GUIDELINES_DATA automatically — see guidelines-service.ts.
@@ -311,6 +328,19 @@ export default function App() {
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
   const [editingGuideline, setEditingGuideline] = useState<Guideline | null>(null);
   const [isNewGuideline, setIsNewGuideline] = useState(false);
+  /**
+   * The `staged_guidelines.id` the open modal came from, or null for an
+   * ordinary edit or a hand-added entry.
+   *
+   * Kept beside the draft rather than on the Guideline itself: a staging uuid
+   * is a fact about where this edit session came from, not a property of the
+   * guideline, and adding it to the type would push it through the mapper into
+   * a column that does not exist. It is what selects the atomic approve RPC
+   * over the ordinary save path in persistGuideline, so EVERY path that opens
+   * the modal must set or clear it — leaving a stale value would publish the
+   * next unrelated edit against the wrong queue row.
+   */
+  const [stagedCandidateId, setStagedCandidateId] = useState<string | null>(null);
   const [dismissedPairs, setDismissedPairs] = useState<Set<string>>(() => loadDismissedPairs());
 
   const sections = sortSections([...new Set(guidelines.map(g => g.section))]);
@@ -387,15 +417,22 @@ export default function App() {
   const handleEdit = (guideline: Guideline) => {
     setEditingGuideline({ ...guideline, versions: guideline.versions.map(v => ({ ...v })) });
     setIsNewGuideline(false);
+    setStagedCandidateId(null);
   };
 
   // Opens the shared Edit modal with a candidate's topic/source/versions
   // prefilled, for manual editorial review. Not in `guidelines`, so treated
-  // as "new" like handleAddNew — the modal's own read-only gate is what
-  // actually prevents this from ever reaching Supabase (see persistGuideline).
-  const handleReviewCandidate = (draft: Guideline) => {
+  // as "new" like handleAddNew.
+  //
+  // `stagedId` is what makes this save atomic: persistGuideline routes it to
+  // approve_staged_guideline(), which retires the queue row, publishes the
+  // guideline and writes the change note in one transaction. It is undefined
+  // for a candidate that has no row in the queue, which falls back to the
+  // ordinary two-step save.
+  const handleReviewCandidate = (draft: Guideline, stagedId?: string) => {
     setEditingGuideline(draft);
     setIsNewGuideline(true);
+    setStagedCandidateId(stagedId ?? null);
   };
 
   const handleAddNew = () => {
@@ -419,28 +456,38 @@ export default function App() {
       guidanceStatus: 'current',
     });
     setIsNewGuideline(true);
+    setStagedCandidateId(null);
   };
 
   /**
    * Persist a guideline AND its change note.
    *
-   * Editing is public and unauthenticated, so there is no account to
-   * attribute a change to: the note is the only audit trail there is, and
-   * every caller must supply one. See src/lib/change-note.ts.
+   * Changes are attributable now — every write carries the editor's
+   * `auth.uid()`, and `staged_guidelines.reviewed_by` records who approved a
+   * candidate — but the note is still what explains WHY, and every caller
+   * must supply one. See src/lib/change-note.ts.
    *
-   * Order matters. The guideline is written first because
-   * guideline_changelog.guideline_id is a foreign key, so a note for a NEW
-   * guideline cannot exist before the row does. The two writes are separate
-   * PostgREST requests and are therefore NOT atomic — if the note fails
-   * after the guideline succeeded we say so loudly rather than swallow it,
-   * because it means a change landed unlogged.
+   * TWO PATHS, and the difference is atomicity:
+   *
+   *   * Publishing a staged candidate goes through
+   *     approve_staged_guideline(), which retires the queue row, inserts the
+   *     guideline and writes the note in ONE transaction. All three or none.
+   *
+   *   * Every other save is still two separate PostgREST requests. The
+   *     guideline is written first because guideline_changelog.guideline_id
+   *     is a foreign key, so a note for a NEW guideline cannot exist before
+   *     the row does. That pair is NOT atomic — if the note fails after the
+   *     guideline succeeded we say so loudly rather than swallow it, because
+   *     it means a change landed unlogged. Closing that gap for ordinary
+   *     edits needs a second RPC; see FOLLOW-UPS.md.
    */
   const persistGuideline = async (updated: Guideline, isNew: boolean, note: string) => {
-    // Read-only lockdown enforced at the source, not just by hiding the Save
-    // button: even if something calls this directly, it must not reach
-    // Supabase unless both WRITES_ENABLED and canEdit hold.
-    if (!canWrite(WRITES_ENABLED, canEdit)) {
-      console.warn(`[persistGuideline] Ignored — ${writeBlockedReason(WRITES_ENABLED, canEdit)} No local or database change made.`);
+    // Enforced at the source, not just by hiding the Save button: even if
+    // something calls this directly, it must not reach Supabase unless all
+    // three gate conditions hold. The database would refuse the write anyway;
+    // this keeps the local optimistic update from claiming otherwise.
+    if (!canWrite(gate)) {
+      console.warn(`[persistGuideline] Ignored — ${writeBlockedReason(gate)} No local or database change made.`);
       return;
     }
     const prepared = prepareChangeNote(note);
@@ -449,6 +496,29 @@ export default function App() {
       alert(prepared.error);
       return;
     }
+    // ── Staged candidate: one atomic call, and NOT optimistic ──────────────
+    // The local update is withheld until the RPC returns. Publishing is the
+    // one write where an optimistic row would be actively misleading: it
+    // would show the entry in the live catalogue as published while the queue
+    // row was still pending, and the whole point of the transaction is that
+    // those two states cannot disagree.
+    if (stagedCandidateId) {
+      try {
+        await stagedService.approve(stagedCandidateId, updated, prepared.note);
+        setGuidelines(prev => [...prev, updated]);
+        setStagedCandidateId(null);
+      } catch (err) {
+        console.error('[persistGuideline] Approve failed — nothing was published:', err);
+        const msg = err instanceof Error ? err.message : String(err);
+        alert(
+          `⚠️ PUBLISH FAILED\n\n${msg}\n\n`
+          + 'Nothing was saved: the guideline, the change note and the queue entry were all rolled '
+          + 'back together, so the candidate is still pending and can be retried.'
+        );
+      }
+      return;
+    }
+
     // Update local state immediately
     setGuidelines(prev =>
       isNew ? [...prev, updated] : prev.map(g => g.id === updated.id ? updated : g)
@@ -509,8 +579,8 @@ export default function App() {
   // Non-optimistic: wait for the server delete to succeed before the UI
   // claims the record is gone, so a failed call never leaves a false state.
   const handleDelete = async (id: string) => {
-    if (!canWrite(WRITES_ENABLED, canEdit)) {
-      console.warn(`[handleDelete] Ignored — ${writeBlockedReason(WRITES_ENABLED, canEdit)} No database change made.`);
+    if (!canWrite(gate)) {
+      console.warn(`[handleDelete] Ignored — ${writeBlockedReason(gate)} No database change made.`);
       return;
     }
     const topic = guidelines.find(g => g.id === id)?.topic ?? id;
@@ -637,10 +707,18 @@ export default function App() {
           </div>
 
 
-          {/* Review Staged Guidelines — read-only manual review tool. Visible to
-              everyone: it's a review surface, not a publication or admin
-              surface. Unaffected by canEdit — it reads staged candidates and
-              writes nothing. See ReviewDashboard.tsx. */}
+          {/* Editor sign-in. Required for any write now that RLS gates them on
+              public.is_editor() — without a session every write control would
+              be offered and then refused. Icon-only below xl on purpose; see
+              the header-width note in EditorAuthControl.tsx before giving it a
+              label at a smaller breakpoint. */}
+          <EditorAuthControl session={session} />
+
+          {/* Review Staged Guidelines — manual review tool. The BUTTON stays
+              visible to everyone; the queue behind it is editor-only at the
+              database layer and says so when signed out. Unaffected by
+              canEdit — this component writes nothing itself. See
+              ReviewDashboard.tsx. */}
           <button
             onClick={() => setCurrentSection(REVIEW_QUEUE_VIEW)}
             title="Manually review discovered guideline candidates awaiting editorial completion"
@@ -952,7 +1030,7 @@ export default function App() {
             ) : currentSection === CHANGELOG_VIEW ? (
               <ChangelogPanel guidelines={guidelines} />
             ) : currentSection === REVIEW_QUEUE_VIEW ? (
-              <ReviewDashboard onEditCandidate={handleReviewCandidate} />
+              <ReviewDashboard signedIn={session.signedIn} onEditCandidate={handleReviewCandidate} />
             ) : currentSection === CATALOGUE_VIEW ? (
               <CatalogueView guidelines={guidelines} />
             ) : currentSection === ABOUT_VIEW ? (
@@ -1013,20 +1091,22 @@ export default function App() {
         </main>
       </div>
 
-      {/* Reachable regardless of WRITES_ENABLED — the read-only Pending Review
-          UI opens this modal for prefilled manual review (see
+      {/* Reachable regardless of WRITES_ENABLED — the Pending Review queue
+          opens this modal for prefilled manual review (see
           handleReviewCandidate). Save/Delete are gated inside EditModal
           itself, and persistGuideline/handleDelete refuse to write unless
-          canWrite(WRITES_ENABLED, canEdit) — this outer condition is not the
-          write boundary. */}
+          canWrite(gate) holds — and the database refuses regardless. This
+          outer condition is not the write boundary. */}
       {editingGuideline && (
         <EditModal
           guideline={editingGuideline}
           canEdit={canEdit}
+          blockedReason={writeBlockedReason(gate)}
           onSave={handleSave}
-          onClose={() => setEditingGuideline(null)}
+          onClose={() => { setEditingGuideline(null); setStagedCandidateId(null); }}
           onDelete={handleDelete}
           isNew={isNewGuideline}
+          isStagedCandidate={stagedCandidateId !== null}
         />
       )}
 
@@ -1840,10 +1920,12 @@ function CardChangelog({ guidelineId, canEdit }: { guidelineId: string; canEdit:
   const entries = load?.ok ? load.entries : [];
 
   const addNote = async () => {
-    // Source-level guard, not just the hidden input below — see
-    // src/lib/write-access.ts.
-    if (!canWrite(WRITES_ENABLED, canEdit)) {
-      console.warn(`[CardChangelog] Ignored — ${writeBlockedReason(WRITES_ENABLED, canEdit)} No note added.`);
+    // Source-level guard, not just the hidden input below. `canEdit` already
+    // folds in all three gate conditions (App builds it with canWrite), so
+    // this re-checks the same answer rather than recomputing it from parts
+    // this component does not have — see src/lib/write-access.ts.
+    if (!canEdit) {
+      console.warn('[CardChangelog] Ignored — writing is not available right now. No note added.');
       return;
     }
     const trimmed = text.trim();
@@ -1994,14 +2076,22 @@ function ChangelogPanel({ guidelines }: { guidelines: Guideline[] }) {
 // ─── Edit Modal ───────────────────────────────────────────────────────────────
 
 function EditModal({
-  guideline, canEdit, onSave, onClose, onDelete, isNew,
+  guideline, canEdit, blockedReason, onSave, onClose, onDelete, isNew, isStagedCandidate,
 }: {
   guideline: Guideline;
   canEdit: boolean;
+  /** Which of the three gate conditions is unmet, or null when writable. */
+  blockedReason: string | null;
   onSave: (g: Guideline, note: string) => void;
   onClose: () => void;
   onDelete: (id: string) => void;
   isNew: boolean;
+  /**
+   * This draft came from the staging queue, so saving publishes it through
+   * approve_staged_guideline(). Affects wording only — the atomic path is
+   * chosen in persistGuideline, not here.
+   */
+  isStagedCandidate: boolean;
 }) {
   const [form, setForm] = useState<Guideline>({
     ...guideline,
@@ -2023,8 +2113,12 @@ function EditModal({
   const reasonOk = !reasonRequired || (form.inclusionReason ?? '').trim().length > 0;
   const canSave = noteOk && reasonOk;
 
-  const writable = canWrite(WRITES_ENABLED, canEdit);
-  const blockedReason = writeBlockedReason(WRITES_ENABLED, canEdit);
+  // `canEdit` is already canWrite(gate) from App, so it IS the writable
+  // answer. blockedReason is passed in rather than recomputed because the
+  // three conditions behind it (kill switch / no database / signed out) live
+  // in App, and guessing which one applies from a single boolean is exactly
+  // the generic "not allowed" message write-access.ts exists to avoid.
+  const writable = canEdit;
 
   const set = <K extends keyof Guideline>(key: K, value: Guideline[K]) =>
     setForm(prev => ({ ...prev, [key]: value }));
@@ -2053,7 +2147,7 @@ function EditModal({
         {/* Header */}
         <div className="flex justify-between items-center px-4 py-2.5 border-b border-slate-200 shrink-0">
           <h2 className="text-[13px] font-semibold text-slate-800">
-            {isNew ? 'Add Guideline' : 'Edit Guideline'}
+            {isStagedCandidate ? 'Review & Publish Candidate' : isNew ? 'Add Guideline' : 'Edit Guideline'}
           </h2>
           <button onClick={onClose} className="text-slate-500 hover:text-slate-600 transition-colors">
             <X className="w-4 h-4" />
@@ -2379,7 +2473,7 @@ This archives the entry rather than deleting it: it disappears from the site, bu
                     ? "bg-[#0F172A] text-white hover:bg-slate-800"
                     : "bg-slate-200 text-slate-500 cursor-not-allowed"
                 )}>
-                Save Guideline
+                {isStagedCandidate ? 'Publish Guideline' : 'Save Guideline'}
               </button>
             ) : (
               <button

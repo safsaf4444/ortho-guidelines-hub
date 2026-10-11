@@ -92,6 +92,23 @@ before the site is shown widely.
 
 ---
 
+### Ordinary edits are still two non-atomic requests
+Publishing a staged candidate is atomic — `approve_staged_guideline()` writes
+the guideline, its change note and the queue update in one transaction. An
+ordinary edit is not: PostgREST issues the guideline write and the note write
+separately, so an editor using `curl` can `PATCH` a guideline and never post a
+note, and a note that fails after its guideline succeeded leaves a change
+unlogged (the UI says so loudly, but cannot prevent it).
+
+The fix is the same shape as the approve RPC: a second `SECURITY DEFINER`
+function taking the patch and the note together, with direct `UPDATE` on
+`guidelines` then revoked from `authenticated`. Deferred because the blast
+radius shrank enormously once only named editors could write at all — this went
+from "any anonymous caller can make an untraceable edit" to "a named editor can
+make an unexplained one". Worth doing, not urgent.
+
+---
+
 ## Not deferred — decided
 
 - **`local-pruh` has zero rows.** Nothing in the catalogue is PRUH-authored.

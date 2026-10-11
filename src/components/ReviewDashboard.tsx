@@ -1,32 +1,35 @@
-import { useState, useEffect, useRef } from 'react';
-import { ExternalLink } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { ExternalLink, RefreshCw } from 'lucide-react';
 import type { Guideline } from '../data/guidelines-data';
 import {
   candidateToGuidelineDraft,
   changeReasonLabel,
   filterOutRejected,
-  normaliseCandidates,
-  type CandidatesPayload,
   type DisplayCandidate,
 } from '../lib/candidates';
-import mockCandidates from '../data/mock-candidates.json';
+import { stagedService, type StagedLoad } from '../lib/staged-service';
 import { cn } from '../lib/utils';
 
 /**
- * Read-only Pending Review UI.
+ * The Pending Review queue, read from `public.staged_guidelines`.
  *
- * This is a manual review tool, not an authorization or publication surface —
- * there is no sign-in, and nothing here writes anywhere. "Review & Edit"
- * opens the existing Edit Guideline modal, prefilled, for a human to complete
- * editorially; the modal itself refuses to save while WRITES_ENABLED is
- * false (enforced at the modal's save-handler source, not just here).
+ * Previously this rendered a static JSON fixture (src/data/mock-candidates.json)
+ * because there was no queue table and no write policy, so nothing here could
+ * ever be persisted. Both are now true: the sync GitHub Action populates
+ * staged_guidelines with the service-role key, and
+ * `approve_staged_guideline()` publishes a reviewed row atomically. See
+ * supabase/migrations/20261011_create_staging_and_editor_roles.sql.
  *
- * The dismiss action is deliberately named "Dismiss", not "Reject". It only
- * hides a card from this browser tab's session: it is not persisted and does
- * not touch the candidate source data, so the card returns on reload. Genuine
- * persistence is not possible here — candidates come from a static JSON
- * fixture, not a table, and RLS grants no write policy — so the label states
- * what the button actually does rather than implying a durable decision.
+ * Still not an authorization surface. "Review & Edit" opens the existing Edit
+ * Guideline modal prefilled, for a human to complete editorially; publication
+ * happens there, through the RPC, and the database checks the editor allowlist
+ * on the way in. Nothing in this component writes.
+ *
+ * The queue is editor-only (RLS), and an unauthenticated SELECT returns an
+ * EMPTY LIST rather than an error — so "sign in to see this" and "the queue is
+ * empty" are rendered as distinct states deliberately. Collapsing them would
+ * tell a signed-out reader the pipeline had found nothing, which is the same
+ * class of bug as showing a stale snapshot as if it were live.
  */
 
 /** How long the undo toast stays on screen after a dismiss. */
@@ -40,25 +43,41 @@ function formatDate(iso: string | undefined): string | null {
 }
 
 export default function ReviewDashboard({
-  payload = mockCandidates as CandidatesPayload,
+  signedIn,
   onEditCandidate,
 }: {
-  payload?: CandidatesPayload;
-  onEditCandidate: (draft: Guideline) => void;
+  /**
+   * Drives a refetch on sign-in/sign-out. Not a permission check — the
+   * database decides what this session can read; this only means the fetch is
+   * worth repeating because the answer will have changed.
+   */
+  signedIn: boolean;
+  onEditCandidate: (draft: Guideline, stagedId?: string) => void;
 }) {
+  const [load, setLoad] = useState<StagedLoad | 'loading'>('loading');
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
   // The most recent dismissal, kept only long enough to offer an undo.
   const [undo, setUndo] = useState<{ id: string; topic: string } | null>(null);
   const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Bumped by the Refresh button; also the effect's re-run trigger.
+  const [reloadToken, setReloadToken] = useState(0);
+
+  const refresh = useCallback(() => setReloadToken(t => t + 1), []);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoad('loading');
+    stagedService.listPending().then(result => {
+      if (!cancelled) setLoad(result);
+    });
+    return () => { cancelled = true; };
+  }, [signedIn, reloadToken]);
 
   // Clear any pending timer on unmount so a fired timeout cannot setState on an
   // unmounted component.
   useEffect(() => () => {
     if (undoTimer.current) clearTimeout(undoTimer.current);
   }, []);
-
-  const allCandidates = normaliseCandidates(payload);
-  const visible = filterOutRejected(allCandidates, dismissedIds);
 
   const handleDismiss = (candidateId: string, topic: string) => {
     setDismissedIds(prev => {
@@ -83,19 +102,72 @@ export default function ReviewDashboard({
     setUndo(null);
   };
 
-  if (allCandidates.length === 0) {
-    return <p className="text-[12px] text-slate-500 mt-3">No pending candidates in this data source.</p>;
+  if (load === 'loading') {
+    return (
+      <div className="mt-3" aria-busy="true" aria-live="polite">
+        <span className="sr-only">Loading the review queue…</span>
+        {[0, 1].map(i => (
+          <div key={i} className="border border-slate-200 rounded-md bg-white p-3 mb-2.5">
+            <div className="h-3.5 w-1/2 bg-slate-200 rounded animate-pulse mb-2" />
+            <div className="h-2.5 w-1/3 bg-slate-100 rounded animate-pulse" />
+          </div>
+        ))}
+      </div>
+    );
   }
+
+  if (!load.ok) {
+    return (
+      <div className="mt-3 border border-slate-200 bg-white rounded-md px-3.5 py-3 max-w-lg">
+        <p className="text-[12px] font-medium text-slate-800">
+          {load.reason === 'signed-out' ? 'Editor sign-in required'
+            : load.reason === 'static' ? 'Review queue unavailable offline'
+            : load.reason === 'no-table' ? 'Review queue not set up yet'
+            : 'Could not load the review queue'}
+        </p>
+        <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">{load.message}</p>
+        {load.reason !== 'static' && (
+          <button
+            onClick={refresh}
+            className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 border border-slate-200 rounded
+                       text-[11px] text-slate-600 hover:bg-slate-50 transition-colors"
+          >
+            <RefreshCw className="w-3 h-3 shrink-0" />
+            Try again
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  const visible = filterOutRejected(load.candidates, dismissedIds);
 
   return (
     <div className="mt-3">
-      <p className="text-[11px] text-slate-500 mb-3">
-        Discovered items awaiting manual editorial review. Nothing here is published automatically —
-        "Review &amp; Edit" opens the guideline form prefilled for a human to complete; "Dismiss" only
-        hides the card in this browser tab and does not persist, so it returns on reload.
-      </p>
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <p className="text-[11px] text-slate-500 max-w-xl leading-relaxed">
+          Discovered items awaiting manual editorial review, read live from the staging queue.
+          Nothing here is published automatically — "Review &amp; Edit" opens the guideline form
+          prefilled for a human to complete, and saving it publishes the entry and its change note
+          in one atomic step. "Dismiss" only hides the card in this browser tab and does not
+          persist, so it returns on reload.
+        </p>
+        <button
+          onClick={refresh}
+          title="Re-read the staging queue"
+          className="shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1 border border-slate-200 rounded
+                     text-[11px] text-slate-600 hover:bg-slate-50 transition-colors"
+        >
+          <RefreshCw className="w-3 h-3 shrink-0" />
+          Refresh
+        </button>
+      </div>
 
-      {visible.length === 0 ? (
+      {load.candidates.length === 0 ? (
+        <p className="text-[12px] text-slate-500">
+          The staging queue is empty — the sync pipeline has not filed any candidates awaiting review.
+        </p>
+      ) : visible.length === 0 ? (
         <p className="text-[12px] text-slate-500">All candidates in this session have been dismissed.</p>
       ) : (
         <div className="flex flex-col gap-2.5">
@@ -103,7 +175,7 @@ export default function ReviewDashboard({
             <CandidateCard
               key={candidate.candidateId}
               candidate={candidate}
-              onEdit={() => onEditCandidate(candidateToGuidelineDraft(candidate))}
+              onEdit={() => onEditCandidate(candidateToGuidelineDraft(candidate), candidate.stagedId)}
               onDismiss={() => handleDismiss(candidate.candidateId, candidate.topic)}
             />
           ))}

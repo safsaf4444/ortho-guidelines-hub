@@ -25,29 +25,44 @@ The app works without a database (falls back to static data), but to enable data
 
 ## Security — current status
 
-**Status: guideline content is PUBLICLY EDITABLE. Anyone can add, edit or
-delete entries on the live site, with no sign-in.**
+**Status: guideline content is editable only by named editor accounts.**
+Verified live on 11 October 2026 — there is no anonymous write policy on any
+table.
 
-This is a deliberate decision by the site owner, not an oversight. Read
-[SECURITY.md](SECURITY.md) before changing anything in this area.
+Read [SECURITY.md](SECURITY.md) before changing anything in this area.
 
-- **Database, live:** `guidelines` has RLS enabled with public `SELECT`,
-  `INSERT`, `UPDATE` and `DELETE` policies for the `anon` role
-  (`supabase-migration-public-write-access.sql`). `guideline_changelog` has
-  public `SELECT` and `INSERT`, and deliberately no `UPDATE`/`DELETE`, so it
-  stays append-only — anyone can add a note, nobody can alter or remove one.
-- **App:** write controls render for every visitor. `WRITES_ENABLED = true`
-  plus `isSupabaseEnabled` is all that gates them, and neither is a security
-  control — the permission lives in RLS. Setting `WRITES_ENABLED = false`
-  hides the buttons but does NOT close the write path; only dropping the RLS
-  policies does that.
-- **No secret is shipped.** Public writes are granted via RLS using the
-  ordinary public anon key. The service-role key is not in any bundle, and
-  `scripts/tests/write-access.test.ts` fails the build if it ever appears.
+- **How it is enforced:** writing requires signing in, and the account's UUID
+  must be listed in `public.is_editor()` — a hardcoded allowlist in the
+  database, checked by RLS on every write. Not `auth.role() = 'authenticated'`,
+  which would admit anyone able to self-register. Applied by
+  `supabase/migrations/20261011_create_staging_and_editor_roles.sql`.
+- **What the public can do:** read everything, and nothing else. The catalogue
+  and its changelog stay publicly readable with no account; the staging queue
+  is editor-only.
+- **App:** write controls require all three of `WRITES_ENABLED`, a live
+  database, and an editor session (`src/lib/write-access.ts`). None of them is
+  the security control — the permission lives in RLS. To revoke write access
+  outright, empty `public.is_editor()`; that takes effect immediately for every
+  client with no redeploy.
+- **Sign-in** is email + password, via `src/components/EditorAuthControl.tsx`
+  in the header. Editor accounts are created by hand in the Supabase dashboard;
+  there is no sign-up, and an account alone grants nothing. The same control
+  handles password changes (current password required) and email recovery — see
+  "Account administration" in SECURITY.md, including the rate limit on
+  Supabase's default email sender.
+- **Staging queue:** `staged_guidelines` holds unreviewed scraper output,
+  readable by editors only and writable only by the sync GitHub Action's
+  service-role key. Publishing goes through the atomic
+  `approve_staged_guideline()` RPC, which writes the guideline, its change note
+  and the queue update in one transaction.
+- **No secret is shipped.** Permissions are granted via RLS using the ordinary
+  public anon key, which now carries `SELECT` and nothing more. The
+  service-role key is not in any bundle, and
+  `scripts/tests/write-access.test.ts` fails the build if it — or an editor
+  account UUID — ever appears.
 
   Browsing, search, filtering, section/provider grouping, cross-references,
-  the read-only Pending Review dashboard, the catalogue and the static
-  fallback are unchanged.
+  the catalogue and the static fallback are unchanged, and need no account.
 
 ## Data remediation ordering
 
@@ -59,9 +74,10 @@ back into the static fallback by regeneration.
 For the pending `supabase-data-remediation-batch1.sql` (seven safe mechanical
 dead-link fixes), the required order is:
 
-1. **Complete the read-only lockdown first** (see "Security — temporary
-   read-only lockdown" above) — writes must be locked down before running
-   remediation SQL.
+1. **Public write access is already closed** (as of 11 October 2026), which is
+   the precondition this step existed to enforce — remediation SQL asserts
+   preconditions about row contents, and an anonymous caller can no longer
+   change those rows underneath it while it runs.
 2. Run `supabase-data-remediation-batch1.sql` once, by hand, in the Supabase SQL
    editor (it is transactional and fails closed on a precondition mismatch).
 3. Run `npm run export-static` to regenerate `src/data/guidelines-data.ts` from
