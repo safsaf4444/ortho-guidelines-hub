@@ -13,6 +13,7 @@ import { useEditorSession } from './lib/editor-session'
 import { stagedService } from './lib/staged-service'
 import { canWrite, writeBlockedReason, type WriteGate } from './lib/write-access'
 import { validateGuidelineId, isPlaceholderGuidelineId } from './lib/guideline-id'
+import { classifyWriteFailure, UNCONFIRMED_SAVE_MESSAGE } from './lib/write-result'
 import { candidateToGuidelineDraft, type DisplayCandidate } from './lib/candidates'
 import { splitPublishers, canonicalProvider, providerUrl } from './lib/providers'
 import { findGapNote } from './lib/gap-detection'
@@ -527,12 +528,30 @@ export default function App() {
         setStagedCandidateId(null);
         return true;
       } catch (err) {
-        console.error('[persistGuideline] Approve failed — nothing was published:', err);
+        console.error('[persistGuideline] Approve failed:', err);
         const msg = err instanceof Error ? err.message : String(err);
+        // Same distinction as the ordinary path. The RPC is atomic, so a
+        // REFUSAL genuinely rolls all three writes back. But atomicity says
+        // nothing about a lost response: the transaction may have committed and
+        // the reply never arrived, in which case the candidate IS published and
+        // retrying would publish a second copy under a new id.
         alert(
-          `⚠️ PUBLISH FAILED\n\n${msg}\n\n`
-          + 'Nothing was saved: the guideline, the change note and the queue entry were all rolled '
-          + 'back together, so the candidate is still pending and can be retried.'
+          classifyWriteFailure(err) === 'refused'
+            ? `PUBLISH REFUSED
+
+${msg}
+
+`
+              + 'Nothing was saved: the guideline, the change note and the queue entry were all '
+              + 'rolled back together, so the candidate is still pending and can be retried.'
+            : `PUBLISH NOT CONFIRMED
+
+${UNCONFIRMED_SAVE_MESSAGE}
+
+${msg}
+
+`
+              + 'Reload and check the catalogue and the review queue before publishing again.'
         );
         return false;
       }
@@ -558,14 +577,31 @@ export default function App() {
     } catch (err) {
       console.error('[persistGuideline] Failed to persist guideline to Supabase:', err);
       const msg = err instanceof Error ? err.message : String(err);
+      // Two different things, never collapsed into one message. A refusal is a
+      // reported server decision, so "nothing was written" is a fact. A dropped
+      // or timed-out request is an absence of an answer: the write may have
+      // committed with the response lost, so claiming nothing was written would
+      // invite a retry that saves the same edit twice.
       alert(
-        `NOT SAVED
+        classifyWriteFailure(err) === 'refused'
+          ? `SAVE REFUSED
+
+The database refused this save, so nothing was written.
 
 ${msg}
 
 `
-        + 'The catalogue is unchanged and your edit is still open, so you can correct it and try '
-        + 'again. Nothing was written to the database.'
+            + 'The catalogue is unchanged and your edit is still open, so you can correct it and '
+            + 'try again.'
+          : `SAVE NOT CONFIRMED
+
+${UNCONFIRMED_SAVE_MESSAGE}
+
+${msg}
+
+`
+            + 'The request may or may not have reached the database. Reload and look at the entry '
+            + 'before saving again, so you do not record the same change twice.'
       );
       // Returning false keeps the modal open with the draft intact — see
       // handleSave. The catalogue is deliberately left untouched.

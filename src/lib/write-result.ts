@@ -41,3 +41,60 @@ export function refusedOrMissingMessage(op: string, id: string): string {
     + 'or that entry no longer exists. Nothing was saved.'
   );
 }
+
+// ─── Did the write fail, or do we simply not know? ──────────────────────────
+/**
+ * These are NOT the same thing, and conflating them is how a UI comes to lie.
+ *
+ * A PostgREST error code is a decision the server reached and reported: the
+ * request arrived, Postgres refused it, nothing was committed. Saying "nothing
+ * was saved" there is a fact.
+ *
+ * A dropped connection, a timeout or an aborted request is an ABSENCE of an
+ * answer. The server may never have seen the request — or may have committed it
+ * and lost the response on the way back. Those are indistinguishable from the
+ * client, so "nothing was saved" is a guess, and in the committed-then-lost
+ * case it is wrong in the most damaging direction: the editor is told their
+ * change did not land, retries, and writes it twice.
+ *
+ * So the classification is deliberately asymmetric. 'refused' requires positive
+ * evidence of a server decision; everything else is 'unconfirmed'. When in
+ * doubt the honest answer is "I don't know", and the user is told to look.
+ */
+export type WriteFailure = 'refused' | 'unconfirmed';
+
+/** Marks an Error as a confirmed server-side refusal. */
+export function markRefused<E extends Error>(error: E): E {
+  (error as E & { writeOutcome?: WriteFailure }).writeOutcome = 'refused';
+  return error;
+}
+
+/**
+ * A Postgres SQLSTATE (five alphanumerics, e.g. 42501, 23505) or a PostgREST
+ * code (PGRST…). Both mean the server answered.
+ *
+ * supabase-js turns a network failure into an error object too, but with an
+ * EMPTY code and a `FetchError:`/`TypeError` message — which is exactly why
+ * presence of a real code is the test, rather than presence of an error.
+ */
+function looksLikeServerCode(code: unknown): boolean {
+  if (typeof code !== 'string' || code === '') return false;
+  return /^[0-9A-Za-z]{5}$/.test(code) || code.startsWith('PGRST');
+}
+
+export function classifyWriteFailure(err: unknown): WriteFailure {
+  if (err && typeof err === 'object') {
+    const e = err as { writeOutcome?: unknown; code?: unknown };
+    if (e.writeOutcome === 'refused') return 'refused';
+    if (looksLikeServerCode(e.code)) return 'refused';
+  }
+  return 'unconfirmed';
+}
+
+/**
+ * Shown when the outcome is unknown. Wording is deliberate and should not be
+ * softened into a claim either way: it reports what happened (no confirmation),
+ * what is safe (the draft), and what to do (look before retrying).
+ */
+export const UNCONFIRMED_SAVE_MESSAGE =
+  'Save could not be confirmed. Your draft is preserved. Check the stored entry before retrying.';
