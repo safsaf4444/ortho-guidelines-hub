@@ -35,6 +35,7 @@ export interface DbStagedGuideline {
   provider_ref: string | null;
   matched_guideline_id: string | null;
   resulting_guideline_id: string | null;
+  review_note: string | null;
   reviewed_at: string | null;
   reviewed_by: string | null;
   created_at: string;
@@ -218,6 +219,45 @@ export const stagedService = {
         );
       }
       throw new Error(`Publish failed${error.code ? ` (${error.code})` : ''}: ${error.message}`);
+    }
+    return data as string;
+  },
+
+  /**
+   * Record a persistent, attributable rejection of a pending candidate.
+   *
+   * Mirrors `approve` deliberately: same allowlist, same already-processed
+   * handling, same refusal-versus-unknown distinction. The difference is what
+   * it does NOT do — it writes nothing to `guidelines` or
+   * `guideline_changelog`, because a rejection publishes nothing.
+   *
+   * Returns the pipeline's candidate_id. Throws with a readable message on
+   * refusal; the caller keeps the editor's reason either way.
+   */
+  async reject(stagedId: string, reason: string): Promise<string> {
+    if (!supabase) {
+      throw new Error('Rejecting needs the live database — not available in offline/static mode.');
+    }
+    const { data, error } = await supabase.rpc('reject_staged_candidate', {
+      p_candidate_id: stagedId,
+      p_reason: reason,
+    });
+
+    if (error) {
+      console.error('[staged-service] reject failed — raw error:', error);
+      if (isNotAnEditorError(error)) throw new Error(NOT_AN_EDITOR_MESSAGE);
+      if (error.code === ALREADY_PROCESSED_CODE) {
+        throw markAlreadyProcessed(new Error(
+          `This candidate is no longer pending, so it was NOT rejected. `
+          + await describeProcessedState(stagedId),
+        ));
+      }
+      // 23514 is the reason-required check. Named because the generic
+      // PostgREST text would send the editor looking for a database fault.
+      if (error.code === '23514') {
+        throw new Error('A reason is required to reject a candidate. Nothing was changed.');
+      }
+      throw new Error(`Reject failed${error.code ? ` (${error.code})` : ''}: ${error.message}`);
     }
     return data as string;
   },

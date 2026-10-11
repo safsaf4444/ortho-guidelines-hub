@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ExternalLink, RefreshCw } from 'lucide-react';
+import { Ban, ExternalLink, EyeOff, RefreshCw } from 'lucide-react';
 import {
   changeReasonLabel,
   filterOutRejected,
   type DisplayCandidate,
 } from '../lib/candidates';
 import { stagedService, type StagedLoad } from '../lib/staged-service';
+import { classifyWriteFailure, UNCONFIRMED_SAVE_MESSAGE } from '../lib/write-result';
 import { cn } from '../lib/utils';
 
 /**
@@ -64,6 +65,18 @@ export default function ReviewDashboard({
   const undoTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Bumped by the Refresh button; also the effect's re-run trigger.
   const [reloadToken, setReloadToken] = useState(0);
+  /**
+   * The reject flow, for one candidate at a time.
+   *
+   * `reason` is held HERE rather than inside the card so a failed attempt
+   * cannot lose it to a re-render: the panel stays open with the text intact
+   * and the editor can correct and retry. Same principle as the edit modal.
+   */
+  const [rejecting, setRejecting] = useState<
+    { stagedId: string; candidateId: string; topic: string; reason: string; busy: boolean; error: string | null } | null
+  >(null);
+  /** Shown only after the database confirms a rejection. */
+  const [rejected, setRejected] = useState<{ topic: string; candidateId: string } | null>(null);
 
   const refresh = useCallback(() => setReloadToken(t => t + 1), []);
 
@@ -92,6 +105,47 @@ export default function ReviewDashboard({
     if (undoTimer.current) clearTimeout(undoTimer.current);
     setUndo({ id: candidateId, topic });
     undoTimer.current = setTimeout(() => setUndo(null), UNDO_TIMEOUT_MS);
+  };
+
+  const openReject = (stagedId: string | undefined, candidateId: string, topic: string) => {
+    if (!stagedId) return;   // not a queue row, so there is nothing to reject
+    setRejected(null);
+    setRejecting({ stagedId, candidateId, topic, reason: '', busy: false, error: null });
+  };
+
+  /**
+   * Confirms the rejection against the database before claiming anything.
+   *
+   * Success is reported only after the RPC resolves. A refusal and an
+   * unconfirmed outcome are reported differently, and neither is guessed at: a
+   * dropped response may or may not have committed, so the editor is told to
+   * refresh and look rather than being told it failed.
+   */
+  const confirmReject = async () => {
+    if (!rejecting || rejecting.busy) return;
+    const reason = rejecting.reason.trim();
+    if (!reason) {
+      setRejecting({ ...rejecting, error: 'Give a reason before rejecting. It is the only record of why.' });
+      return;
+    }
+    setRejecting({ ...rejecting, busy: true, error: null });
+    try {
+      await stagedService.reject(rejecting.stagedId, reason);
+      // Confirmed. Only now is anything claimed, and the queue is re-read so
+      // what ends up on screen came back from the database.
+      setRejected({ topic: rejecting.topic, candidateId: rejecting.candidateId });
+      setRejecting(null);
+      refresh();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const unconfirmed = classifyWriteFailure(err) !== 'refused';
+      // The reason survives either way.
+      setRejecting({
+        ...rejecting,
+        busy: false,
+        error: unconfirmed ? `${UNCONFIRMED_SAVE_MESSAGE} ${msg}` : msg,
+      });
+    }
   };
 
   const handleUndo = () => {
@@ -152,8 +206,9 @@ export default function ReviewDashboard({
           Discovered items awaiting manual editorial review, read live from the staging queue.
           Nothing here is published automatically — "Review &amp; Edit" opens the guideline form
           prefilled for a human to complete, and saving it publishes the entry and its change note
-          in one atomic step. "Dismiss" only hides the card in this browser tab and does not
-          persist, so it returns on reload.
+          in one atomic step. <strong>Reject</strong> records a permanent, attributed decision with
+          your reason, so the item stops reappearing each week. <strong>Hide</strong> is temporary
+          and local to this browser tab — it writes nothing, and the card returns on reload.
         </p>
         <button
           onClick={refresh}
@@ -165,6 +220,14 @@ export default function ReviewDashboard({
           Refresh
         </button>
       </div>
+
+      {rejected && (
+        <div role="status" aria-live="polite"
+          className="mb-3 border border-emerald-200 bg-emerald-50 rounded-md px-3 py-2 text-[11px] text-emerald-900">
+          Rejected <span className="font-medium">{rejected.topic}</span> and recorded your reason. It will
+          not reappear in future discovery runs.
+        </div>
+      )}
 
       {load.candidates.length === 0 ? (
         <p className="text-[12px] text-slate-500">
@@ -180,6 +243,16 @@ export default function ReviewDashboard({
               candidate={candidate}
               onEdit={() => onEditCandidate(candidate)}
               onDismiss={() => handleDismiss(candidate.candidateId, candidate.topic)}
+              onReject={() => openReject(candidate.stagedId, candidate.candidateId, candidate.topic)}
+              canReject={Boolean(candidate.stagedId)}
+              reject={rejecting && rejecting.candidateId === candidate.candidateId ? {
+                reason: rejecting.reason,
+                busy: rejecting.busy,
+                error: rejecting.error,
+                setReason: (r: string) => setRejecting(prev => (prev ? { ...prev, reason: r } : prev)),
+                confirm: confirmReject,
+                cancel: () => setRejecting(null),
+              } : null}
             />
           ))}
         </div>
@@ -208,14 +281,31 @@ export default function ReviewDashboard({
   );
 }
 
+interface RejectPanel {
+  reason: string;
+  busy: boolean;
+  error: string | null;
+  setReason: (r: string) => void;
+  confirm: () => void;
+  cancel: () => void;
+}
+
 function CandidateCard({
   candidate,
   onEdit,
   onDismiss,
+  onReject,
+  canReject,
+  reject,
 }: {
   candidate: DisplayCandidate;
   onEdit: () => void;
   onDismiss: () => void;
+  onReject: () => void;
+  /** False for a candidate with no queue row — there is nothing to record against. */
+  canReject: boolean;
+  /** Non-null while THIS card's reject panel is open. */
+  reject: RejectPanel | null;
 }) {
   const discovered = formatDate(candidate.discoveredAt);
 
@@ -256,7 +346,8 @@ function CandidateCard({
         </a>
       )}
 
-      <div className="flex items-center gap-2 pt-1 border-t border-slate-100">
+      {/* flex-wrap: three actions no longer fit one line at phone width. */}
+      <div className="flex items-center gap-2 pt-1 border-t border-slate-100 flex-wrap">
         <button
           onClick={onEdit}
           className={cn(
@@ -266,14 +357,85 @@ function CandidateCard({
         >
           Review &amp; Edit
         </button>
+        {/* PERSISTENT. Deliberately styled and worded apart from Hide below:
+            one writes an attributed decision to the database, the other
+            changes nothing outside this tab. These were a single, ambiguous
+            "Dismiss" before. */}
+        {canReject && (
+          <button
+            onClick={onReject}
+            disabled={Boolean(reject)}
+            title="Record a permanent, attributed rejection with a reason. This item will not reappear in future discovery runs."
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-[12px] font-medium
+                       border border-red-200 text-red-700 bg-red-50 hover:bg-red-100
+                       disabled:opacity-50 transition-colors"
+          >
+            <Ban className="w-3 h-3 shrink-0" />
+            Reject…
+          </button>
+        )}
+
+        {/* TEMPORARY, and says so. */}
         <button
           onClick={onDismiss}
-          title="Hides this card for the rest of this browser session. Not persisted — it returns on reload."
-          className="px-3 py-1.5 border border-slate-200 rounded text-[12px] text-slate-600 hover:bg-slate-50 transition-colors"
+          title="Hides this card for the rest of this browser session only. Writes nothing, and the card returns on reload."
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 rounded
+                     text-[12px] text-slate-600 hover:bg-slate-50 transition-colors"
         >
-          Dismiss
+          <EyeOff className="w-3 h-3 shrink-0" />
+          Hide
         </button>
       </div>
+
+      {reject && (
+        <div
+          role="group"
+          aria-label={'Reject ' + candidate.topic}
+          className="border border-red-200 bg-red-50/60 rounded-md p-2.5 flex flex-col gap-2"
+        >
+          {/* Names the target, so a mis-click on a long list is visible before
+              anything is written. */}
+          <p className="text-[11px] text-red-900 leading-relaxed">
+            Reject <span className="font-semibold">{candidate.topic}</span>? This records a permanent
+            decision against your account, and the item will not be offered again.
+          </p>
+          <label className="text-[10px] font-medium text-red-900" htmlFor={`reject-reason-${candidate.candidateId}`}>
+            Reason (required)
+          </label>
+          <textarea
+            id={`reject-reason-${candidate.candidateId}`}
+            value={reject.reason}
+            onChange={e => reject.setReason(e.target.value)}
+            rows={2}
+            placeholder="e.g. Course material, not clinical guidance"
+            className="border border-red-200 rounded px-2 py-1.5 text-[12px] bg-white
+                       focus:outline-none focus-visible:ring-1 focus-visible:ring-red-400"
+          />
+          {reject.error && (
+            <p role="alert" className="text-[11px] text-red-800 bg-red-100 border border-red-200 rounded px-2 py-1.5">
+              {reject.error}
+            </p>
+          )}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={reject.confirm}
+              disabled={reject.busy || reject.reason.trim().length === 0}
+              className="px-3 py-1.5 rounded text-[12px] font-medium bg-red-700 text-white
+                         hover:bg-red-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {reject.busy ? 'Rejecting…' : 'Confirm rejection'}
+            </button>
+            <button
+              onClick={reject.cancel}
+              disabled={reject.busy}
+              className="px-3 py-1.5 border border-slate-200 rounded text-[12px] text-slate-600
+                         bg-white hover:bg-slate-50 disabled:opacity-50 transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
