@@ -298,7 +298,15 @@ console.log('\n[4f] Persistent rejection: attributed, reasoned, and distinct fro
 const sql = readFileSync('supabase/migrations/20261012_reject_staged_candidate.sql', 'utf8');
 check('the RPC is SECURITY DEFINER', /create or replace function public\.reject_staged_candidate[^]*?security definer/.test(sql));
 check('search_path is pinned', /set search_path = public, pg_temp/.test(sql));
-check('it checks the editor allowlist', /if not public\.is_editor\(\) then/.test(sql));
+// Null-safe, and that is not pedantry. is_editor() is
+// `select auth.uid() = any (array[...])`, so with no JWT it returns NULL, and
+// `not NULL` is NULL --- a plain `if not public.is_editor() then` branch never
+// fires and the rejection proceeds with reviewed_by = NULL. Confirmed against
+// production: auth.uid() null, is_editor() -> NULL.
+check('it checks the editor allowlist', /if public\.is_editor\(\) is not true then/.test(sql));
+check('the allowlist check is null-safe, not a bare `if not`',
+  !/if not public\.is_editor\(\) then/.test(sql),
+  'a NULL auth.uid() would fall through the guard and reject unattributed');
 // Must use a whitespace-aware test, NOT length(btrim(...)). btrim with no
 // second argument strips spaces only, so a tab or newline passes as non-blank —
 // the local suite caught exactly that, accepting "   \n\t " as a reason.
