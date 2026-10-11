@@ -1,5 +1,6 @@
 import { supabase } from './supabase';
 import { isNotAnEditorError, NOT_AN_EDITOR_MESSAGE } from './editor-session';
+import { ALREADY_PROCESSED_CODE, markAlreadyProcessed } from './write-result';
 import { toDbRow } from './guidelines-mapper';
 import type { Guideline } from '../data/guidelines-data';
 import type { ChangeReason, CandidateVersionLink, DisplayCandidate } from './candidates';
@@ -152,6 +153,17 @@ export const stagedService = {
     if (error) {
       console.error('[staged-service] approve failed — raw error:', error);
       if (isNotAnEditorError(error)) throw new Error(NOT_AN_EDITOR_MESSAGE);
+      // The RPC's already-processed guard. It takes the row lock BEFORE testing
+      // review_status, so two concurrent approvals serialise and the second is
+      // refused rather than publishing twice — and so is a retry after a
+      // response went missing. This is a refusal that means the work is DONE,
+      // not one to retry.
+      if (error.code === ALREADY_PROCESSED_CODE) {
+        throw markAlreadyProcessed(new Error(
+          `This candidate has already been reviewed and is no longer pending, so it was NOT `
+          + `published again. ${error.message}`
+        ));
+      }
       // 23505 is a unique violation, which on this path means the chosen id is
       // already taken. The form checks that too, but it can only see the
       // archived-filtered list it was given, so an id free in the UI can still
