@@ -617,6 +617,16 @@ export default function App() {
   };
 
   const handleMergeDuplicates = async (canonical: Guideline, duplicate: Guideline) => {
+    // Source-level guard, matching persistGuideline and handleDelete. This was
+    // the one write handler reachable only through its hidden button rather
+    // than through a check here as well. The database refuses the write either
+    // way — the merge is two RLS-gated UPDATEs — so this closes a consistency
+    // gap, not an exploitable hole: without it, a merge attempted while signed
+    // out produced a mid-flight failure alert instead of a clean refusal.
+    if (!canWrite(gate)) {
+      console.warn(`[handleMergeDuplicates] Ignored — ${writeBlockedReason(gate)} No database change made.`);
+      return;
+    }
     const merged = computeMerge(canonical, duplicate);
     try {
       await guidelinesService.update(merged);

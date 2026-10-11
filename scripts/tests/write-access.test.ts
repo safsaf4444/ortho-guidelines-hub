@@ -120,6 +120,19 @@ check(
   /EditorAuthControl/.test(appSrc),
 );
 
+// Every handler that writes to Supabase must refuse at its own source, not
+// only by having its button hidden. handleMergeDuplicates was the one that
+// didn't, and the asymmetry was invisible until it was looked for — so it is
+// asserted here rather than left to the next reader to notice.
+for (const handler of ['persistGuideline', 'handleDelete', 'handleMergeDuplicates']) {
+  const body = new RegExp(`const ${handler} = async[^]*?\\n  \\};`).exec(appSrc)?.[0] ?? '';
+  check(
+    `${handler} refuses at its own source via canWrite(gate)`,
+    body.includes('canWrite(gate)'),
+    body ? 'handler found but no canWrite(gate) check' : 'handler body not found — rename?',
+  );
+}
+
 const sessionSrc = readFileSync('src/lib/editor-session.ts', 'utf8');
 check(
   'the editor allowlist is NOT mirrored in the bundle — no hardcoded account UUIDs',
