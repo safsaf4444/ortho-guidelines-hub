@@ -98,3 +98,60 @@ export function classifyWriteFailure(err: unknown): WriteFailure {
  */
 export const UNCONFIRMED_SAVE_MESSAGE =
   'Save could not be confirmed. Your draft is preserved. Check the stored entry before retrying.';
+
+/**
+ * SQLSTATE raised by approve_staged_guideline() for a candidate that is no
+ * longer `pending` — `object_not_in_prerequisite_state`.
+ *
+ * This is a REFUSAL with a specific meaning, and the distinction matters for
+ * what the user is told. An ordinary refusal rolled everything back, so the
+ * candidate is still pending and retrying is correct. This one means the
+ * opposite: the candidate was already processed, so the work is DONE and
+ * retrying would be pointless. Telling the editor to retry here would be
+ * wrong, and is exactly what the previous blanket message did.
+ */
+export const ALREADY_PROCESSED_CODE = '55000';
+
+export function isAlreadyProcessedWrite(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const e = err as { code?: unknown; alreadyProcessed?: unknown };
+  return e.alreadyProcessed === true || e.code === ALREADY_PROCESSED_CODE;
+}
+
+/** Marks an Error as "the target was already processed". Implies refused. */
+export function markAlreadyProcessed<E extends Error>(error: E): E {
+  (error as E & { alreadyProcessed?: boolean }).alreadyProcessed = true;
+  return markRefused(error);
+}
+
+// ─── Multi-step writes ──────────────────────────────────────────────────────
+/**
+ * Which steps of a multi-step write are known to have landed.
+ *
+ * The duplicate merge is two separate requests — update the canonical row, then
+ * archive the loser — and they are NOT atomic. Its failure message used to say
+ * "no changes were made", which is false whenever the first step succeeded and
+ * the second did not: the catalogue is then left mid-merge, with the merged
+ * content saved and the duplicate still live. Reporting that as "nothing
+ * happened" sends the editor looking for a problem that is actually a
+ * half-finished job in the opposite direction.
+ *
+ * So progress is tracked explicitly and reported, rather than inferred from
+ * which exception came out.
+ */
+export interface MergeProgress {
+  /** The canonical row's merged content is confirmed saved. */
+  mergedSaved: boolean;
+  /** The duplicate row is confirmed archived. */
+  duplicateArchived: boolean;
+}
+
+/**
+ * Human description of how far a merge got. Never claims more or less than the
+ * flags say.
+ */
+export function describeMergeProgress(p: MergeProgress): string {
+  if (p.mergedSaved && p.duplicateArchived) return 'Both steps completed.';
+  if (p.mergedSaved) return 'Step 1 of 2 completed: the merged content was saved.';
+  return 'No step completed: the catalogue is unchanged.';
+}

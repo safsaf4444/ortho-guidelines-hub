@@ -19,9 +19,13 @@
  */
 import { readFileSync } from 'node:fs';
 import {
+  ALREADY_PROCESSED_CODE,
   UNCONFIRMED_SAVE_MESSAGE,
   classifyWriteFailure,
+  describeMergeProgress,
+  isAlreadyProcessedWrite,
   isZeroRowWrite,
+  markAlreadyProcessed,
   markRefused,
   refusedOrMissingMessage,
 } from '../../src/lib/write-result';
@@ -31,6 +35,11 @@ let fail = 0;
 function check(name: string, cond: boolean, detail = '') {
   if (cond) { pass++; console.log(`  PASS  ${name}`); }
   else { fail++; console.log(`  FAIL  ${name}${detail ? ` — ${detail}` : ''}`); }
+}
+function eq(name: string, actual: unknown, expected: unknown) {
+  const a = JSON.stringify(actual);
+  const e = JSON.stringify(expected);
+  check(name, a === e, `expected ${e}, got ${a}`);
 }
 
 console.log('\n[1] isZeroRowWrite — a refused UPDATE is indistinguishable from success without this');
@@ -180,6 +189,81 @@ check('refusal branches do still state it plainly', refusalClaims.length >= 2,
 // unknown outcome is how a single edit becomes three.
 check('no automatic retry anywhere in the save path',
   !/setTimeout|retry\(|while \(|for \(/.test(persist));
+
+console.log('\n[4c] describeMergeProgress — never claims more or less than happened');
+
+eq('no steps done', describeMergeProgress({ mergedSaved: false, duplicateArchived: false }),
+  'No step completed: the catalogue is unchanged.');
+eq('step 1 only', describeMergeProgress({ mergedSaved: true, duplicateArchived: false }),
+  'Step 1 of 2 completed: the merged content was saved.');
+eq('both steps', describeMergeProgress({ mergedSaved: true, duplicateArchived: true }),
+  'Both steps completed.');
+// The regression: a partial merge must never be described as nothing happening.
+check('a partial merge is not described as "unchanged"',
+  !/unchanged/i.test(describeMergeProgress({ mergedSaved: true, duplicateArchived: false })));
+
+console.log('\n[4d] Archive and merge report refusal and uncertainty separately');
+
+const del = /const handleDelete = async[^]*?\n  \};/.exec(app)?.[0] ?? '';
+check('handleDelete body located', del.length > 0);
+check('archive classifies the failure', /classifyWriteFailure\(err\) === 'refused'/.test(del));
+check('archive has both a refused and an unconfirmed branch',
+  /REMOVE REFUSED/.test(del) && /REMOVE NOT CONFIRMED/.test(del));
+check('the old unprovable archive claim is gone',
+  !app.includes('Remove failed — the entry was not archived'));
+check('an unconfirmed archive does not assert the row was left alone',
+  /Check whether/.test(del));
+check('an archived-but-unlogged note failure is surfaced', /ARCHIVED, BUT NOT LOGGED/.test(del));
+
+const merge = /const handleMergeDuplicates = async[^]*?\n  \};/.exec(app)?.[0] ?? '';
+check('handleMergeDuplicates body located', merge.length > 0);
+check('merge tracks progress per step',
+  /MergeProgress/.test(merge) && /mergedSaved = true/.test(merge) && /duplicateArchived = true/.test(merge));
+check('merge reports how far it got', (merge.match(/describeMergeProgress\(progress\)/g) ?? []).length >= 3);
+check('merge distinguishes refusal from uncertainty at step 2',
+  /Step 2 was REFUSED/.test(merge) && /Step 2 could not be confirmed/.test(merge));
+// The two claims that were previously false.
+check('the old "no changes were made" claim is gone',
+  !app.includes('Merge failed — no changes were made'));
+check('the false atomicity comment is gone', !app.includes('if update throws,'));
+// The doc comment sits ABOVE the declaration, so it is outside `merge` —
+// checked against the file, and anchored to the 400 chars preceding the handler
+// so it cannot be satisfied by the phrase appearing somewhere unrelated.
+const mergeDeclAt = app.indexOf('const handleMergeDuplicates = async');
+const mergeDocBlock = mergeDeclAt > 0 ? app.slice(Math.max(0, mergeDeclAt - 1200), mergeDeclAt) : '';
+check('merge documents plainly that it is not atomic', /NOT ATOMIC/.test(mergeDocBlock));
+check('merge documents that the earlier atomicity claim was wrong',
+  /That was wrong/.test(mergeDocBlock));
+check('a step-2 failure still reflects the confirmed step 1 locally',
+  /setGuidelines\(prev => prev\.map\(g => g\.id === merged\.id \? merged : g\)\);/.test(merge));
+check('a step-2 failure tells the editor not to merge again',
+  /Do not merge again/.test(merge));
+// No retry loops in either handler.
+check('no automatic retry in archive or merge',
+  !/setTimeout|retry\(|while \(/.test(del) && !/setTimeout|retry\(|while \(/.test(merge));
+
+console.log('\n[4e] Approval: the already-processed guard is reported as done, not retryable');
+
+check('already-processed is a refusal',
+  classifyWriteFailure({ code: ALREADY_PROCESSED_CODE }) === 'refused');
+check('already-processed is identified',
+  isAlreadyProcessedWrite({ code: ALREADY_PROCESSED_CODE })
+  && isAlreadyProcessedWrite(markAlreadyProcessed(new Error('x'))));
+check('an ordinary refusal is not already-processed', !isAlreadyProcessedWrite({ code: '42501' }));
+check('markAlreadyProcessed implies refused',
+  classifyWriteFailure(markAlreadyProcessed(new Error('x'))) === 'refused');
+
+// The RPC takes the row lock before testing review_status, so a retry after a
+// lost response is refused rather than publishing a second copy. The message
+// must therefore NOT tell the editor it is still pending and retryable.
+check('the approve path has a dedicated already-published branch', /ALREADY PUBLISHED/.test(persist));
+check('the already-published branch says nothing was published twice',
+  /Nothing was published a second time/.test(persist));
+const alreadySection = persist.split('ALREADY PUBLISHED')[1]?.slice(0, 300) ?? '';
+check('the already-published branch does not claim the candidate is still pending',
+  !/still pending/i.test(alreadySection), alreadySection.slice(0, 120));
+check('a genuine rollback refusal still says it is retryable',
+  /still pending and can be retried/.test(persist));
 
 console.log('\n[5] The editor’s unsaved draft survives a failure');
 

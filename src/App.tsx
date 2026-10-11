@@ -13,7 +13,13 @@ import { useEditorSession } from './lib/editor-session'
 import { stagedService } from './lib/staged-service'
 import { canWrite, writeBlockedReason, type WriteGate } from './lib/write-access'
 import { validateGuidelineId, isPlaceholderGuidelineId } from './lib/guideline-id'
-import { classifyWriteFailure, UNCONFIRMED_SAVE_MESSAGE } from './lib/write-result'
+import {
+  classifyWriteFailure,
+  describeMergeProgress,
+  isAlreadyProcessedWrite,
+  UNCONFIRMED_SAVE_MESSAGE,
+  type MergeProgress,
+} from './lib/write-result'
 import { candidateToGuidelineDraft, type DisplayCandidate } from './lib/candidates'
 import { splitPublishers, canonicalProvider, providerUrl } from './lib/providers'
 import { findGapNote } from './lib/gap-detection'
@@ -536,22 +542,33 @@ export default function App() {
         // the reply never arrived, in which case the candidate IS published and
         // retrying would publish a second copy under a new id.
         alert(
-          classifyWriteFailure(err) === 'refused'
-            ? `PUBLISH REFUSED
-
-${msg}
-
-`
-              + 'Nothing was saved: the guideline, the change note and the queue entry were all '
-              + 'rolled back together, so the candidate is still pending and can be retried.'
-            : `PUBLISH NOT CONFIRMED
+          classifyWriteFailure(err) !== 'refused'
+            ? `PUBLISH NOT CONFIRMED
 
 ${UNCONFIRMED_SAVE_MESSAGE}
 
 ${msg}
 
 `
-              + 'Reload and check the catalogue and the review queue before publishing again.'
+              + 'Reload and check the catalogue and the review queue before publishing again. The '
+              + 'RPC refuses a candidate that is no longer pending, so a retry cannot publish a '
+              + 'second copy — but it will not tell you whether the first attempt landed.'
+            : isAlreadyProcessedWrite(err)
+              // Refused because the work is already done, not because it rolled
+              // back. Saying "still pending, retry" here would be false.
+              ? `ALREADY PUBLISHED
+
+${msg}
+
+Nothing was published a second time. Reload to `
+                + 'see the entry this candidate already created.'
+              : `PUBLISH REFUSED
+
+${msg}
+
+`
+                + 'Nothing was saved: the guideline, the change note and the queue entry were all '
+                + 'rolled back together, so the candidate is still pending and can be retried.'
         );
         return false;
       }
@@ -689,49 +706,160 @@ ${noteMsg}
     const topic = guidelines.find(g => g.id === id)?.topic ?? id;
     try {
       await guidelinesService.archive(id);
-      try {
-        await changelogService.create({ guidelineId: id, description: archiveNote(topic) });
-      } catch (noteErr) {
-        console.error('[handleDelete] Archived, but the change note failed:', noteErr);
-      }
-      setGuidelines(prev => prev.filter(g => g.id !== id));
     } catch (err) {
       console.error('[handleDelete] Failed to archive guideline:', err);
-      alert(`Remove failed — the entry was not archived.\n\n${err instanceof Error ? err.message : String(err)}`);
+      const msg = err instanceof Error ? err.message : String(err);
+      // Same distinction as the save path: a refusal is a reported decision, a
+      // dropped request is an absence of one. The old message said "the entry
+      // was not archived" for both, which is unprovable in the second case.
+      alert(
+        classifyWriteFailure(err) === 'refused'
+          ? `REMOVE REFUSED
+
+The database refused this change, so "${topic}" was NOT archived `
+            + `and is still live.
+
+${msg}`
+          : `REMOVE NOT CONFIRMED
+
+Save could not be confirmed. Nothing has been changed in this `
+            + `view. Check whether "${topic}" is archived before trying again.
+
+${msg}`
+      );
+      return;
     }
+
+    // Archived and confirmed. The note is attempted afterwards and is a
+    // separate request, so its failure leaves the row archived with no entry in
+    // the change history — said out loud rather than logged to the console only,
+    // for the same reason as in persistGuideline.
+    try {
+      await changelogService.create({ guidelineId: id, description: archiveNote(topic) });
+    } catch (noteErr) {
+      console.error('[handleDelete] Archived, but the change note failed:', noteErr);
+      const noteMsg = noteErr instanceof Error ? noteErr.message : String(noteErr);
+      alert(
+        `ARCHIVED, BUT NOT LOGGED
+
+"${topic}" was archived. Its change note was not:
+${noteMsg}
+
+`
+        + 'Add a note from the entry to restore the audit trail.'
+      );
+    }
+    setGuidelines(prev => prev.filter(g => g.id !== id));
   };
 
+  /**
+   * Merge two duplicates. TWO SEPARATE REQUESTS, AND NOT ATOMIC.
+   *
+   * An earlier comment here claimed that awaiting them sequentially meant "a
+   * failure here never leaves a merge half-done". That was wrong. If the first
+   * write commits and the second fails — or its response is lost — the catalogue
+   * is left mid-merge: the merged content saved, the duplicate still live. The
+   * only thing sequencing guarantees is that step 2 cannot run before step 1.
+   *
+   * So progress is tracked and reported per step. Making this genuinely atomic
+   * needs a SECURITY DEFINER RPC doing both writes in one transaction, like
+   * approve_staged_guideline — see FOLLOW-UPS.md. Until then the honest thing is
+   * to say exactly how far it got.
+   */
   const handleMergeDuplicates = async (canonical: Guideline, duplicate: Guideline) => {
-    // Source-level guard, matching persistGuideline and handleDelete. This was
-    // the one write handler reachable only through its hidden button rather
-    // than through a check here as well. The database refuses the write either
-    // way — the merge is two RLS-gated UPDATEs — so this closes a consistency
-    // gap, not an exploitable hole: without it, a merge attempted while signed
-    // out produced a mid-flight failure alert instead of a clean refusal.
     if (!canWrite(gate)) {
       console.warn(`[handleMergeDuplicates] Ignored — ${writeBlockedReason(gate)} No database change made.`);
       return;
     }
     const merged = computeMerge(canonical, duplicate);
+    const progress: MergeProgress = { mergedSaved: false, duplicateArchived: false };
+
+    // Step 1 of 2: save the merged content onto the canonical row.
     try {
       await guidelinesService.update(merged);
-      await guidelinesService.archive(duplicate.id);
-      try {
-        const note = mergeNote(merged.topic, duplicate.topic);
-        await changelogService.create({ guidelineId: merged.id, description: note });
-        await changelogService.create({ guidelineId: duplicate.id, description: note });
-      } catch (noteErr) {
-        console.error('[handleMergeDuplicates] Merged, but a change note failed:', noteErr);
-      }
-      setGuidelines(prev =>
-        prev.map(g => g.id === merged.id ? merged : g).filter(g => g.id !== duplicate.id)
-      );
+      progress.mergedSaved = true;
     } catch (err) {
-      // update() and archive() are awaited sequentially — if update throws,
-      // archive() never runs, so a failure here never leaves a merge half-done.
-      console.error('[handleMergeDuplicates] Failed to persist merge:', err);
-      alert(`Merge failed — no changes were made.\n\n${err instanceof Error ? err.message : String(err)}`);
+      console.error('[handleMergeDuplicates] Step 1 (save merged content) failed:', err);
+      const msg = err instanceof Error ? err.message : String(err);
+      alert(
+        classifyWriteFailure(err) === 'refused'
+          ? `MERGE REFUSED
+
+${describeMergeProgress(progress)} The database refused the first `
+            + `step, so nothing was merged and "${duplicate.topic}" is still live.
+
+${msg}`
+          : `MERGE NOT CONFIRMED
+
+The first step could not be confirmed, so this view has not `
+            + `changed. Reload and check "${merged.topic}" before trying again.
+
+${msg}`
+      );
+      return;
     }
+
+    // Step 2 of 2: archive the losing row.
+    try {
+      await guidelinesService.archive(duplicate.id);
+      progress.duplicateArchived = true;
+    } catch (err) {
+      console.error('[handleMergeDuplicates] Step 2 (archive duplicate) failed:', err);
+      const msg = err instanceof Error ? err.message : String(err);
+      // Step 1 IS saved. Never report this as "no changes were made".
+      alert(
+        classifyWriteFailure(err) === 'refused'
+          ? `MERGE INCOMPLETE
+
+${describeMergeProgress(progress)} "${merged.topic}" now holds the `
+            + `merged content.
+
+Step 2 was REFUSED: "${duplicate.topic}" is NOT archived and is `
+            + `still live, so the catalogue currently shows both.
+
+${msg}
+
+`
+            + 'Archive the duplicate to finish the merge. Do not merge again — step 1 is done.'
+          : `MERGE INCOMPLETE
+
+${describeMergeProgress(progress)} "${merged.topic}" now holds the `
+            + `merged content.
+
+Step 2 could not be confirmed, so it is unknown whether `
+            + `"${duplicate.topic}" was archived.
+
+${msg}
+
+`
+            + 'Reload and check before acting. Do not merge again — step 1 is done.'
+      );
+      // Reflect only what is confirmed: the merged content, not the removal.
+      setGuidelines(prev => prev.map(g => g.id === merged.id ? merged : g));
+      return;
+    }
+
+    // Both steps confirmed. Notes are a third request and can still fail.
+    try {
+      const note = mergeNote(merged.topic, duplicate.topic);
+      await changelogService.create({ guidelineId: merged.id, description: note });
+      await changelogService.create({ guidelineId: duplicate.id, description: note });
+    } catch (noteErr) {
+      console.error('[handleMergeDuplicates] Merged, but a change note failed:', noteErr);
+      const noteMsg = noteErr instanceof Error ? noteErr.message : String(noteErr);
+      alert(
+        `MERGED, BUT NOT FULLY LOGGED
+
+${describeMergeProgress(progress)} One or both change `
+        + `notes failed:
+${noteMsg}
+
+Add a note from the entry to restore the audit trail.`
+      );
+    }
+    setGuidelines(prev =>
+      prev.map(g => g.id === merged.id ? merged : g).filter(g => g.id !== duplicate.id)
+    );
   };
 
   return (
