@@ -279,8 +279,13 @@ check('an ACCEPTED candidate reports its resulting guideline id',
   /already accepted and published as/.test(staged) && /resulting_guideline_id\s*\n?\s*\?/.test(staged));
 check('an accepted candidate with no recorded id says so instead of guessing',
   /no resulting guideline id is recorded/.test(staged));
-check('a REJECTED candidate is reported as rejected and never published',
-  /already REJECTED/.test(staged) && /never published/.test(staged));
+// A rejected queue row records a decision about THIS candidate and nothing
+// more. It is not evidence that the catalogue lacks equivalent guidance, so the
+// message must not claim that nothing was published or added.
+check('a REJECTED candidate is reported as rejected, with no claim about the catalogue',
+  /This candidate is already rejected\. This attempt made no changes\./.test(staged)
+  && !/never published/.test(staged)
+  && !/nothing has been added to the/.test(staged));
 check('a failed read-back says the state is unknown rather than guessing',
   (staged.match(/could not be read back/g) ?? []).length >= 2);
 check('the 55000 message no longer asserts publication unconditionally',

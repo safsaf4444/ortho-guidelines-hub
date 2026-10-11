@@ -207,7 +207,8 @@ export default function ReviewDashboard({
           Nothing here is published automatically — "Review &amp; Edit" opens the guideline form
           prefilled for a human to complete, and saving it publishes the entry and its change note
           in one atomic step. <strong>Reject</strong> records a permanent, attributed decision with
-          your reason, so the item stops reappearing each week. <strong>Hide</strong> is temporary
+          your reason, which discovery retries using the same candidate ID preserve.
+          <strong>Hide</strong> is temporary
           and local to this browser tab — it writes nothing, and the card returns on reload.
         </p>
         <button
@@ -224,8 +225,9 @@ export default function ReviewDashboard({
       {rejected && (
         <div role="status" aria-live="polite"
           className="mb-3 border border-emerald-200 bg-emerald-50 rounded-md px-3 py-2 text-[11px] text-emerald-900">
-          Rejected <span className="font-medium">{rejected.topic}</span> and recorded your reason. It will
-          not reappear in future discovery runs.
+          Rejected <span className="font-medium">{rejected.topic}</span> and recorded your reason.
+          This candidate has been rejected. Discovery retries using the same candidate ID will
+          preserve this decision.
         </div>
       )}
 
@@ -365,7 +367,7 @@ function CandidateCard({
           <button
             onClick={onReject}
             disabled={Boolean(reject)}
-            title="Record a permanent, attributed rejection with a reason. This item will not reappear in future discovery runs."
+            title="Record a permanent, attributed rejection with a reason. Discovery retries using the same candidate ID will preserve this decision."
             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-[12px] font-medium
                        border border-red-200 text-red-700 bg-red-50 hover:bg-red-100
                        disabled:opacity-50 transition-colors"
@@ -397,7 +399,8 @@ function CandidateCard({
               anything is written. */}
           <p className="text-[11px] text-red-900 leading-relaxed">
             Reject <span className="font-semibold">{candidate.topic}</span>? This records a permanent
-            decision against your account, and the item will not be offered again.
+            decision against your account. Discovery retries using the same candidate ID will
+            preserve it.
           </p>
           <label className="text-[10px] font-medium text-red-900" htmlFor={`reject-reason-${candidate.candidateId}`}>
             Reason (required)
