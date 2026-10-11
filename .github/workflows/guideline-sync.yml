@@ -1,9 +1,27 @@
-name: Scheduled Guideline & Provider Sync
+name: Guideline & Provider Sync (manual dispatch only)
 
 on:
-  schedule:
-    # Runs every Sunday at 02:00 UTC
-    - cron: '0 2 * * 0'
+  # ── WEEKLY SCHEDULE DELIBERATELY DISABLED ──────────────────────────────────
+  # Disabled so that merging this branch deploys the frontend WITHOUT also
+  # starting automatic candidate staging. The frontend fix is urgent (the
+  # deployed site's edits fail silently against the new RLS policies); starting
+  # a weekly job that writes to the live review queue is not, and it should not
+  # ride along on the same merge.
+  #
+  # While this block is commented out, nothing files candidates automatically.
+  # scripts/stage-candidates.ts is referenced by THIS workflow and no other, and
+  # no workflow_call / workflow_run / repository_dispatch path reaches it, so a
+  # manual dispatch below is the only way it can run.
+  #
+  # TO RE-ENABLE after live verification, and only with the owner's explicit
+  # approval: delete the three commented lines below. Note that on the schedule
+  # trigger `inputs.dry_run` does not exist and arrives empty, which the script
+  # treats as false — so a scheduled run performs REAL writes to
+  # staged_guidelines from the first firing.
+  #
+  # schedule:
+  #   # Every Sunday at 02:00 UTC
+  #   - cron: '0 2 * * 0'
   workflow_dispatch:
     inputs:
       dry_run:
