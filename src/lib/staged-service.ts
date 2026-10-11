@@ -78,6 +78,42 @@ function toDisplayCandidate(row: DbStagedGuideline): DisplayCandidate {
 /** PostgREST's code for "relation does not exist" (migration not applied). */
 const MISSING_TABLE_CODES = new Set(['PGRST205', '42P01']);
 
+/**
+ * Why a candidate is no longer pending, read back from the queue.
+ *
+ * Never infers. Each branch states only what the row actually says, and a
+ * failed read-back says so rather than assuming the likelier outcome.
+ */
+async function describeProcessedState(stagedId: string): Promise<string> {
+  if (!supabase) return 'Its current state could not be checked.';
+  try {
+    const { data, error } = await supabase
+      .from('staged_guidelines')
+      .select('review_status, resulting_guideline_id')
+      .eq('id', stagedId)
+      .maybeSingle();
+    if (error || !data) {
+      return 'Its current state could not be read back, so it is unknown whether it was published '
+        + 'or rejected — check the review queue before acting.';
+    }
+    const row = data as { review_status: string; resulting_guideline_id: string | null };
+    if (row.review_status === 'accepted') {
+      return row.resulting_guideline_id
+        ? `It was already accepted and published as "${row.resulting_guideline_id}".`
+        : 'It was already accepted, but no resulting guideline id is recorded against it — check '
+          + 'the catalogue.';
+    }
+    if (row.review_status === 'rejected') {
+      return 'It was already REJECTED, so it was never published and nothing has been added to the '
+        + 'catalogue.';
+    }
+    return `Its current status is "${row.review_status}".`;
+  } catch {
+    return 'Its current state could not be read back, so it is unknown whether it was published or '
+      + 'rejected — check the review queue before acting.';
+  }
+}
+
 export const stagedService = {
   /** Pending candidates, newest discovery first. */
   async listPending(): Promise<StagedLoad> {
@@ -156,12 +192,17 @@ export const stagedService = {
       // The RPC's already-processed guard. It takes the row lock BEFORE testing
       // review_status, so two concurrent approvals serialise and the second is
       // refused rather than publishing twice — and so is a retry after a
-      // response went missing. This is a refusal that means the work is DONE,
-      // not one to retry.
+      // response went missing.
+      //
+      // 55000 means NOT PENDING. It does NOT mean published: a candidate an
+      // editor rejected is equally not pending, and was never added to the
+      // catalogue. Reporting "already published" for that case would be a
+      // plain falsehood, so the row is read back to find out which it is, and
+      // when the read-back fails nothing is guessed.
       if (error.code === ALREADY_PROCESSED_CODE) {
         throw markAlreadyProcessed(new Error(
-          `This candidate has already been reviewed and is no longer pending, so it was NOT `
-          + `published again. ${error.message}`
+          `This candidate is no longer pending, so it was NOT processed again. `
+          + await describeProcessedState(stagedId),
         ));
       }
       // 23505 is a unique violation, which on this path means the chosen id is

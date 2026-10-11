@@ -554,14 +554,16 @@ ${msg}
               + 'RPC refuses a candidate that is no longer pending, so a retry cannot publish a '
               + 'second copy — but it will not tell you whether the first attempt landed.'
             : isAlreadyProcessedWrite(err)
-              // Refused because the work is already done, not because it rolled
-              // back. Saying "still pending, retry" here would be false.
-              ? `ALREADY PUBLISHED
+              // Refused because the candidate is no longer PENDING. That is not
+              // the same as published: a rejected candidate is equally not
+              // pending and was never added to the catalogue, so the heading
+              // must not assert publication. staged-service reads the row back
+              // and says which it was, or says it could not tell.
+              ? `ALREADY PROCESSED
 
 ${msg}
 
-Nothing was published a second time. Reload to `
-                + 'see the entry this candidate already created.'
+This attempt changed nothing.`
               : `PUBLISH REFUSED
 
 ${msg}

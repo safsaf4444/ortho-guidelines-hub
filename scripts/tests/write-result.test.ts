@@ -256,12 +256,35 @@ check('markAlreadyProcessed implies refused',
 // The RPC takes the row lock before testing review_status, so a retry after a
 // lost response is refused rather than publishing a second copy. The message
 // must therefore NOT tell the editor it is still pending and retryable.
-check('the approve path has a dedicated already-published branch', /ALREADY PUBLISHED/.test(persist));
-check('the already-published branch says nothing was published twice',
-  /Nothing was published a second time/.test(persist));
-const alreadySection = persist.split('ALREADY PUBLISHED')[1]?.slice(0, 300) ?? '';
-check('the already-published branch does not claim the candidate is still pending',
+check('the approve path has a dedicated already-processed branch', /ALREADY PROCESSED/.test(persist));
+// 55000 means NOT PENDING. It does not mean published — a rejected candidate is
+// equally not pending and was never added to the catalogue. The heading must
+// therefore not assert publication.
+check('the heading does NOT assert publication', !/ALREADY PUBLISHED/.test(persist));
+// Scoped to this branch only. A wider window spills into the PUBLISH REFUSED
+// branch below, which legitimately DOES say "still pending and can be retried"
+// — that is the genuine-rollback case.
+const alreadySection = (persist.split('ALREADY PROCESSED')[1] ?? '').split('PUBLISH REFUSED')[0] ?? '';
+check('the already-processed branch does not claim the candidate is still pending',
   !/still pending/i.test(alreadySection), alreadySection.slice(0, 120));
+check('the already-processed branch claims only that nothing changed',
+  /changed nothing/i.test(alreadySection));
+
+// The message body comes from staged-service, which reads the row back rather
+// than inferring the outcome from the error code.
+const staged = readFileSync('src/lib/staged-service.ts', 'utf8');
+check('staged-service reads the queue row back on 55000',
+  /describeProcessedState/.test(staged) && /select\('review_status, resulting_guideline_id'\)/.test(staged));
+check('an ACCEPTED candidate reports its resulting guideline id',
+  /already accepted and published as/.test(staged) && /resulting_guideline_id\s*\n?\s*\?/.test(staged));
+check('an accepted candidate with no recorded id says so instead of guessing',
+  /no resulting guideline id is recorded/.test(staged));
+check('a REJECTED candidate is reported as rejected and never published',
+  /already REJECTED/.test(staged) && /never published/.test(staged));
+check('a failed read-back says the state is unknown rather than guessing',
+  (staged.match(/could not be read back/g) ?? []).length >= 2);
+check('the 55000 message no longer asserts publication unconditionally',
+  !/published again/.test(staged));
 check('a genuine rollback refusal still says it is retryable',
   /still pending and can be retried/.test(persist));
 
