@@ -64,6 +64,18 @@ Read [SECURITY.md](SECURITY.md) before changing anything in this area.
   Browsing, search, filtering, section/provider grouping, cross-references,
   the catalogue and the static fallback are unchanged, and need no account.
 
+## Rebuilding the database from this repository
+
+The root `supabase-migration-*.sql` files are a historical record, **not** a
+replayable chain: sorting them by filename produces a schema with RLS switched
+off on `guidelines`, silently. The tested order, the reason
+`supabase-migration-readonly-lockdown.sql` is load-bearing, and read-only
+verification queries are in
+[supabase/REBUILD-ORDER.md](supabase/REBUILD-ORDER.md).
+
+That document is for standing up a NEW database (local or disposable). Do not
+reapply the chain to production.
+
 ## Data remediation ordering
 
 `src/data/guidelines-data.ts` is **generated** from the live Supabase DB by
