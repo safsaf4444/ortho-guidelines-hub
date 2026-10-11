@@ -18,7 +18,13 @@
  * Exit:  0 = all assertions passed, 1 = at least one failure.
  */
 import { readFileSync } from 'node:fs';
-import { isZeroRowWrite, refusedOrMissingMessage } from '../../src/lib/write-result';
+import {
+  UNCONFIRMED_SAVE_MESSAGE,
+  classifyWriteFailure,
+  isZeroRowWrite,
+  markRefused,
+  refusedOrMissingMessage,
+} from '../../src/lib/write-result';
 
 let pass = 0;
 let fail = 0;
@@ -51,6 +57,41 @@ check('offers the allowlist/session cause', /allowlist|session/i.test(msg));
 check('offers the missing-row cause', /no longer exists/i.test(msg));
 // The single most important sentence: the editor must know their work is gone.
 check('states plainly that nothing was saved', /nothing was saved/i.test(msg));
+
+console.log('\n[2b] classifyWriteFailure — a refusal is evidence; silence is not');
+
+// Server answered: Postgres SQLSTATEs and PostgREST codes are decisions.
+for (const code of ['42501', '23505', '23514', '23502', 'PGRST205']) {
+  check(`code ${code} is a confirmed refusal`, classifyWriteFailure({ code }) === 'refused');
+}
+check('an explicitly marked error is a refusal', classifyWriteFailure(markRefused(new Error('zero rows'))) === 'refused');
+check('markRefused returns the same error object', (() => {
+  const e = new Error('x');
+  return markRefused(e) === e;
+})());
+
+// No answer. supabase-js wraps a dropped connection in an error object too,
+// but with an EMPTY code — which is why a bare error must never be read as a
+// refusal. The committed-then-lost case lives entirely in here.
+check('an empty code is NOT a refusal', classifyWriteFailure({ code: '' }) === 'unconfirmed');
+check('a missing code is NOT a refusal', classifyWriteFailure({ message: 'boom' }) === 'unconfirmed');
+check('a fetch failure is NOT a refusal', classifyWriteFailure({ code: '', message: 'FetchError: Failed to fetch' }) === 'unconfirmed');
+check('a TypeError is NOT a refusal', classifyWriteFailure(new TypeError('Failed to fetch')) === 'unconfirmed');
+check('a timeout is NOT a refusal', classifyWriteFailure(new Error('timed out after 8000ms')) === 'unconfirmed');
+check('an abort is NOT a refusal', classifyWriteFailure({ name: 'AbortError', message: 'aborted' }) === 'unconfirmed');
+check('null/undefined are NOT refusals',
+  classifyWriteFailure(null) === 'unconfirmed' && classifyWriteFailure(undefined) === 'unconfirmed');
+// A code-shaped string that is not a server code must not sneak through.
+check('a non-code string is NOT a refusal', classifyWriteFailure({ code: 'oops' }) === 'unconfirmed');
+
+console.log('\n[2c] The unconfirmed message makes no claim about what was written');
+
+check('it says the save could not be confirmed', /could not be confirmed/i.test(UNCONFIRMED_SAVE_MESSAGE));
+check('it says the draft is preserved', /draft is preserved/i.test(UNCONFIRMED_SAVE_MESSAGE));
+check('it tells the user to check before retrying', /check the stored entry before retrying/i.test(UNCONFIRMED_SAVE_MESSAGE));
+// The whole point: it must NOT assert either outcome.
+check('it does not claim nothing was written', !/nothing was (written|saved)/i.test(UNCONFIRMED_SAVE_MESSAGE));
+check('it does not claim the save succeeded', !/\bsaved\b|\bsuccess/i.test(UNCONFIRMED_SAVE_MESSAGE));
 
 console.log('\n[3] guidelines-service counts rows on every UPDATE path');
 
@@ -114,6 +155,31 @@ check('a note-only failure still reports overall success',
   persist.lastIndexOf('return true;') > persist.indexOf('changelogService.create'));
 check('a note-only failure is surfaced, not swallowed',
   /SAVED, BUT NOT LOGGED/.test(persist));
+
+console.log('\n[4b] Both save paths distinguish refusal from an unknown outcome');
+
+check('the ordinary path classifies the failure',
+  /classifyWriteFailure\(err\) === 'refused'/.test(persist));
+check('the ordinary path has a refusal branch and an unconfirmed branch',
+  /SAVE REFUSED/.test(persist) && /SAVE NOT CONFIRMED/.test(persist));
+check('the staged path also classifies the failure',
+  /PUBLISH REFUSED/.test(persist) && /PUBLISH NOT CONFIRMED/.test(persist));
+check('both unconfirmed branches use the shared wording',
+  (persist.match(/UNCONFIRMED_SAVE_MESSAGE/g) ?? []).length === 2);
+
+// The regression that prompted this: "nothing was written" may only be said
+// where the server actually said so. It must appear in refusal branches only.
+const refusalClaims = persist.match(/nothing was (written|saved)/gi) ?? [];
+const unconfirmedSections = persist.split(/SAVE NOT CONFIRMED|PUBLISH NOT CONFIRMED/).slice(1);
+check('an unconfirmed outcome never claims nothing was written',
+  unconfirmedSections.every(sec => !/nothing was (written|saved)/i.test(sec.slice(0, 400))),
+  'an unconfirmed branch asserts an outcome it cannot know');
+check('refusal branches do still state it plainly', refusalClaims.length >= 2,
+  `found ${refusalClaims.length}`);
+// Retrying is the user's decision, never automatic — a retry loop around an
+// unknown outcome is how a single edit becomes three.
+check('no automatic retry anywhere in the save path',
+  !/setTimeout|retry\(|while \(|for \(/.test(persist));
 
 console.log('\n[5] The editor’s unsaved draft survives a failure');
 

@@ -2,7 +2,7 @@ import { supabase } from './supabase';
 import { GUIDELINES_DATA } from '../data/guidelines-data';
 import type { Guideline } from '../data/guidelines-data';
 import { toGuideline, toDbRow, type DbGuideline } from './guidelines-mapper';
-import { isZeroRowWrite, refusedOrMissingMessage } from './write-result';
+import { classifyWriteFailure, isZeroRowWrite, markRefused, refusedOrMissingMessage } from './write-result';
 
 /** Where the rows the app is showing actually came from. */
 export type GuidelinesSource = 'live' | 'fallback';
@@ -117,7 +117,7 @@ export const guidelinesService = {
       .eq('id', guideline.id)
       .select('id');
     if (error) throw asPersistError('update', error);
-    if (isZeroRowWrite(data)) throw new Error(refusedOrMissingMessage('update', guideline.id));
+    if (isZeroRowWrite(data)) throw markRefused(new Error(refusedOrMissingMessage('update', guideline.id)));
   },
 
   /**
@@ -147,7 +147,7 @@ export const guidelinesService = {
       .eq('id', id)
       .select('id');
     if (error) throw asPersistError('archive', error);
-    if (isZeroRowWrite(data)) throw new Error(refusedOrMissingMessage('archive', id));
+    if (isZeroRowWrite(data)) throw markRefused(new Error(refusedOrMissingMessage('archive', id)));
   },
 };
 
@@ -158,6 +158,11 @@ export const guidelinesService = {
 // code into the thrown message so it reaches UI-level alerts too.
 function asPersistError(op: string, error: { message: string; code?: string; details?: string | null; hint?: string | null }): Error {
   console.error(`[guidelines-service] ${op} failed — raw Supabase error:`, error);
+  // supabase-js reports a dropped connection as an error object too, but with
+  // an empty code. Only a real server code means the write was decided, so the
+  // raw error is classified before the thrown one is tagged — see
+  // classifyWriteFailure in write-result.ts.
   const code = error.code ? ` (${error.code})` : '';
-  return new Error(`${op} failed${code}: ${error.message}`);
+  const thrown = new Error(`${op} failed${code}: ${error.message}`);
+  return classifyWriteFailure(error) === 'refused' ? markRefused(thrown) : thrown;
 }
