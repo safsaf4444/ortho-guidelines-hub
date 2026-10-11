@@ -95,9 +95,18 @@ const app = readFileSync('src/App.tsx', 'utf8');
 check('App.tsx archives instead of removing', app.includes('guidelinesService.archive(') && !app.includes('guidelinesService.remove('));
 check('the merge path archives the losing row rather than deleting it', app.includes('archive(duplicate.id)'));
 check('every persist supplies a note (persistGuideline takes one)', /persistGuideline = async \(updated: Guideline, isNew: boolean, note: string\)/.test(app));
-// Save is now gated on BOTH a valid change note and, where the chosen guidance
-// status demands it, an inclusion reason. canSave is the conjunction of the two.
-check('the Save button is gated on a valid note', app.includes('const canSave = noteOk && reasonOk;'));
+// Save is gated on a conjunction, and each conjunct is asserted separately
+// rather than pinning the whole line. The previous version matched
+// `const canSave = noteOk && reasonOk;` exactly, so adding a third condition
+// failed the test without anything being wrong — a brittle assertion that
+// punishes correct changes. What matters is that the note gate is still IN the
+// conjunction, not the precise spelling of the line.
+const canSaveLine = /const canSave = ([^;]+);/.exec(app)?.[1] ?? '';
+check('the Save button is gated on a valid note', /noteOk/.test(canSaveLine), `canSave = ${canSaveLine}`);
+check('…and on an inclusion reason where the status demands one', /reasonOk/.test(canSaveLine), `canSave = ${canSaveLine}`);
+// The id becomes a permanent primary key and the changelog's foreign key, so a
+// malformed or colliding one must not be saveable. See src/lib/guideline-id.ts.
+check('…and on a valid, non-colliding guideline id', /idOk/.test(canSaveLine), `canSave = ${canSaveLine}`);
 check('the Save button is disabled via that combined gate', app.includes('disabled={!canSave}'));
 check('a non-current guidance status requires a reason before saving',
   app.includes('const reasonRequired = inclusionReasonRequired(form.guidanceStatus);'));

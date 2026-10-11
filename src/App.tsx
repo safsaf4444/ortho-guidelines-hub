@@ -12,6 +12,8 @@ import EditorAuthControl from './components/EditorAuthControl'
 import { useEditorSession } from './lib/editor-session'
 import { stagedService } from './lib/staged-service'
 import { canWrite, writeBlockedReason, type WriteGate } from './lib/write-access'
+import { validateGuidelineId, isPlaceholderGuidelineId } from './lib/guideline-id'
+import { candidateToGuidelineDraft, type DisplayCandidate } from './lib/candidates'
 import { splitPublishers, canonicalProvider, providerUrl } from './lib/providers'
 import { findGapNote } from './lib/gap-detection'
 import { buildCatalogue, catalogueRowCount } from './lib/catalogue'
@@ -343,6 +345,20 @@ export default function App() {
   const [stagedCandidateId, setStagedCandidateId] = useState<string | null>(null);
   const [dismissedPairs, setDismissedPairs] = useState<Set<string>>(() => loadDismissedPairs());
 
+  /**
+   * Every guideline id currently in memory, for proposing and validating a new
+   * one (src/lib/guideline-id.ts).
+   *
+   * INCOMPLETE BY CONSTRUCTION, and it matters: guidelinesService.getAll()
+   * filters out archived rows, but an archived row still holds its primary key.
+   * So a proposed id can collide with an archived one and look free here. The
+   * database's unique constraint is the backstop — the insert fails, the RPC
+   * rolls back, and staged-service turns 23505 into a readable message. That is
+   * a loud failure on a rare edge, which is the right trade against fetching
+   * archived rows on every page load just to name things.
+   */
+  const existingIds = useMemo(() => new Set(guidelines.map(g => g.id)), [guidelines]);
+
   const sections = sortSections([...new Set(guidelines.map(g => g.section))]);
 
   const duplicateCandidates = useMemo(
@@ -429,10 +445,12 @@ export default function App() {
   // guideline and writes the change note in one transaction. It is undefined
   // for a candidate that has no row in the queue, which falls back to the
   // ordinary two-step save.
-  const handleReviewCandidate = (draft: Guideline, stagedId?: string) => {
-    setEditingGuideline(draft);
+  const handleReviewCandidate = (candidate: DisplayCandidate) => {
+    // The draft is built HERE, not in the dashboard, because proposing a
+    // non-colliding id needs every id already in use — see existingIds above.
+    setEditingGuideline(candidateToGuidelineDraft(candidate, existingIds));
     setIsNewGuideline(true);
-    setStagedCandidateId(stagedId ?? null);
+    setStagedCandidateId(candidate.stagedId ?? null);
   };
 
   const handleAddNew = () => {
@@ -1107,6 +1125,7 @@ export default function App() {
           onDelete={handleDelete}
           isNew={isNewGuideline}
           isStagedCandidate={stagedCandidateId !== null}
+          existingIds={existingIds}
         />
       )}
 
@@ -2077,9 +2096,12 @@ function ChangelogPanel({ guidelines }: { guidelines: Guideline[] }) {
 
 function EditModal({
   guideline, canEdit, blockedReason, onSave, onClose, onDelete, isNew, isStagedCandidate,
+  existingIds,
 }: {
   guideline: Guideline;
   canEdit: boolean;
+  /** Every id already in use, for collision checking. See src/lib/guideline-id.ts. */
+  existingIds: ReadonlySet<string>;
   /** Which of the three gate conditions is unmet, or null when writable. */
   blockedReason: string | null;
   onSave: (g: Guideline, note: string) => void;
@@ -2111,7 +2133,24 @@ function EditModal({
   // a 23514 the editor would have to decode.
   const reasonRequired = inclusionReasonRequired(form.guidanceStatus);
   const reasonOk = !reasonRequired || (form.inclusionReason ?? '').trim().length > 0;
-  const canSave = noteOk && reasonOk;
+
+  /**
+   * The id is editable ONLY while the row is new, and validated before Save.
+   *
+   * Locked once it exists because it is the primary key and the changelog's
+   * foreign key: editing it in place would orphan every note already written
+   * against the old value. That is why this is `isNew` rather than a general
+   * permission — an editor may name a thing, not rename it.
+   */
+  const idCheck = isNew
+    ? validateGuidelineId(form.id, existingIds, guideline.id)
+    : ({ ok: true } as const);
+  const idOk = idCheck.ok;
+  // Advice, not a rule — see isPlaceholderGuidelineId. Never blocks Save, so
+  // the existing rows and the manual Add flow keep working unchanged.
+  const idLooksPlaceholder = isNew && idOk && isPlaceholderGuidelineId(form.id);
+
+  const canSave = noteOk && reasonOk && idOk;
 
   // `canEdit` is already canWrite(gate) from App, so it IS the writable
   // answer. blockedReason is passed in rather than recomputed because the
@@ -2160,9 +2199,27 @@ function EditModal({
           {/* Row 1: ID · Section · Type */}
           <div className="grid grid-cols-3 gap-2">
             <div>
-              <label className={lbl}>ID</label>
-              <input type="text" value={form.id} readOnly
-                className={cn(inp, "bg-slate-50 text-slate-500 cursor-default")} />
+              <label className={lbl} htmlFor="guideline-id">ID</label>
+              {isNew ? (
+                <input
+                  id="guideline-id"
+                  type="text"
+                  value={form.id}
+                  onChange={e => set('id', e.target.value)}
+                  aria-invalid={!idOk}
+                  aria-describedby="guideline-id-hint"
+                  className={cn(inp, !idOk && "border-red-300 bg-red-50")}
+                />
+              ) : (
+                <input
+                  id="guideline-id"
+                  type="text"
+                  value={form.id}
+                  readOnly
+                  title="An existing entry's ID cannot change — the changelog is linked to it."
+                  className={cn(inp, "bg-slate-50 text-slate-500 cursor-default")}
+                />
+              )}
             </div>
             <div>
               <label className={lbl}>Section</label>
@@ -2177,6 +2234,27 @@ function EditModal({
               </select>
             </div>
           </div>
+
+          {/* ID guidance. Shown only while the row is new, which is the only
+              time the field above is editable. */}
+          {isNew && (
+            <p
+              id="guideline-id-hint"
+              role={idOk ? undefined : 'alert'}
+              className={cn(
+                "text-[10px] leading-relaxed -mt-2",
+                !idOk ? "text-red-700" : idLooksPlaceholder ? "text-amber-700" : "text-slate-500"
+              )}
+            >
+              {!idOk
+                ? idCheck.error
+                : idLooksPlaceholder
+                  ? 'This ID is still a placeholder. Replace it with something readable — '
+                    + 'it becomes permanent once saved, because the change history is linked to it.'
+                  : 'Permanent once saved, and the change history links to it. Lowercase words '
+                    + 'separated by hyphens, e.g. boa-open-fractures.'}
+            </p>
+          )}
 
           {/* Topic */}
           <div>
