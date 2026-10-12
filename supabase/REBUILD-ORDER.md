@@ -46,11 +46,12 @@ exactly:
 | 1 | `supabase-schema.sql` | Creates `guidelines`, `set_updated_at()`, triggers, indexes. **Leaves RLS disabled.** |
 | 2 | `supabase-migration-readonly-lockdown.sql` | **Load-bearing.** Enables RLS on `guidelines` and creates `guidelines_public_read`. Nothing else does either. |
 | 3 | `supabase-migration-add-changelog-with-rls.sql` | `guideline_changelog` + its RLS. FK needs (1). |
-| 4 | `supabase-migration-add-content-hash.sql` | Adds `content_hashes`, `last_change_check`. Must precede (8), which inserts them. |
+| 4 | `supabase-migration-add-content-hash.sql` | Adds `content_hashes`, `last_change_check`. Must precede (9), which inserts them. |
 | 5 | `supabase-migration-editorial-metadata.sql` | Adds `source_type`, `guidance_status`, `scope_note`, `editorial_review_date`, `inclusion_reason` and their CHECKs. Its backfills affect 0 rows on an empty database, which is correct. |
-| 6 | `supabase-migration-public-write-access.sql` | Historical: grants anon `INSERT`/`UPDATE`. Kept in the chain so (8)'s `drop policy` statements have something to drop and the end state is reached the same way production reached it. |
-| 7 | `supabase-migration-soft-delete-and-mandatory-notes.sql` | Revokes anon `DELETE`; adds the non-blank change-note CHECK. |
-| 8 | `supabase/migrations/20261011_create_staging_and_editor_roles.sql` | Drops the anon write policies, adds `is_editor()`, the editor-only write policies, `staged_guidelines` and `approve_staged_guideline()`. |
+| 6 | `supabase-migration-extend-link-verification-states.sql` | **Added 2026-10-12. Without it a rebuild does not match production.** Replaces the four-state `guidelines_link_verification_check` from (1) with the live eight-state version. `scripts/map-link-status.ts` and `scripts/flag-dead-links.ts` write `moved`, `withdrawn`, `superseded` and `blocked`; a four-state schema rejects those writes. Corresponds to ledger entry `20260910195751 extend_link_verification_states`, whose SQL was missing from this repository. |
+| 7 | `supabase-migration-public-write-access.sql` | Historical: grants anon `INSERT`/`UPDATE`. Kept in the chain so (9)'s `drop policy` statements have something to drop and the end state is reached the same way production reached it. |
+| 8 | `supabase-migration-soft-delete-and-mandatory-notes.sql` | Revokes anon `DELETE`; adds the non-blank change-note CHECK. |
+| 9 | `supabase/migrations/20261011_create_staging_and_editor_roles.sql` | Drops the anon write policies, adds `is_editor()`, the editor-only write policies, `staged_guidelines` and `approve_staged_guideline()`. |
 
 Do **not** apply `supabase-migration-add-changelog.sql` — it predates the RLS
 model and creates the same table with no RLS at all. The
@@ -58,6 +59,63 @@ model and creates the same table with no RLS at all. The
 
 `supabase-data-remediation-*.sql` are one-off data fixes, not schema. They are
 not part of a rebuild.
+
+`supabase/recovery/guidelines_backup_20260713.sql` is **not** part of a
+rebuild either. It reconstructs the DDL for an ad-hoc July snapshot table that
+exists in production but that no migration creates. Apply it only when
+restoring a backup set that includes that table's data; see
+"Restoring from a backup" below.
+
+### The second gap this chain still does not close
+
+Applying (1)–(9) reproduces production's tables, policies, functions and
+grants, verified by fingerprint diff on 2026-10-12 — but it does **not**
+recreate `public.guidelines_backup_20260713`, because nothing in the
+repository ever created it. A rebuild intended to match production
+object-for-object needs `supabase/recovery/guidelines_backup_20260713.sql` as
+a tenth, optional step.
+
+### Restoring from a backup
+
+Schema comes from this chain; data comes from the backup set. Order:
+
+1. Platform substrate. On a plain Postgres target the `anon`,
+   `authenticated` and `service_role` roles, the `auth` schema, `auth.users`
+   and `auth.uid()` do not exist and must be stubbed before (1). On a real
+   Supabase project the platform supplies them.
+2. Chain steps (1)–(9) above.
+3. `supabase/recovery/guidelines_backup_20260713.sql`, **only** if the backup
+   includes that table.
+4. Load table data from the backup.
+5. Apply the backup's `grants.sql`. Table and function grants are **not**
+   carried by a `pg_dump --no-privileges` artefact, and are not created by
+   this chain either beyond what each migration grants explicitly.
+6. Verify, do not assume: row counts, a full-content fingerprint,
+   `pg_class.relrowsecurity` on every table, the policy list, and
+   `has_function_privilege` for `anon`/`authenticated`/`service_role`.
+
+#### The editor account cannot be restored from a backup
+
+`is_editor()` hardcodes an account UUID and checks only
+`auth.uid() = <that UUID>` — it never checks that the account exists. On a
+restored database with an empty `auth.users`, presenting that UUID makes
+`is_editor()` return **true**, and the write then fails one layer deeper on
+`staged_guidelines_reviewed_by_fkey` with SQLSTATE 23503. Demonstrated during
+the 2026-10-12 drill; the approval RPC is atomic, so nothing is half-written.
+
+So a restored database is complete and readable but has **no working
+editor**, and restoring one is a manual step outside the backup:
+
+- Create the editor account afresh through Supabase Auth.
+- Read the UUID that account is actually assigned, then update the
+  `is_editor()` allowlist to match it.
+
+**Whether the original UUID can be preserved is unverified and must not be
+assumed.** It has not been tested on this project, no procedure for it is
+documented here, and the restore drill did not attempt it. Plan on the
+account receiving a new UUID and on `is_editor()` needing an edit. Any rows
+already referencing the old UUID in `reviewed_by` will point at an account
+that no longer exists.
 
 ### For a local environment
 
