@@ -41,6 +41,18 @@ export interface DbStagedGuideline {
   matched_guideline_id: string | null;
   resulting_guideline_id: string | null;
   review_note: string | null;
+  changed_url: string | null;
+  detection_evidence: Record<string, unknown> | null;
+  state_observed_at: string | null;
+  superseded_by: string | null;
+  superseded_at: string | null;
+  /**
+   * Embedded aggregate from `.select('*, staged_detections(count)')`.
+   * PostgREST returns it as an array with a single row, and the array is empty
+   * when nothing has been counted — so read it defensively rather than
+   * assuming a shape.
+   */
+  staged_detections?: { count: number }[] | null;
   reviewed_at: string | null;
   reviewed_by: string | null;
   created_at: string;
@@ -78,6 +90,11 @@ function toDisplayCandidate(row: DbStagedGuideline): DisplayCandidate {
     // Rows in this table are always the structured schema — the legacy
     // `newCandidates` shape only ever existed in candidates.json.
     fromLegacyFallback: false,
+    matchedGuidelineId: row.matched_guideline_id,
+    changedUrl: row.changed_url,
+    detectionEvidence: (row.detection_evidence ?? null) as DisplayCandidate['detectionEvidence'],
+    stateObservedAt: row.state_observed_at,
+    detectionCount: row.staged_detections?.[0]?.count,
   };
 }
 
@@ -149,7 +166,10 @@ export const stagedService = {
 
     const { data, error } = await supabase
       .from('staged_guidelines')
-      .select('*')
+      // staged_detections is append-only observation evidence; the count is how
+      // many times this exact content state has been seen. A FACT, not a
+      // threshold — nothing is suppressed on the strength of it.
+      .select('*, staged_detections(count)')
       .eq('review_status', 'pending')
       .order('discovered_at', { ascending: false, nullsFirst: false });
 

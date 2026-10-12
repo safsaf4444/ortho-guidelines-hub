@@ -42,3 +42,6 @@ candidates.json
 # Transient baseline extracted from git history by scripts/tests/equivalence.test.ts.
 # Deleted by the test in a finally; listed here as a safety net if the process dies.
 scripts/.equivalence-baseline.ts
+
+# Transient detector cache (scripts/detect-changes.ts); never commit
+scripts/.fail-streak-cache.json

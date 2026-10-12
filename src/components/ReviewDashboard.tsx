@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Ban, ExternalLink, EyeOff, RefreshCw } from 'lucide-react';
+import { AlertTriangle, Ban, ExternalLink, EyeOff, RefreshCw } from 'lucide-react';
 import {
   changeReasonLabel,
   filterOutRejected,
@@ -311,6 +311,19 @@ function CandidateCard({
 }) {
   const discovered = formatDate(candidate.discoveredAt);
 
+  /**
+   * A detected change to guidance ALREADY in the catalogue, rather than a new
+   * entry. `matchedGuidelineId` is the marker: it names the existing row.
+   *
+   * These must not go through "Review & Edit". That path calls
+   * candidateToGuidelineDraft(), which mints a FRESH id, and then
+   * approve_staged_guideline(), which only ever INSERTs — so approving a
+   * revision there would publish a duplicate entry under a second id. The
+   * database refuses it with 42809; the control is withheld here so an editor
+   * never reaches that refusal by a route that looks normal.
+   */
+  const isRevision = Boolean(candidate.matchedGuidelineId);
+
   return (
     <div className="border border-slate-200 rounded-md bg-white p-3 flex flex-col gap-2">
       <div className="flex justify-between items-start gap-2 flex-wrap">
@@ -348,8 +361,54 @@ function CandidateCard({
         </a>
       )}
 
+      {isRevision && (
+        <div className="border border-amber-200 bg-amber-50/60 rounded-md p-2.5 flex flex-col gap-1.5">
+          <p className="text-[11px] text-amber-900 leading-relaxed">
+            Detected change to an existing entry:{' '}
+            <span className="font-mono font-semibold">{candidate.matchedGuidelineId}</span>
+          </p>
+          {candidate.changedUrl && (
+            <p className="text-[10px] text-amber-900/90 break-all">
+              Changed source: {candidate.changedUrl}
+            </p>
+          )}
+          {/* Provenance only. The detector compares a hash of stripped page
+              text and stores no page text, so there is no description of what
+              changed in substance and none is implied here. */}
+          {candidate.detectionEvidence?.observed_hash && (
+            <p className="text-[10px] text-amber-900/80 font-mono">
+              {candidate.detectionEvidence.baseline_hash
+                ? `${candidate.detectionEvidence.baseline_hash.slice(0, 12)} -> ${candidate.detectionEvidence.observed_hash.slice(0, 12)}`
+                : candidate.detectionEvidence.observed_hash.slice(0, 12)}
+              {typeof candidate.detectionEvidence.text_length === 'number'
+                ? `  (${candidate.detectionEvidence.text_length} chars of text)`
+                : ''}
+            </p>
+          )}
+          {typeof candidate.detectionCount === 'number' && candidate.detectionCount > 1 && (
+            <p className="text-[10px] text-amber-900">
+              This exact content state has been observed {candidate.detectionCount} times.
+            </p>
+          )}
+          <p className="text-[10px] text-amber-900/80">
+            The check compares a hash of the page text. It shows that the page changed, not
+            what changed or whether it matters — open the source to judge that.
+          </p>
+        </div>
+      )}
+
       {/* flex-wrap: three actions no longer fit one line at phone width. */}
       <div className="flex items-center gap-2 pt-1 border-t border-slate-100 flex-wrap">
+        {isRevision ? (
+          <span
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-[12px] font-medium
+                       border border-amber-200 bg-amber-50 text-amber-900"
+            title="This is a change to an entry that already exists. Publishing it as a new entry would duplicate the entry, so that path is not offered. Applying a revision in place is not implemented yet."
+          >
+            <AlertTriangle className="w-3 h-3 shrink-0" />
+            Revision — cannot be published as a new entry
+          </span>
+        ) : (
         <button
           onClick={onEdit}
           className={cn(
@@ -359,6 +418,7 @@ function CandidateCard({
         >
           Review &amp; Edit
         </button>
+        )}
         {/* PERSISTENT. Deliberately styled and worded apart from Hide below:
             one writes an attributed decision to the database, the other
             changes nothing outside this tab. These were a single, ambiguous

@@ -22,7 +22,8 @@
  */
 
 import { createClient } from '@supabase/supabase-js';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { makeRevisionCandidateId } from './lib/ingestion.js';
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 
@@ -50,6 +51,17 @@ const BLOCKED_SOURCES_PATH = path.join(process.cwd(), 'scripts', 'blocked-source
 const FAIL_STREAK_PATH = path.join(process.cwd(), 'scripts', '.fail-streak-cache.json'); // transient, gitignored is fine
 const FAILS_BEFORE_BLOCKING = 3;
 const FETCH_TIMEOUT_MS = 15_000;
+
+/**
+ * Stable identifier for this run, used to make observation evidence idempotent.
+ *
+ * `staged_detections` is UNIQUE on (staged_id, detection_run_id), so a run that
+ * is retried after a partial failure re-observes without appending duplicate
+ * evidence, while a genuinely new run does append. GITHUB_RUN_ID is reused
+ * across a workflow's attempts, which is exactly the grouping wanted; locally a
+ * per-process uuid keeps repeated manual runs distinguishable.
+ */
+const RUN_ID = process.env.GITHUB_RUN_ID?.trim() || `local-${randomUUID()}`;
 
 if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
   console.error('Missing SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY env vars.');
@@ -191,6 +203,63 @@ async function openIssue(row: GuidelineRow, url: string, oldHash: string | null,
 
 // ---- main ----------------------------------------------------------------
 
+/**
+ * Route one detected change into the website's review queue.
+ *
+ * Returns true only when the queue has durably recorded this observation. The
+ * caller uses that to decide whether the baseline hash may advance: a staging
+ * failure MUST leave the baseline alone, so the same change is detected again
+ * next run rather than being lost to a transient error.
+ *
+ * Nothing here interprets the change. The queue is told which URL moved, from
+ * which hash to which, and when. No page text is stored and nothing is sent
+ * anywhere for analysis.
+ */
+async function stageDetectedChange(
+  row: GuidelineRow,
+  url: string,
+  baselineHash: string | null,
+  observedHash: string,
+  observedAt: string,
+  httpStatus: number | null,
+  textLength: number | null
+): Promise<boolean> {
+  const candidateId = makeRevisionCandidateId({
+    guidelineId: row.id,
+    changedUrl: url,
+    observedHash,
+    provider: row.source ?? row.id,
+  });
+
+  const { data, error } = await supabase.rpc('stage_detected_change', {
+    p_candidate_id: candidateId,
+    p_guideline_id: row.id,
+    p_changed_url: url,
+    p_provider: row.source ?? row.id,
+    p_provider_name: row.source ?? null,
+    p_topic: row.topic ?? row.id,
+    p_baseline_hash: baselineHash,
+    p_observed_hash: observedHash,
+    p_observed_at: observedAt,
+    p_run_id: RUN_ID,
+    p_http_status: httpStatus,
+    p_text_length: textLength,
+  });
+
+  if (error) {
+    console.error(
+      `  STAGING FAILED for [${row.id}] ${url} — baseline NOT advanced, ` +
+        `so this change will be detected again next run: ${error.message}` +
+        (error.code ? ` (${error.code})` : '')
+    );
+    return false;
+  }
+
+  const action = (data as { action?: string } | null)?.action ?? 'unknown';
+  console.log(`  queued [${row.id}] ${url} -> ${action} (${candidateId})`);
+  return true;
+}
+
 async function main() {
   if (DRY_RUN) {
     console.log(
@@ -239,6 +308,9 @@ async function main() {
   let changed = 0;
   let skippedBlocked = 0;
   let newlyBlocked = 0;
+  let staged = 0;
+  let stagingFailures = 0;
+  let baselinesHeldBack = 0;
 
   for (const row of (rows as GuidelineRow[]) ?? []) {
     // ADJUST THIS if your `versions` JSONB shape uses different key names --
@@ -250,8 +322,16 @@ async function main() {
     if (urls.length === 0) continue;
 
     const existingHashes = row.content_hashes ?? {};
-    const newHashes: Record<string, string> = { ...existingHashes };
+    // Only the keys this run actually confirmed. Sent to advance_content_hashes(),
+    // which MERGES them server-side — not a whole-object replacement, so a hash
+    // another writer advanced for a different URL is not discarded.
+    const hashPatch: Record<string, string> = {};
     let rowTouched = false;
+    // The most recent observation behind this patch. Passed to
+    // advance_content_hashes(), which refuses a key whose stored hash was
+    // observed LATER than this — so a run that started earlier and finished
+    // later cannot drag a baseline backwards.
+    let latestObservedAt = new Date(0).toISOString();
 
     for (const url of urls) {
       const domain = hostnameOf(url);
@@ -271,6 +351,10 @@ async function main() {
 
         failStreaks[url] = 0; // reset on success
 
+        // A URL whose content is unchanged, or that has no baseline yet, has
+        // nothing to queue — its hash advances unconditionally.
+        let mayAdvance = true;
+
         if (oldHash && oldHash !== newHash) {
           changed++;
           if (DRY_RUN) {
@@ -278,13 +362,37 @@ async function main() {
               `  [dry-run] change detected, issue NOT created: [${row.id}] ${url}\n` +
                 `            ${oldHash.slice(0, 12)} -> ${newHash.slice(0, 12)}`
             );
+            // Nothing was persisted, so nothing may advance either.
+            mayAdvance = false;
           } else {
+            // GitHub issue behaviour is UNCHANGED — still opened exactly as
+            // before, independently of the queue write.
             await openIssue(row, url, oldHash, newHash);
+
+            // THE BASELINE MOVES ONLY IF THE QUEUE RECORDED THE CHANGE.
+            // Advancing it after a staging failure would lose the detection:
+            // the next run would compare against the new hash, see no
+            // difference, and the change would never reach review.
+            const queued = await stageDetectedChange(
+              row, url, oldHash, newHash, new Date().toISOString(),
+              res.status, text.length
+            );
+            if (queued) {
+              staged++;
+            } else {
+              stagingFailures++;
+              baselinesHeldBack++;
+              mayAdvance = false;
+            }
           }
         }
 
-        newHashes[url] = newHash;
-        rowTouched = true;
+        if (mayAdvance) {
+          hashPatch[url] = newHash;
+          rowTouched = true;
+          const seenAt = new Date().toISOString();
+          if (seenAt > latestObservedAt) latestObservedAt = seenAt;
+        }
       } catch (err) {
         failStreaks[url] = (failStreaks[url] ?? 0) + 1;
         console.warn(`  fetch failed (${failStreaks[url]}/${FAILS_BEFORE_BLOCKING}): ${url} -- ${err}`);
@@ -306,10 +414,36 @@ async function main() {
       if (DRY_RUN) {
         console.log(`  [dry-run] Supabase update SKIPPED for row ${row.id} (content_hashes, last_change_check)`);
       } else {
-        await supabase
-          .from('guidelines')
-          .update({ content_hashes: newHashes, last_change_check: new Date().toISOString().slice(0, 10) })
-          .eq('id', row.id);
+        // Merge, not replace. The previous code wrote back a whole object built
+        // from the copy read at the start of this row, which discarded any hash
+        // another writer had advanced for a different URL in the meantime.
+        // advance_content_hashes() applies `||` server-side and touches no
+        // catalogue content field.
+        const { data: advanceResult, error: advanceError } = await supabase.rpc('advance_content_hashes', {
+          p_guideline_id: row.id,
+          p_hashes: hashPatch,
+          p_observed_at: latestObservedAt,
+          p_checked_on: new Date().toISOString().slice(0, 10),
+        });
+        const staleKeys = (advanceResult as { rejected_as_stale?: string[] } | null)?.rejected_as_stale;
+        if (staleKeys && staleKeys.length > 0) {
+          // Another run observed this URL more recently. Its hash stands; ours
+          // is discarded rather than regressing the baseline.
+          console.log(
+            `  ${staleKeys.length} hash(es) for ${row.id} were rejected as stale — a more ` +
+              `recent run already advanced them: ${staleKeys.join(', ')}`
+          );
+        }
+        if (advanceError) {
+          // Nothing advanced, so every change this row queued will be detected
+          // again next run. Staging is idempotent, so the retry adds no
+          // duplicate candidate.
+          stagingFailures++;
+          console.error(
+            `  HASH ADVANCE FAILED for row ${row.id} — baselines unchanged, ` +
+              `changes will be re-detected: ${advanceError.message}`
+          );
+        }
       }
     }
   }
@@ -325,9 +459,22 @@ async function main() {
   }
 
   console.log(
-    `Done. Checked ${checked} URLs. ${changed} change(s) flagged for approval. ` +
+    `Done. Checked ${checked} URLs. ${changed} change(s) detected, ${staged} queued for review. ` +
       `${skippedBlocked} skip(s) for known-blocked domains. ${newlyBlocked} domain(s) newly blocked this run.`
   );
+
+  if (stagingFailures > 0) {
+    // Exit non-zero so a partial failure is visible in the workflow rather than
+    // looking like a healthy run. No detection is lost — the baselines for the
+    // affected URLs were deliberately held back, so the next run re-detects.
+    console.error(
+      `
+${stagingFailures} queue write(s) failed. ${baselinesHeldBack} baseline hash(es) ` +
+        `held back on purpose so the change is re-detected next run. Nothing was lost; ` +
+        `this run is NOT a clean pass.`
+    );
+    process.exitCode = 1;
+  }
 }
 
 main().catch((err) => {
