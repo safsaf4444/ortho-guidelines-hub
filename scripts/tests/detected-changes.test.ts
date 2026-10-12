@@ -151,6 +151,25 @@ check('a revision must name both the entry and the URL',
 check('the per-URL transition is serialised with a transaction advisory lock',
   mig.includes('pg_advisory_xact_lock('),
   'two concurrent runs must not interleave read-decide-write on the same URL');
+// Queue locking orders the review slot but NOT the baseline write, which
+// happens in a separate call after the loop. Without a per-key ordering guard
+// an older run finishing late regresses content_hashes — demonstrated end to
+// end against PostgREST before it was fixed.
+check('the baseline write is ordered per key, not blindly merged',
+  mig.includes('content_hash_seen_at')
+  && /p_observed_at >= v_prev/.test(mig)
+  && mig.includes('rejected_as_stale'),
+  'an out-of-order run would otherwise drag a baseline backwards');
+check('the baseline write is serialised per guideline as well',
+  /pg_advisory_xact_lock\(hashtextextended\('guidelines:' \|\| p_guideline_id/.test(mig));
+check('the unordered three-argument form is dropped, not left callable',
+  /drop function if exists public\.advance_content_hashes\(text, jsonb, date\)/.test(mig));
+check('last_change_check cannot move backwards either',
+  /last_change_check\s*=\s*greatest\(/.test(mig));
+check('the detector passes the observation time it actually used',
+  det.includes('p_observed_at: latestObservedAt') && det.includes('let latestObservedAt'));
+check('a stale-rejected hash is reported rather than silently dropped',
+  det.includes('rejected_as_stale') && det.includes('rejected as stale'));
 check('an older observation cannot displace a newer state',
   mig.includes('stale_observation_ignored')
   && /p_observed_at < v_pending\.state_observed_at/.test(mig));

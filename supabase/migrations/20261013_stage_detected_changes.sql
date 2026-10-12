@@ -38,6 +38,17 @@ begin;
 
 -- ── 1. Columns the queue needs for a revision ───────────────────────────────
 
+-- Per-URL observation time for the monitoring hashes, so a baseline can be
+-- refused when it would REGRESS. Queue locking orders the review slot but says
+-- nothing about this write, which happens in a separate call after the loop —
+-- so without this an older run finishing late overwrites a newer run's hash.
+-- Demonstrated end to end before it was fixed.
+alter table public.guidelines
+  add column if not exists content_hash_seen_at jsonb not null default '{}'::jsonb;
+
+comment on column public.guidelines.content_hash_seen_at is
+  'url -> observation timestamp for the matching key in content_hashes. Monitoring state only, like content_hashes itself: it carries no editorial meaning. Used by advance_content_hashes() to reject an out-of-order write.';
+
 alter table public.staged_guidelines
   add column if not exists changed_url        text,
   add column if not exists detection_evidence jsonb not null default '{}'::jsonb,
@@ -409,33 +420,85 @@ grant execute on function public.stage_detected_change(text,text,text,text,text,
 create or replace function public.advance_content_hashes(
   p_guideline_id text,
   p_hashes       jsonb,
+  p_observed_at  timestamptz,
   p_checked_on   date default current_date
 )
-returns void
+returns jsonb
 language plpgsql
 security invoker
 set search_path = public, pg_temp
 as $$
+declare
+  v_seen      jsonb;
+  v_accepted  jsonb := '{}'::jsonb;
+  v_rejected  text[] := '{}';
+  v_key       text;
+  v_prev      timestamptz;
 begin
   if p_hashes is null or jsonb_typeof(p_hashes) <> 'object' then
     raise exception 'advance_content_hashes: p_hashes must be a json object'
       using errcode = '22023';
   end if;
+  if p_observed_at is null then
+    raise exception 'advance_content_hashes: an observation timestamp is required to order writes'
+      using errcode = '22023';
+  end if;
 
-  update public.guidelines
-     set content_hashes    = coalesce(content_hashes, '{}'::jsonb) || p_hashes,
-         last_change_check = p_checked_on
-   where id = p_guideline_id;
+  -- Serialise concurrent advances for this row, so the read-compare-write
+  -- below cannot interleave with another run's.
+  perform pg_advisory_xact_lock(hashtextextended('guidelines:' || p_guideline_id, 0));
+
+  select coalesce(content_hash_seen_at, '{}'::jsonb) into v_seen
+    from public.guidelines where id = p_guideline_id for update;
+
+  if not found then
+    raise exception 'advance_content_hashes: no guideline %', p_guideline_id
+      using errcode = 'P0002';
+  end if;
+
+  -- PER-KEY ORDERING. A key is accepted only when this observation is at least
+  -- as recent as the one behind the stored hash. An older run finishing late
+  -- therefore cannot drag a baseline backwards, which would cause the newer
+  -- content to be re-detected as a fresh change forever.
+  for v_key in select jsonb_object_keys(p_hashes) loop
+    v_prev := nullif(v_seen->>v_key, '')::timestamptz;
+    if v_prev is null or p_observed_at >= v_prev then
+      v_accepted := v_accepted
+        || jsonb_build_object(v_key, p_hashes->v_key);
+      v_seen := v_seen
+        || jsonb_build_object(v_key, to_char(p_observed_at at time zone 'UTC',
+                                             'YYYY-MM-DD"T"HH24:MI:SS.USOF'));
+    else
+      v_rejected := v_rejected || v_key;
+    end if;
+  end loop;
+
+  if v_accepted <> '{}'::jsonb then
+    update public.guidelines
+       set content_hashes       = coalesce(content_hashes, '{}'::jsonb) || v_accepted,
+           content_hash_seen_at = v_seen,
+           -- Never move the check date backwards either.
+           last_change_check    = greatest(coalesce(last_change_check, p_checked_on), p_checked_on)
+     where id = p_guideline_id;
+  end if;
+
+  return jsonb_build_object(
+    'accepted', (select coalesce(jsonb_agg(k), '[]'::jsonb) from jsonb_object_keys(v_accepted) k),
+    'rejected_as_stale', to_jsonb(v_rejected));
 end;
 $$;
 
-comment on function public.advance_content_hashes(text, jsonb, date) is
-  'Merges observed content hashes into guidelines.content_hashes and stamps last_change_check. Merge, not replace, so a concurrent writer''s hash for a different URL is not discarded. Touches no catalogue content field. An observed hash is MONITORING STATE and carries no editorial meaning: advancing it is not acceptance of the change. SECURITY INVOKER; EXECUTE granted to service_role only.';
+comment on function public.advance_content_hashes(text, jsonb, timestamptz, date) is
+  'Merges observed content hashes into guidelines.content_hashes, per key, and ONLY when the supplied observation is at least as recent as the one behind the stored hash — so an out-of-order run cannot regress a baseline. Merge not replace, so a concurrent writer''s hash for a different URL survives. Serialised per guideline with a transaction advisory lock. Touches no catalogue content field. An observed hash is MONITORING STATE and carries no editorial meaning: advancing it is not acceptance of the change. SECURITY INVOKER; EXECUTE granted to service_role only.';
 
-revoke all on function public.advance_content_hashes(text, jsonb, date) from public;
-revoke all on function public.advance_content_hashes(text, jsonb, date) from anon;
-revoke all on function public.advance_content_hashes(text, jsonb, date) from authenticated;
-grant execute on function public.advance_content_hashes(text, jsonb, date) to service_role;
+revoke all on function public.advance_content_hashes(text, jsonb, timestamptz, date) from public;
+revoke all on function public.advance_content_hashes(text, jsonb, timestamptz, date) from anon;
+revoke all on function public.advance_content_hashes(text, jsonb, timestamptz, date) from authenticated;
+grant execute on function public.advance_content_hashes(text, jsonb, timestamptz, date) to service_role;
+
+-- The three-argument form from the first draft of this migration had no
+-- ordering guard. Drop it so no caller can reach the unordered behaviour.
+drop function if exists public.advance_content_hashes(text, jsonb, date);
 
 
 -- ── 8. Revisions must not use the new-entry approval path ───────────────────

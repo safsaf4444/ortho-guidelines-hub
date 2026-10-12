@@ -327,6 +327,11 @@ async function main() {
     // another writer advanced for a different URL is not discarded.
     const hashPatch: Record<string, string> = {};
     let rowTouched = false;
+    // The most recent observation behind this patch. Passed to
+    // advance_content_hashes(), which refuses a key whose stored hash was
+    // observed LATER than this — so a run that started earlier and finished
+    // later cannot drag a baseline backwards.
+    let latestObservedAt = new Date(0).toISOString();
 
     for (const url of urls) {
       const domain = hostnameOf(url);
@@ -385,6 +390,8 @@ async function main() {
         if (mayAdvance) {
           hashPatch[url] = newHash;
           rowTouched = true;
+          const seenAt = new Date().toISOString();
+          if (seenAt > latestObservedAt) latestObservedAt = seenAt;
         }
       } catch (err) {
         failStreaks[url] = (failStreaks[url] ?? 0) + 1;
@@ -412,11 +419,21 @@ async function main() {
         // another writer had advanced for a different URL in the meantime.
         // advance_content_hashes() applies `||` server-side and touches no
         // catalogue content field.
-        const { error: advanceError } = await supabase.rpc('advance_content_hashes', {
+        const { data: advanceResult, error: advanceError } = await supabase.rpc('advance_content_hashes', {
           p_guideline_id: row.id,
           p_hashes: hashPatch,
+          p_observed_at: latestObservedAt,
           p_checked_on: new Date().toISOString().slice(0, 10),
         });
+        const staleKeys = (advanceResult as { rejected_as_stale?: string[] } | null)?.rejected_as_stale;
+        if (staleKeys && staleKeys.length > 0) {
+          // Another run observed this URL more recently. Its hash stands; ours
+          // is discarded rather than regressing the baseline.
+          console.log(
+            `  ${staleKeys.length} hash(es) for ${row.id} were rejected as stale — a more ` +
+              `recent run already advanced them: ${staleKeys.join(', ')}`
+          );
+        }
         if (advanceError) {
           // Nothing advanced, so every change this row queued will be detected
           // again next run. Staging is idempotent, so the retry adds no
