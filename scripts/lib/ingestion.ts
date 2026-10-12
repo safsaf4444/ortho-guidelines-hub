@@ -108,7 +108,15 @@ export const ALL_CHANGE_REASONS = [
  * The other members exist so a future reviewer UI has somewhere to record a
  * decision.
  */
-export type ReviewStatus = 'pending' | 'accepted' | 'rejected' | 'deferred';
+export type ReviewStatus =
+  | 'pending'
+  | 'accepted'
+  | 'rejected'
+  | 'deferred'
+  // Automatically replaced in the review slot by a newer observation of the
+  // same URL. A MACHINE state, not a human decision: nothing was reviewed,
+  // which is why supersession records superseded_at and never reviewed_at.
+  | 'superseded';
 
 /** One link attached to a candidate. Mirrors the catalogue's versions[] shape. */
 export interface CandidateVersionLink {
@@ -345,6 +353,47 @@ export function makeCandidateId(input: CandidateIdInput): string {
   const material = [input.pipeline, provider, input.changeReason, url].join('\u0000');
   const digest = createHash('sha256').update(material, 'utf8').digest('hex').slice(0, 12);
   return `${provider}-${slug(input.changeReason)}-${digest}`;
+}
+
+/**
+ * Candidate ID for a detected change to guidance already in the catalogue.
+ *
+ * Deliberately NOT {@link makeCandidateId}. That function hashes
+ * (pipeline, provider, reason, url) and excludes content, so the same URL
+ * changing twice yields the SAME id — and `stage-candidates.ts` upserts with
+ * `ignoreDuplicates`, which would silently drop the second, genuinely newer
+ * change. For revisions the identity must be the content state.
+ *
+ * Material adds two components:
+ *
+ *   * `guidelineId`, because one URL can appear in the `versions` of more than
+ *     one guideline (cross-listing). Without it two entries tracking the same
+ *     document would collide on a single candidate and one would be lost.
+ *   * `observedHash`, so each distinct observed state is its own candidate.
+ *     This is what makes re-observing a state idempotent and what makes a
+ *     rejected state unable to return: its id already exists, so the insert
+ *     hits ON CONFLICT DO NOTHING.
+ *
+ * Deterministic, with no timestamp: a retried run computes the same id.
+ */
+export function makeRevisionCandidateId(input: {
+  guidelineId: string;
+  changedUrl: string;
+  observedHash: string;
+  provider: string;
+}): string {
+  const url = normaliseCandidateUrl(input.changedUrl);
+  const provider = canonicalProviderKey(input.provider);
+  const material = [
+    'detect-changes',
+    provider,
+    'CONTENT_DRIFT',
+    url,
+    input.guidelineId,
+    input.observedHash,
+  ].join('\u0000');
+  const digest = createHash('sha256').update(material, 'utf8').digest('hex').slice(0, 12);
+  return `${provider}-content-drift-${digest}`;
 }
 
 /** Lowercase, non-alphanumerics collapsed to single hyphens, edges trimmed. */

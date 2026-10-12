@@ -39,7 +39,7 @@ export interface StructuredCandidate {
   versions: CandidateVersionLink[];
   primaryUrl: string;
   changeReason: ChangeReason;
-  reviewStatus: 'pending' | 'accepted' | 'rejected' | 'deferred';
+  reviewStatus: 'pending' | 'accepted' | 'rejected' | 'deferred' | 'superseded';
   discoveredAt: string;
   matchedGuidelineId: string | null;
   providerRef: string | null;
@@ -106,6 +106,35 @@ export interface DisplayCandidate {
   discoveredAt?: string;
   /** True when derived from the legacy `newCandidates` fallback, not the structured schema. */
   fromLegacyFallback: boolean;
+  /**
+   * The catalogue entry this candidate concerns, for a detected change to
+   * guidance already listed. Null for a NEW_GUIDELINE candidate, which by
+   * definition has no existing entry.
+   *
+   * Its presence is what marks a candidate as a REVISION, and revisions must
+   * not go through the new-entry approval path: `approve_staged_guideline`
+   * only ever INSERTs, so publishing one would duplicate the entry under a
+   * second id. The database refuses that with 42809; the UI hides the control
+   * so an editor never reaches the refusal.
+   */
+  matchedGuidelineId?: string | null;
+  /** The specific source URL whose content hash moved. Revisions only. */
+  changedUrl?: string | null;
+  /**
+   * Detection provenance: which hashes, what HTTP status, how much text.
+   * NOT a description of what changed in substance — the detector compares
+   * hashes and stores no page text, so no such description exists.
+   */
+  detectionEvidence?: {
+    baseline_hash?: string;
+    observed_hash?: string;
+    http_status?: number;
+    text_length?: number;
+  } | null;
+  /** How many observations have been recorded against this candidate. */
+  detectionCount?: number;
+  /** When the observation that made this candidate current was taken. */
+  stateObservedAt?: string | null;
 }
 
 function structuredToDisplay(c: StructuredCandidate): DisplayCandidate {
