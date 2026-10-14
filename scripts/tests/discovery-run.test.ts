@@ -337,6 +337,79 @@ try {
     check('and its surface reports an empty filtered list', r.surfaces[0].filtered.length === 0);
   }
 
+  console.log('\n[7d] REGRESSION: an index redirect cannot make an unrelated document match');
+  {
+    // The vector, end to end through the runner. The index page redirects to a
+    // URL that IS a catalogue document key. Before the fix the redirect was
+    // attached to every item parsed off that page and joined their match keys,
+    // so every document on the index matched that one unrelated entry and was
+    // reported as already held — a sweep that discovers nothing while claiming
+    // everything matched.
+    const catalogueDocumentUrl = 'https://bess.ac.uk/wp-content/uploads/2020/06/Frozen_Shoulder.pdf';
+
+    // A page listing ONE document that is NOT in the catalogue.
+    const UNRELATED = `
+      <h3>Patient Care Pathways</h3>
+      <div class="wp-block-coblocks-accordion">
+        <div class="wp-block-coblocks-accordion-item">
+          <details>
+            <summary><strong>A brand new pathway nobody has catalogued</strong></summary>
+            <div class="wp-block-file">
+              <a href="https://bess.ac.uk/wp-content/uploads/2026/10/Brand-New-Pathway.pdf">Brand-New-Pathway</a>
+              <a href="https://bess.ac.uk/wp-content/uploads/2026/10/Brand-New-Pathway.pdf" class="wp-block-file__button">Download</a>
+            </div>
+          </details>
+        </div>
+      </div>`;
+
+    requestedUrls.length = 0;
+    responder = () =>
+      Object.defineProperty(new Response(UNRELATED, { status: 200 }), 'url', {
+        value: catalogueDocumentUrl,
+      });
+
+    const { reports, exitCode } = await runDiscovery('BESS');
+    const r = reports[0];
+    const surface = r.surfaces[0];
+
+    eq('the run succeeded', r.outcome, 'ok');
+    eq('one item was parsed', r.itemsDiscovered, 1);
+    eq('the redirect was observed', surface.redirected, true);
+    eq('and the final URL recorded', surface.finalUrl, catalogueDocumentUrl);
+
+    // The point: the unrelated document must NOT be absorbed as matched.
+    eq('NOTHING was counted as already in the catalogue', r.matchedExisting, 0);
+    eq('the document is reported for review instead', r.candidates.length, 1);
+    eq('as a new guideline', r.candidates[0].classification, 'NEW_GUIDELINE');
+    eq(
+      'and its discovered URL is its own, not the redirect target',
+      r.candidates[0].discoveredUrl,
+      'https://bess.ac.uk/wp-content/uploads/2026/10/Brand-New-Pathway.pdf',
+    );
+    check(
+      'the redirect target is not attached to the item as an alternative',
+      !r.candidates[0].urlAlternatives.some((a) => a.url === catalogueDocumentUrl),
+      JSON.stringify(r.candidates[0].urlAlternatives),
+    );
+    check(
+      'no item carries any surface-scoped alternative at all',
+      r.candidates.every((c) => c.urlAlternatives.every((a) => a.scope === 'document')),
+      JSON.stringify(r.candidates.map((c) => c.urlAlternatives)),
+    );
+
+    // Provenance is kept, just in the right place.
+    check('the surface report carries the redirect', Boolean(surface.surfaceRedirect));
+    eq('recorded as surface-scoped', surface.surfaceRedirect?.scope, 'surface');
+    check(
+      'and says it takes no part in document matching',
+      /no part in matching documents/i.test(surface.surfaceRedirect?.statement ?? ''),
+      surface.surfaceRedirect?.statement,
+    );
+
+    eq('arithmetic balances', r.coverageBalanced, true);
+    eq('exit code is zero', exitCode, 0);
+  }
+
   console.log('\n[8] An unknown provider name is an error, not an empty sweep');
   {
     const { reports, exitCode } = await runDiscovery('NOT A PROVIDER');

@@ -259,8 +259,8 @@ try {
     eq('finalUrl records where it landed', r.finalUrl, landed);
     eq('redirected flag set', r.redirected, true);
 
-    const { redirectAlternative } = await import('../lib/url-alternatives');
-    const alt = redirectAlternative(r.requestedUrl, r.finalUrl, {
+    const { surfaceRedirectAlternative, matchKeys } = await import('../lib/url-alternatives');
+    const alt = surfaceRedirectAlternative(r.requestedUrl, r.finalUrl, {
       status: r.status,
       contentType: r.contentType,
       reportedContentLength: r.reportedContentLength,
@@ -268,6 +268,27 @@ try {
     });
     eq('the alternative relation is redirect-target', alt.relation, 'redirect-target');
     eq('equivalence is unverified even for a server-performed redirect', alt.equivalence, 'unverified');
+    eq('an index-page redirect is SURFACE-scoped', alt.scope, 'surface');
+    check(
+      'the statement says it is evidence about the index page only',
+      /index page ONLY/i.test(alt.statement),
+      alt.statement,
+    );
+    check(
+      'the statement says it takes no part in document matching',
+      /no part in matching documents/i.test(alt.statement),
+      alt.statement,
+    );
+    // The structural guard: even handed to matchKeys directly, it contributes
+    // no key, so it cannot make any document match the catalogue.
+    const keys = matchKeys('https://unrelated.test/some-document.pdf', [alt]);
+    eq('matchKeys ignores a surface-scoped alternative entirely', keys.length, 1);
+    eq('the only key is the document itself', keys[0], 'https://unrelated.test/some-document.pdf');
+    check(
+      'the redirect target is not among the match keys',
+      !keys.some((k) => k.includes('new-path')),
+      JSON.stringify(keys),
+    );
     check(
       'the statement limits the claim to this occasion',
       /on this occasion/i.test(alt.statement),

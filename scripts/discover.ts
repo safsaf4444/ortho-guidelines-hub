@@ -58,7 +58,11 @@ import {
   validateRegistry,
   type ProviderRegistryEntry,
 } from './lib/provider-registry';
-import { redirectAlternative, volatileToken } from './lib/url-alternatives';
+import {
+  surfaceRedirectAlternative,
+  volatileToken,
+  type UrlAlternative,
+} from './lib/url-alternatives';
 import { normaliseCandidateUrl } from './lib/ingestion';
 
 import { parseEbiSpecialtyIndex, EBI_MSK_SURFACE, EBI_RETIRED_SURFACE } from './adapters/ebi';
@@ -216,6 +220,12 @@ interface SurfaceReport {
   previousBodySha256: string | null;
   bodyChanged: boolean;
   redirected: boolean;
+  /**
+   * The index-page redirect, when one happened. Surface-scoped provenance: it
+   * is recorded once here rather than on every item parsed off the page, and it
+   * takes no part in document matching.
+   */
+  surfaceRedirect?: UrlAlternative;
   itemsParsed: number;
   excluded: Array<{ url: string; reason: string }>;
   /**
@@ -364,27 +374,27 @@ async function runProvider(
           }
         }
 
-        const alternatives = fetched.redirected
-          ? [
-              redirectAlternative(plan.url, fetched.finalUrl, {
-                status: fetched.status,
-                contentType: fetched.contentType,
-                reportedContentLength: fetched.reportedContentLength,
-                checkedAt: fetched.fetchedAt,
-              }),
-            ]
-          : [];
-
+        // A redirect on the INDEX PAGE is provenance about the surface, not
+        // evidence about this document, so it is recorded once on the surface
+        // report (below) and deliberately NOT attached here. Attaching it would
+        // give every item on the page the same alternative, and if the index's
+        // final URL were a catalogue document key, all of them would match that
+        // one unrelated entry — see scripts/lib/url-alternatives.ts. Items start
+        // with no alternatives; only document-specific evidence is added, by
+        // the classifier.
         const tokenKey = normaliseCandidateUrl(item.discoveredUrl);
         const previousToken = tokenStore[tokenKey] ?? null;
 
         const candidate = classify({
           provider: entry.key,
           providerName: entry.name,
+          // Publisher comparison must use the catalogue's spelling, not the
+          // registry key. These differ for NHS EBI, and comparing on the key
+          // left EBI soft matching permanently dead.
+          catalogueProvider: entry.catalogueProvider,
           surface: fetched.finalUrl,
           topic: item.topic,
           discoveredUrl: item.discoveredUrl,
-          urlAlternatives: alternatives,
           statedLabels: item.statedLabels,
           discoveredAt,
           index,
@@ -424,6 +434,16 @@ async function runProvider(
         previousBodySha256: fetched.previousBodySha256,
         bodyChanged: fetched.bodyChanged,
         redirected: fetched.redirected,
+        ...(fetched.redirected
+          ? {
+              surfaceRedirect: surfaceRedirectAlternative(plan.url, fetched.finalUrl, {
+                status: fetched.status,
+                contentType: fetched.contentType,
+                reportedContentLength: fetched.reportedContentLength,
+                checkedAt: fetched.fetchedAt,
+              }),
+            }
+          : {}),
         itemsParsed: parsed.items.length,
         excluded: parsed.excluded,
         filtered,
@@ -549,7 +569,13 @@ function renderCoverageReport(reports: ProviderReport[], generatedAt: string): s
           lines.push(`    - PUBLISHER-ASSERTED RETIREMENT of \`${a.guidelineId}\`: "${a.topic}"`);
           lines.push(`      - ${a.statement}`);
         }
-        if (s.redirected) lines.push(`    - redirected to \`${s.finalUrl}\` (recorded as an alternative, URL preserved)`);
+        if (s.redirected) {
+          lines.push(
+            `    - INDEX PAGE redirected to \`${s.finalUrl}\` — requested URL preserved. ` +
+              'Surface provenance only: it is not attached to any document and takes no part in ' +
+              'matching documents against the catalogue.',
+          );
+        }
         if (s.previousBodySha256 === null) {
           lines.push('    - first body we have held for this surface — no comparison possible');
         } else if (s.bodyChanged) {

@@ -40,7 +40,14 @@ import {
   publishersStatedInTitle,
   softMatches,
 } from '../lib/edition-match';
-import { matchKeys, volatileToken } from '../lib/url-alternatives';
+import {
+  coPublisherAlternative,
+  matchKeys,
+  surfaceRedirectAlternative,
+  volatileToken,
+} from '../lib/url-alternatives';
+import { PROVIDER_REGISTRY, validateRegistry } from '../lib/provider-registry';
+import { normaliseCandidateUrl } from '../lib/ingestion';
 import { toChangeReason } from '../lib/discovery-classification';
 import { ALL_CHANGE_REASONS } from '../lib/ingestion';
 
@@ -415,6 +422,199 @@ console.log('\n[10] NHS EBI baseline — recorded 2026-10-12, pinned as a regres
     invented !== null,
     'the classifier must not silently match an unknown URL',
   );
+}
+
+console.log('\n[10b] REGRESSION: an EBI possible edition whose title does not name EBI');
+{
+  // The bug this pins: the registry key 'NHS EBI' does NOT canonicalise to
+  // 'NHS EBI Programme' (PROVIDER_ALIASES maps the long form and
+  // 'nhs ebi programme', not the bare 'nhs ebi'), while every EBI catalogue
+  // entry does. Comparing publishers on the registry key gave
+  // ['NHS EBI'] vs ['NHS EBI Programme', 'AoMRC'] — empty intersection — so EBI
+  // soft matching could never fire. It produced no visible symptom because
+  // every live EBI item matched by URL.
+  //
+  // The title here deliberately does NOT contain "EBI" or any publisher name,
+  // so publishersStatedInTitle contributes nothing and the match depends
+  // ENTIRELY on the provider identity being canonicalised correctly.
+  const entry = PROVIDER_REGISTRY.find((p) => p.key === 'NHS EBI')!;
+  check('the registry entry exists', Boolean(entry));
+  check(
+    'and the two labels really do differ (otherwise this test proves nothing)',
+    entry.key !== entry.catalogueProvider,
+    `key=${entry.key} catalogueProvider=${entry.catalogueProvider}`,
+  );
+  eq(
+    'the bare registry key still does not canonicalise to the catalogue label',
+    publisherSetOf(entry.key).includes('NHS EBI Programme'),
+    false,
+  );
+  check(
+    'but the catalogueProvider does',
+    publisherSetOf(entry.catalogueProvider).includes('NHS EBI Programme'),
+    JSON.stringify(publisherSetOf(entry.catalogueProvider)),
+  );
+
+  const titleWithNoPublisherName = 'Lumbar discectomy';
+  eq(
+    'the title names no publisher at all',
+    publishersStatedInTitle(titleWithNoPublisherName, index.knownPublisherLabels).length,
+    0,
+  );
+
+  const r = classify({
+    provider: entry.key,
+    catalogueProvider: entry.catalogueProvider,
+    providerName: entry.name,
+    surface: 'https://ebi.aomrc.org.uk/specialty/musculoskeletal-spine/',
+    topic: titleWithNoPublisherName,
+    discoveredUrl: 'https://ebi.aomrc.org.uk/interventions/lumbar-discectomy-2024-revision/',
+    discoveredAt: AT,
+    index,
+  });
+  check('a candidate is produced', r !== null);
+  eq('classified as POSSIBLE_NEW_EDITION', r?.classification, 'POSSIBLE_NEW_EDITION');
+  eq('pointing at the existing EBI entry', r?.matchedGuidelineId, 'ebi-lumbar-discectomy');
+  check(
+    'the shared publisher is the canonical catalogue label',
+    r?.softMatch?.sharedPublishers.includes('NHS EBI Programme') ?? false,
+    JSON.stringify(r?.softMatch?.sharedPublishers),
+  );
+  eq(
+    'and none of the publisher evidence came from the title',
+    r?.softMatch?.publishersFromTitle.length,
+    0,
+  );
+
+  // The pre-fix behaviour, pinned so a regression is unmistakable: comparing on
+  // the registry key alone yields NEW_GUIDELINE.
+  const onKeyAlone = classify({
+    provider: entry.key,
+    providerName: entry.name,
+    surface: 'https://ebi.aomrc.org.uk/specialty/musculoskeletal-spine/',
+    topic: titleWithNoPublisherName,
+    discoveredUrl: 'https://ebi.aomrc.org.uk/interventions/lumbar-discectomy-2024-revision/',
+    discoveredAt: AT,
+    index,
+  });
+  eq(
+    'comparing on the registry key alone is what used to break it',
+    onKeyAlone?.classification,
+    'NEW_GUIDELINE',
+  );
+}
+
+console.log('\n[10c] Every active registry entry names a publisher the catalogue actually uses');
+{
+  // Guards the whole class of bug above: a catalogueProvider that matches
+  // nothing in the catalogue silently disables soft matching for that provider.
+  for (const p of PROVIDER_REGISTRY) {
+    check(
+      `${p.key}: catalogueProvider is set`,
+      typeof p.catalogueProvider === 'string' && p.catalogueProvider.length > 0,
+    );
+    const known = index.knownPublisherLabels.includes(p.catalogueProvider);
+    if (p.participation === 'active' || p.participation === 'awaiting-approval') {
+      check(
+        `${p.key}: catalogueProvider "${p.catalogueProvider}" is a label the catalogue uses`,
+        known,
+        `known labels: ${JSON.stringify(index.knownPublisherLabels)}`,
+      );
+      check(
+        `${p.key}: it canonicalises to itself (so it really is canonical)`,
+        publisherSetOf(p.catalogueProvider).includes(p.catalogueProvider),
+        JSON.stringify(publisherSetOf(p.catalogueProvider)),
+      );
+    }
+  }
+  eq('validateRegistry still reports no problems', validateRegistry().length, 0);
+}
+
+console.log('\n[10d] REGRESSION: a surface redirect cannot make a document count as matched');
+{
+  // The vector: an index page is fetched, the server redirects, and the redirect
+  // target is recorded. If that joined the match keys it would do so for EVERY
+  // item on the page — and the ROS publications surface IS a catalogue document
+  // key (it is a version URL on exactly two entries, inside
+  // GENERIC_URL_MAX_OWNERS), so all nine ROS documents would have matched
+  // ros-clinical-quality-toolkits and been reported as already held.
+  const rosSurface =
+    'https://theros.org.uk/for-healthcare-professionals/clinical-quality-hub/clinical-quality-toolkits/clinical-publications-and-resources/';
+
+  check(
+    'the premise holds: that surface URL really is a catalogue document key',
+    index.byUrlKey.has(normaliseCandidateUrl(rosSurface)),
+    'if this fails the test no longer exercises the vector',
+  );
+  eq(
+    'and it keys the entry we expect',
+    index.byUrlKey.get(normaliseCandidateUrl(rosSurface))?.guideline.id,
+    'ros-clinical-quality-toolkits',
+  );
+
+  const redirect = surfaceRedirectAlternative('https://theros.org.uk/some-index', rosSurface, {
+    status: 200,
+    contentType: 'text/html',
+    reportedContentLength: null,
+    checkedAt: AT,
+  });
+  eq('the redirect is surface-scoped', redirect.scope, 'surface');
+
+  const unrelatedDoc = 'https://theros.org.uk/media/zzzzzzzz/some-unrelated-document.pdf';
+  const keys = matchKeys(unrelatedDoc, [redirect]);
+  eq('matchKeys yields only the document itself', keys.length, 1);
+  check(
+    'the surface URL is not a match key',
+    !keys.includes(normaliseCandidateUrl(rosSurface)),
+    JSON.stringify(keys),
+  );
+
+  // End to end through the classifier: the document must NOT come back matched.
+  const r = classify({
+    provider: 'ROS',
+    catalogueProvider: 'ROS',
+    providerName: 'Royal Osteoporosis Society (ROS)',
+    surface: rosSurface,
+    topic: 'An unrelated document that shares no title tokens with any entry',
+    discoveredUrl: unrelatedDoc,
+    urlAlternatives: [redirect],
+    discoveredAt: AT,
+    index,
+  });
+  check(
+    'the unrelated document is NOT silently counted as matched',
+    r !== null,
+    'classify returned null, meaning it matched the catalogue via the surface redirect',
+  );
+  eq('it is reported as new, not absorbed', r?.classification, 'NEW_GUIDELINE');
+  check(
+    'and it is not attributed to the surface-redirect entry',
+    r?.matchedGuidelineId !== 'ros-clinical-quality-toolkits',
+    `matchedGuidelineId=${r?.matchedGuidelineId}`,
+  );
+
+  // A document-scoped alternative, by contrast, MUST still participate.
+  const docAlt = coPublisherAlternative(
+    'https://example.test/discovered.pdf',
+    'https://theros.org.uk/media/0dillsrh/ros-op-standards-november-2017.pdf',
+    'ros-osteoporosis-quality-standards',
+    ['ROS'],
+  );
+  eq('a co-publisher alternative is document-scoped', docAlt.scope, 'document');
+  const docKeys = matchKeys('https://example.test/discovered.pdf', [docAlt]);
+  eq('so it DOES contribute a match key', docKeys.length, 2);
+  const viaAlt = classify({
+    provider: 'ROS',
+    catalogueProvider: 'ROS',
+    providerName: 'Royal Osteoporosis Society (ROS)',
+    surface: rosSurface,
+    topic: 'Quality standards for osteoporosis',
+    discoveredUrl: 'https://example.test/discovered.pdf',
+    urlAlternatives: [docAlt],
+    discoveredAt: AT,
+    index,
+  });
+  eq('and a document-scoped alternative can still produce a match', viaAlt, null);
 }
 
 console.log('\n[11] DiscoveryClass cannot leak into the database-facing union');

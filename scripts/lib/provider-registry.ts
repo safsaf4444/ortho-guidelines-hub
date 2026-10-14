@@ -75,10 +75,39 @@ export interface ProviderSurface {
 }
 
 export interface ProviderRegistryEntry {
-  /** Registry key, matching the catalogue's canonical provider label. */
+  /**
+   * Registry key. The sweep's own handle for the provider: it names the entry,
+   * appears in reports, is what `--provider` takes, and is hashed into every
+   * discovery id. Stable by contract — changing it renumbers ids.
+   *
+   * It is NOT guaranteed to equal the catalogue's canonical provider label. See
+   * `catalogueProvider`.
+   */
   key: string;
   /** Human-readable name used in reports and candidates. */
   name: string;
+
+  /**
+   * The provider's canonical label AS THE CATALOGUE SPELLS IT — the value
+   * `canonicalProvider()` yields for this body's `source` strings. Used for
+   * every publisher comparison; `key` is never used for matching.
+   *
+   * This exists because the two genuinely differ, and conflating them silently
+   * disables matching. The registry key `'NHS EBI'` reads like a canonical
+   * label but is not one: `canonicalProvider('NHS EBI')` returns `'NHS EBI'`
+   * unchanged, because `PROVIDER_ALIASES` maps the long form
+   * ('nhs evidence-based interventions (ebi) programme') and
+   * 'nhs ebi programme', but not the bare 'nhs ebi'. Meanwhile all 19 EBI
+   * catalogue entries canonicalise to `'NHS EBI Programme'`. So the publisher
+   * sets were ['NHS EBI'] vs ['NHS EBI Programme', 'AoMRC'] — no intersection,
+   * and EBI soft matching could never fire. Nothing failed loudly: every EBI
+   * item matched by URL, so the dead path produced no visible symptom.
+   *
+   * Set it explicitly for every entry rather than deriving it, so this cannot
+   * silently drift again, and assert it against the live catalogue in
+   * scripts/tests/edition-match.test.ts.
+   */
+  catalogueProvider: string;
 
   participation: Participation;
   /** Why, for any participation other than 'active'. Required for those. */
@@ -116,6 +145,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   {
     key: 'NHS EBI',
     name: 'NHS Evidence-Based Interventions programme (Academy of Medical Royal Colleges)',
+    catalogueProvider: 'NHS EBI Programme',
     participation: 'active',
     surfaceCoverage: 'partial',
     surfaces: [
@@ -139,6 +169,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   {
     key: 'BESS',
     name: 'British Elbow & Shoulder Society (BESS)',
+    catalogueProvider: 'BESS',
     participation: 'active',
     surfaceCoverage: 'partial',
     surfaces: [
@@ -157,6 +188,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   {
     key: 'BOFAS',
     name: 'British Orthopaedic Foot & Ankle Society (BOFAS)',
+    catalogueProvider: 'BOFAS',
     participation: 'active',
     surfaceCoverage: 'partial',
     surfaces: [
@@ -175,6 +207,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   {
     key: 'ROS',
     name: 'Royal Osteoporosis Society (ROS)',
+    catalogueProvider: 'ROS',
     participation: 'awaiting-approval',
     participationReason:
       'ACCESS APPROVAL UNRESOLVED. ROS’s terms of use expressly permit LINKING to their site and separately prohibit "reproduction, storage, modification, distribution or republication" of their Material without prior written consent. Permission to place a hyperlink is not permission for automated retrieval or storage, and their terms do not address automated access at all. Whether a scraped title and a stored URL fall under that prohibition is a question for ROS, not one to settle by reading their linking clause generously. The adapter is written and tested against offline fixtures; it makes NO live request until this is resolved.',
@@ -196,6 +229,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   {
     key: 'GIRFT',
     name: 'Getting It Right First Time (GIRFT)',
+    catalogueProvider: 'GIRFT',
     participation: 'blocked-for-tested-client',
     participationReason:
       'Returned HTTP 403 to every automated client tested in the 2026-08-22 dead-link audit — 46 URLs across pathway PDFs, reports and the pathways index — while loading normally in a browser. That is an observation about the clients and network we tested with, NOT a proven property of the provider: another client, user agent, IP range or an agreed arrangement may well succeed. It also does not establish that GIRFT URLs are healthy; being unable to check is not evidence of working. GIRFT links still need periodic manual review.',
@@ -206,6 +240,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   {
     key: 'BASK',
     name: 'British Association for Surgery of the Knee (BASK)',
+    catalogueProvider: 'BASK',
     participation: 'blocked-for-tested-client',
     participationReason:
       'A Cloudflare bot challenge stopped every automated fetch tested (bask.ac.uk, 2026-07-28; baskonline.com, 2026-08-24). Observed with the clients we tested; not a proven property of the provider, and not evidence that BASK URLs are unhealthy.',
@@ -216,6 +251,7 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
   {
     key: 'OTS',
     name: 'Orthopaedic Trauma Society (OTS)',
+    catalogueProvider: 'OTS',
     participation: 'blocked-for-tested-client',
     participationReason:
       'Returned HTTP 401 to the automated clients tested (orthopaedictrauma.org.uk, confirmed manually 2026-07-28). Observed with the clients we tested; not a proven property of the provider.',
@@ -251,6 +287,9 @@ export function validateRegistry(
     if (seen.has(p.key)) problems.push(`duplicate registry key: ${p.key}`);
     seen.add(p.key);
 
+    if (!p.catalogueProvider) {
+      problems.push(`${p.key}: no catalogueProvider set — publisher matching would silently fail`);
+    }
     if (p.participation !== 'active' && !p.participationReason) {
       problems.push(`${p.key}: participation is '${p.participation}' with no participationReason`);
     }
