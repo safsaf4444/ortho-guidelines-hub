@@ -42,3 +42,12 @@ candidates.json
 # Transient baseline extracted from git history by scripts/tests/equivalence.test.ts.
 # Deleted by the test in a finally; listed here as a safety net if the process dies.
 scripts/.equivalence-baseline.ts
+
+# On-disk revalidation store for scripts/discover.ts (scripts/lib/discovery-cache.ts).
+# Fetch state only -- stored bodies, ETags, Last-Modified values and the volatile
+# ?ver= token observations. It exists so a later run can send conditional requests
+# and compare a body hash, which an in-memory cache could never do across runs.
+# Never committed: it is a transient bandwidth courtesy to publishers, holds no
+# editorial content, and for a provider whose reuse terms forbid storage it must
+# not persist in version control.
+.discovery-cache/
