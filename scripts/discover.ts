@@ -83,17 +83,102 @@ interface SurfacePlan {
   url: string;
   parse: (html: string, surfaceUrl: string) => SurfaceParse;
   expectItems: boolean;
+  /**
+   * Optional admission test applied to each parsed item BEFORE classification.
+   *
+   * Returns null to admit the item, or a reason string to filter it. A filtered
+   * item is counted and reported — it is never dropped quietly — but it does
+   * not become a candidate.
+   *
+   * Distinct from the parser's own `excluded`, which records markup the PARSER
+   * declined (a nav link, a duplicate download button). A gate declines an item
+   * the parser read correctly, on grounds of SCOPE.
+   */
+  gate?: (
+    item: { topic: string; discoveredUrl: string },
+    ctx: {
+      index: ReturnType<typeof buildCatalogueIndex>;
+      /** Normalised URL keys already discovered on EARLIER surfaces of this provider. */
+      seenEarlier: Set<string>;
+    },
+  ) => string | null;
+}
+
+/**
+ * Admission test for the EBI retired-guidance term.
+ *
+ * `/specialty/retired-guidance/` is the programme's own retirement list, and it
+ * is NOT specialty-filtered — it carries retired guidance from every specialty
+ * the programme covers. The first live sweep proved the consequence: its single
+ * item was "Troponin test", a cardiology intervention, which the classifier
+ * correctly called NEW_GUIDELINE (the catalogue holds nothing like it) and which
+ * is nonetheless not a document this hub would ever list. Left alone it is
+ * standing noise, re-reported on every run, and noise in a review queue is how
+ * real findings stop being read.
+ *
+ * So an item from this surface is admitted only when it is already connected to
+ * our scope, by one of two independent routes:
+ *
+ *   1. It MATCHES THE CATALOGUE by URL. The programme is then asserting
+ *      retirement of something we actually hold, which is worth a human's
+ *      attention whatever specialty it sits in.
+ *   2. It was INDEPENDENTLY DISCOVERED on the musculoskeletal surface earlier in
+ *      this same run. Its musculoskeletal relevance is then established by the
+ *      publisher's own classification rather than by any guess of ours.
+ *
+ * Anything else is filtered with a reason. Note what this deliberately does NOT
+ * do: it does not infer specialty from the title, and it does not treat absence
+ * from the catalogue as evidence about the document. It only declines to raise a
+ * NEW_GUIDELINE for a retired document that is out of specialty and unknown to
+ * us — which is a scope decision, not a judgement about the document.
+ */
+function gateRetiredGuidance(
+  item: { topic: string; discoveredUrl: string },
+  ctx: {
+    index: ReturnType<typeof buildCatalogueIndex>;
+    seenEarlier: Set<string>;
+  },
+): string | null {
+  const key = normaliseCandidateUrl(item.discoveredUrl);
+
+  if (ctx.seenEarlier.has(key)) {
+    return (
+      'already discovered on the musculoskeletal surface earlier in this run, where it was ' +
+      'assessed — counted there, not twice. Its presence here is the publisher asserting ' +
+      'retirement, which a human should read alongside that assessment.'
+    );
+  }
+
+  if (ctx.index.byUrlKey.has(key)) return null; // Route 1: we hold it.
+
+  return (
+    'retired guidance that is neither in our catalogue nor listed under the programme’s own ' +
+    'musculoskeletal/spine term. The retired-guidance term is not specialty-filtered, so it ' +
+    'carries retired guidance from every specialty; raising this as NEW_GUIDELINE would assert ' +
+    'only that our catalogue holds nothing like it, which is true of most of medicine. Filtered ' +
+    'as out of scope — this is a statement about our scope, not about the document.'
+  );
 }
 
 function surfacePlansFor(entry: ProviderRegistryEntry): SurfacePlan[] {
   switch (entry.key) {
     case 'NHS EBI':
+      // ORDER MATTERS. The musculoskeletal surface runs first so that the
+      // retired-guidance gate can test route 2 — "independently included in the
+      // musculoskeletal surface" — against what this run actually discovered,
+      // rather than against a hardcoded list that could drift from the
+      // publisher's classification.
       return [
         { url: EBI_MSK_SURFACE, parse: parseEbiSpecialtyIndex, expectItems: true },
         // The retired-guidance term held exactly one item when last read. It
         // can legitimately empty out if the programme un-retires it, so this
         // surface is NOT required to be non-empty.
-        { url: EBI_RETIRED_SURFACE, parse: parseEbiSpecialtyIndex, expectItems: false },
+        {
+          url: EBI_RETIRED_SURFACE,
+          parse: parseEbiSpecialtyIndex,
+          expectItems: false,
+          gate: gateRetiredGuidance,
+        },
       ];
     case 'BESS':
       return [{ url: BESS_PATHWAYS_SURFACE, parse: parseBessPathwaysIndex, expectItems: true }];
@@ -133,6 +218,22 @@ interface SurfaceReport {
   redirected: boolean;
   itemsParsed: number;
   excluded: Array<{ url: string; reason: string }>;
+  /**
+   * Items the parser read correctly but a scope gate declined, with the reason.
+   * Counted in the coverage arithmetic so a filtered item is visibly accounted
+   * for rather than silently absent.
+   */
+  filtered: Array<{ url: string; topic: string; reason: string }>;
+  /**
+   * Publisher-asserted retirements affecting entries we hold.
+   *
+   * Recorded here rather than raised as a candidate because the three discovery
+   * classes cannot express "the publisher says this is retired" without
+   * overloading one of them, and inventing a fourth is outside this batch. It is
+   * a SOURCE ASSERTION, attributed to the surface it was read from, and it
+   * changes no catalogue status.
+   */
+  retirementAssertions: Array<{ url: string; topic: string; guidelineId: string; statement: string }>;
   error?: string;
 }
 
@@ -149,9 +250,11 @@ interface ProviderReport {
   surfaces: SurfaceReport[];
   itemsDiscovered: number;
   matchedExisting: number;
+  /** Parsed correctly, then declined by a scope gate. See SurfaceReport.filtered. */
+  itemsFiltered: number;
   candidates: DiscoveryCandidate[];
   byClass: Record<DiscoveryClass, number>;
-  /** itemsDiscovered === matchedExisting + candidates.length */
+  /** itemsDiscovered === matchedExisting + itemsFiltered + candidates.length */
   coverageBalanced: boolean;
 }
 
@@ -176,6 +279,7 @@ async function runProvider(
     surfaces: [],
     itemsDiscovered: 0,
     matchedExisting: 0,
+    itemsFiltered: 0,
     candidates: [],
     byClass: emptyByClass(),
     coverageBalanced: true,
@@ -206,8 +310,12 @@ async function runProvider(
   const candidates: DiscoveryCandidate[] = [];
   let itemsDiscovered = 0;
   let matchedExisting = 0;
+  let itemsFiltered = 0;
   const byClass = emptyByClass();
   const failures: string[] = [];
+  // Normalised keys discovered on surfaces already processed for this provider.
+  // Feeds the retired-guidance gate's "independently included" route.
+  const seenEarlier = new Set<string>();
 
   for (const plan of plans) {
     try {
@@ -223,7 +331,39 @@ async function runProvider(
 
       itemsDiscovered += parsed.items.length;
 
+      const filtered: SurfaceReport['filtered'] = [];
+      const retirementAssertions: SurfaceReport['retirementAssertions'] = [];
+      const seenHere: string[] = [];
+
       for (const item of parsed.items) {
+        seenHere.push(normaliseCandidateUrl(item.discoveredUrl));
+
+        if (plan.gate) {
+          const reason = plan.gate(item, { index, seenEarlier });
+          if (reason !== null) {
+            filtered.push({ url: item.discoveredUrl, topic: item.topic, reason });
+            itemsFiltered++;
+            continue;
+          }
+          // Admitted by the gate on the strength of a catalogue match: record
+          // the publisher's retirement assertion before classification, which
+          // will report this item as matched and otherwise say nothing.
+          const hit = index.byUrlKey.get(normaliseCandidateUrl(item.discoveredUrl));
+          if (hit) {
+            retirementAssertions.push({
+              url: item.discoveredUrl,
+              topic: item.topic,
+              guidelineId: hit.guideline.id,
+              statement:
+                `The publisher lists this document under its own retired-guidance term at ` +
+                `${fetched.finalUrl}, and its URL matches catalogue entry ${hit.guideline.id}. ` +
+                'That is the PUBLISHER ASSERTING RETIREMENT — it is not a withdrawal we have ' +
+                'verified, no document was fetched or read, and no catalogue status has changed. ' +
+                'A human should open the page and decide what, if anything, the entry needs.',
+            });
+          }
+        }
+
         const alternatives = fetched.redirected
           ? [
               redirectAlternative(plan.url, fetched.finalUrl, {
@@ -286,7 +426,11 @@ async function runProvider(
         redirected: fetched.redirected,
         itemsParsed: parsed.items.length,
         excluded: parsed.excluded,
+        filtered,
+        retirementAssertions,
       });
+
+      for (const k of seenHere) seenEarlier.add(k);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       failures.push(`${plan.url}: ${message}`);
@@ -304,12 +448,15 @@ async function runProvider(
         redirected: false,
         itemsParsed: 0,
         excluded: [],
+        filtered: [],
+        retirementAssertions: [],
         error: message,
       });
     }
   }
 
-  const coverageBalanced = itemsDiscovered === matchedExisting + candidates.length;
+  const coverageBalanced =
+    itemsDiscovered === matchedExisting + itemsFiltered + candidates.length;
 
   return {
     ...base,
@@ -325,6 +472,7 @@ async function runProvider(
     surfaces,
     itemsDiscovered,
     matchedExisting,
+    itemsFiltered,
     candidates,
     byClass,
     coverageBalanced,
@@ -390,8 +538,17 @@ function renderCoverageReport(reports: ProviderReport[], generatedAt: string): s
           : `unconditional — ${WHY[s.conditionalSkippedReason ?? ''] ?? 'reason not recorded'}`;
         lines.push(
           `  - \`${s.url}\` — HTTP ${s.status}${s.revalidated ? ' (304, stored body reused)' : ''}, ` +
-            `${validator}, ${s.itemsParsed} item(s) parsed, ${s.excluded.length} rejected by filter`,
+            `${validator}, ${s.itemsParsed} item(s) parsed, ${s.excluded.length} rejected by the parser, ` +
+            `${s.filtered.length} filtered as out of scope`,
         );
+        for (const f of s.filtered) {
+          lines.push(`    - FILTERED "${f.topic}" \`${f.url}\``);
+          lines.push(`      - ${f.reason}`);
+        }
+        for (const a of s.retirementAssertions) {
+          lines.push(`    - PUBLISHER-ASSERTED RETIREMENT of \`${a.guidelineId}\`: "${a.topic}"`);
+          lines.push(`      - ${a.statement}`);
+        }
         if (s.redirected) lines.push(`    - redirected to \`${s.finalUrl}\` (recorded as an alternative, URL preserved)`);
         if (s.previousBodySha256 === null) {
           lines.push('    - first body we have held for this surface — no comparison possible');
@@ -405,7 +562,7 @@ function renderCoverageReport(reports: ProviderReport[], generatedAt: string): s
 
     lines.push(
       `- Items discovered: ${r.itemsDiscovered} — ${r.matchedExisting} already in the catalogue by URL, ` +
-        `${r.candidates.length} needing review`,
+        `${r.itemsFiltered} filtered as out of scope, ${r.candidates.length} needing review`,
     );
     lines.push(
       `  - NEW_GUIDELINE ${r.byClass.NEW_GUIDELINE} · POSSIBLE_NEW_EDITION ${r.byClass.POSSIBLE_NEW_EDITION} ` +
@@ -414,7 +571,8 @@ function renderCoverageReport(reports: ProviderReport[], generatedAt: string): s
     if (!r.coverageBalanced) {
       lines.push(
         `  - **COVERAGE MISMATCH**: ${r.itemsDiscovered} discovered but ` +
-          `${r.matchedExisting + r.candidates.length} accounted for. Items were dropped somewhere.`,
+          `${r.matchedExisting + r.itemsFiltered + r.candidates.length} accounted for. ` +
+          'Items were dropped somewhere.',
       );
     }
 
@@ -441,6 +599,19 @@ function renderCoverageReport(reports: ProviderReport[], generatedAt: string): s
     lines.push('');
   }
 
+  lines.push('## Scope filtering');
+  lines.push('');
+  lines.push(
+    'Two different things are counted separately. **Rejected by the parser** means markup the ' +
+      'parser declined — a navigation link, a duplicate download button, an anchor with no text. ' +
+      '**Filtered as out of scope** means an item the parser read correctly that a surface gate ' +
+      'declined on scope grounds, with its reason printed above. The EBI retired-guidance term is ' +
+      'the only gated surface: it is not specialty-filtered, so an item there is admitted only if ' +
+      'it matches our catalogue or was independently listed under the programme’s own ' +
+      'musculoskeletal/spine term. A filtered item is NOT a judgement about the document — only ' +
+      'about whether it falls inside this hub’s scope.',
+  );
+  lines.push('');
   lines.push('## Cache behaviour');
   lines.push('');
   lines.push(
@@ -528,7 +699,8 @@ export async function runDiscovery(providerFilter?: string): Promise<{
   for (const r of reports) {
     const detail =
       r.outcome === 'ok'
-        ? `${r.itemsDiscovered} discovered, ${r.matchedExisting} matched, ${r.candidates.length} to review`
+        ? `${r.itemsDiscovered} discovered, ${r.matchedExisting} matched, ` +
+          `${r.itemsFiltered} filtered, ${r.candidates.length} to review`
         : (r.outcomeReason ?? '');
     console.log(`  ${r.provider.padEnd(9)} ${r.participation.padEnd(26)} ${r.outcome.padEnd(8)} ${detail}`);
   }

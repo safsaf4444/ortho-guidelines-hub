@@ -223,7 +223,121 @@ try {
     check('the coverage report explains what a 304 means', /not "nothing was published"/i.test(md));
   }
 
-  console.log('\n[7] An unknown provider name is an error, not an empty sweep');
+  console.log('\n[7] EBI retired-guidance is gated: out-of-specialty items are filtered, not raised');
+  {
+    // The musculoskeletal surface is fetched first, then retired-guidance. The
+    // stub answers each by URL so both can be scripted independently.
+    const mskItem = (slug: string, title: string) =>
+      `<div class="intervention-link"><a href="https://ebi.aomrc.org.uk/interventions/${slug}/">${title}</a></div>`;
+
+    // One genuine MSK intervention already in the catalogue, so the MSK surface
+    // is non-empty and its single item matches.
+    const MSK = `<h1 class="page-title">Musculoskeletal / Spine</h1><section class="content-block">
+      ${mskItem('lumbar-discectomy', 'Lumbar discectomy')}</section>`;
+
+    // Retired term carrying: an out-of-specialty item unknown to us (the real
+    // "Troponin test" case), and an item that IS in our catalogue.
+    const RETIRED = `<h1 class="page-title">Retired guidance</h1><section class="content-block">
+      ${mskItem('troponin-test', 'Troponin test')}
+      ${mskItem('mri-scan-of-the-hip-for-arthritis', 'MRI scan of the hip for arthritis')}</section>`;
+
+    requestedUrls.length = 0;
+    responder = (url) => new Response(url.includes('retired-guidance') ? RETIRED : MSK, { status: 200 });
+
+    const { reports, exitCode } = await runDiscovery('NHS EBI');
+    const r = reports[0];
+    eq('the run succeeded', r.outcome, 'ok');
+    eq('both surfaces were fetched', requestedUrls.length, 2);
+    eq('three items parsed across the two surfaces', r.itemsDiscovered, 3);
+
+    const retired = r.surfaces.find((s) => s.url.includes('retired-guidance'))!;
+
+    check(
+      'the out-of-specialty retired item was filtered',
+      retired.filtered.some((f) => f.topic === 'Troponin test'),
+      JSON.stringify(retired.filtered.map((f) => f.topic)),
+    );
+    check(
+      'it is NOT emitted as a candidate of any class',
+      !r.candidates.some((c) => c.topic === 'Troponin test'),
+      JSON.stringify(r.candidates.map((c) => c.topic)),
+    );
+    eq('no NEW_GUIDELINE was raised at all', r.byClass.NEW_GUIDELINE, 0);
+    eq('in fact no candidates were raised', r.candidates.length, 0);
+
+    const why = retired.filtered.find((f) => f.topic === 'Troponin test')!.reason;
+    check('the reason says the term is not specialty-filtered', /not specialty-filtered/i.test(why), why);
+    check(
+      'the reason frames it as a scope statement, not a judgement on the document',
+      /not about the document/i.test(why),
+      why,
+    );
+
+    check(
+      'the catalogue-matched retired item was admitted, not filtered',
+      !retired.filtered.some((f) => f.topic === 'MRI scan of the hip for arthritis'),
+      JSON.stringify(retired.filtered.map((f) => f.topic)),
+    );
+    check(
+      'and its retirement is recorded as a publisher assertion',
+      retired.retirementAssertions.some((a) => a.guidelineId === 'ebi-mri-hip-arthritis'),
+      JSON.stringify(retired.retirementAssertions),
+    );
+    const assertion = retired.retirementAssertions[0];
+    check(
+      'the assertion denies being a verified withdrawal',
+      /not a withdrawal we have\s+verified/i.test(assertion.statement.replace(/\s+/g, ' ')),
+      assertion.statement,
+    );
+    check(
+      'the assertion states no catalogue status changed',
+      /no catalogue status has changed/i.test(assertion.statement),
+      assertion.statement,
+    );
+
+    eq('filtered items are counted', r.itemsFiltered, 1);
+    eq(
+      'coverage arithmetic balances with the filtered item included',
+      r.itemsDiscovered,
+      r.matchedExisting + r.itemsFiltered + r.candidates.length,
+    );
+    eq('coverageBalanced agrees', r.coverageBalanced, true);
+    eq('a filtered item does not fail the sweep', exitCode, 0);
+  }
+
+  console.log('\n[7b] An item on BOTH surfaces is counted once, on the first');
+  {
+    const item = `<div class="intervention-link"><a href="https://ebi.aomrc.org.uk/interventions/ganglion-excision/">Ganglion excision</a></div>`;
+    const page = `<h1 class="page-title">x</h1><section class="content-block">${item}</section>`;
+    requestedUrls.length = 0;
+    responder = () => new Response(page, { status: 200 });
+
+    const { reports } = await runDiscovery('NHS EBI');
+    const r = reports[0];
+    eq('two items parsed (one per surface)', r.itemsDiscovered, 2);
+    eq('one matched on the musculoskeletal surface', r.matchedExisting, 1);
+    eq('the retired duplicate was filtered rather than double-counted', r.itemsFiltered, 1);
+    const retired = r.surfaces.find((s) => s.url.includes('retired-guidance'))!;
+    check(
+      'the reason says it was assessed on the earlier surface',
+      /earlier in this run/i.test(retired.filtered[0]?.reason ?? ''),
+      JSON.stringify(retired.filtered),
+    );
+    eq('arithmetic still balances', r.coverageBalanced, true);
+  }
+
+  console.log('\n[7c] The gate applies only to the retired surface');
+  {
+    const bess = BESS_OK;
+    requestedUrls.length = 0;
+    responder = () => new Response(bess, { status: 200 });
+    const { reports } = await runDiscovery('BESS');
+    const r = reports[0];
+    eq('BESS has no gated surface, so nothing is filtered', r.itemsFiltered, 0);
+    check('and its surface reports an empty filtered list', r.surfaces[0].filtered.length === 0);
+  }
+
+  console.log('\n[8] An unknown provider name is an error, not an empty sweep');
   {
     const { reports, exitCode } = await runDiscovery('NOT A PROVIDER');
     eq('no reports produced', reports.length, 0);

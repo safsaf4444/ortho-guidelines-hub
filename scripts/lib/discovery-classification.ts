@@ -235,7 +235,7 @@ export function makeDiscoveryId(input: {
   classification: DiscoveryClass;
   discoveredUrl: string;
 }): string {
-  const key = `${input.provider} ${input.classification} ${input.discoveredUrl}`;
+  const key = `${input.provider}\u0000${input.classification}\u0000${input.discoveredUrl}`;
   // FNV-1a, 32-bit. Not cryptographic — this is a short readable handle for a
   // human reading a report, not a security boundary.
   let hash = 0x811c9dc5;
