@@ -97,11 +97,13 @@ export interface ProviderRegistryEntry {
    * label but is not one: `canonicalProvider('NHS EBI')` returns `'NHS EBI'`
    * unchanged, because `PROVIDER_ALIASES` maps the long form
    * ('nhs evidence-based interventions (ebi) programme') and
-   * 'nhs ebi programme', but not the bare 'nhs ebi'. Meanwhile all 19 EBI
-   * catalogue entries canonicalise to `'NHS EBI Programme'`. So the publisher
-   * sets were ['NHS EBI'] vs ['NHS EBI Programme', 'AoMRC'] — no intersection,
-   * and EBI soft matching could never fire. Nothing failed loudly: every EBI
-   * item matched by URL, so the dead path produced no visible symptom.
+   * 'nhs ebi programme', but not the bare 'nhs ebi'. Meanwhile the 18
+   * EBI-owned catalogue entries canonicalise to `'NHS EBI Programme'` (20
+   * entries carry that label somewhere in their publisher set). So the
+   * publisher sets were ['NHS EBI'] vs ['NHS EBI Programme', 'AoMRC'] — no
+   * intersection, and EBI soft matching could never fire. Nothing failed
+   * loudly: every EBI item matched by URL, so the dead path produced no
+   * visible symptom.
    *
    * Set it explicitly for every entry rather than deriving it, so this cannot
    * silently drift again, and assert it against the live catalogue in
