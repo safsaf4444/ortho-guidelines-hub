@@ -41,6 +41,29 @@
  * ONLY value that may ever claim more is `'byte-identical'`, which requires a
  * recorded digest of both bodies. Nothing in batch 1 computes one, so nothing
  * in batch 1 produces that value.
+ *
+ * ─── SURFACE EVIDENCE MUST NOT MATCH DOCUMENTS ──────────────────────────────
+ *
+ * An alternative carries a `scope`, and ONLY `'document'`-scoped alternatives
+ * participate in document matching. That is a structural guard against a real
+ * false-match vector, not a tidiness rule.
+ *
+ * The vector: a provider's INDEX PAGE is fetched, the server redirects, and the
+ * redirect target is recorded as an alternative. If that alternative joined the
+ * match keys it would do so for EVERY item parsed off that index — so if the
+ * index's final URL happened to be a catalogue document key, every document on
+ * the page would match that one unrelated entry and be silently counted as
+ * already held. A sweep would report "all matched" while discovering nothing.
+ *
+ * This is not hypothetical here. The ROS publications surface
+ * (`.../clinical-publications-and-resources/`) is a version URL on exactly two
+ * catalogue entries, which is inside `GENERIC_URL_MAX_OWNERS`, so it DOES key a
+ * document in the index. A redirect on that surface would have made all nine ROS
+ * documents match `ros-clinical-quality-toolkits`.
+ *
+ * So a surface redirect is `scope: 'surface'`: recorded as fetch provenance on
+ * the surface report, never attached to an item's matching evidence. And even if
+ * a caller attaches one to an item anyway, `matchKeys` ignores it.
  */
 import { normaliseCandidateUrl } from './ingestion';
 
@@ -59,6 +82,18 @@ import { normaliseCandidateUrl } from './ingestion';
  *                       host. Derived from catalogue data, not from a request.
  */
 export type UrlRelation = 'redirect-target' | 'canonical-host' | 'co-publisher-host';
+
+/**
+ * What the alternative is evidence ABOUT.
+ *
+ *   document  Derived from, or about, THIS document's own URL. May participate
+ *             in document matching.
+ *   surface   About the index page the item was read from, not about the item
+ *             itself. MUST NOT participate in document matching — see the
+ *             module header. Carried anyway so the provenance is still
+ *             reported rather than thrown away.
+ */
+export type AlternativeScope = 'document' | 'surface';
 
 /**
  * What a probe of a URL actually observed. Every field is as REPORTED by the
@@ -90,6 +125,12 @@ export interface UrlAlternative {
   /** The alternative URL, verbatim. */
   url: string;
   relation: UrlRelation;
+  /**
+   * Whether this is evidence about the document or about the surface it was
+   * found on. Only 'document' participates in matching; `matchKeys` drops
+   * 'surface' unconditionally.
+   */
+  scope: AlternativeScope;
   /** The discovered URL this was derived from, verbatim. */
   derivedFrom: string;
   /**
@@ -111,29 +152,37 @@ export interface UrlAlternative {
 }
 
 /**
- * Record a redirect the fetch actually followed.
+ * Record a redirect followed while fetching a provider's INDEX PAGE.
  *
- * `equivalence` stays 'unverified' even though the provider's server performed
- * the redirect: a redirect establishes where a request is sent, not that the
- * body served is the document the index intended to link.
+ * `scope: 'surface'`, so it can never participate in document matching. The
+ * redirect happened to the index, not to any document listed on it, and every
+ * item parsed off that page would otherwise inherit it — see the module header
+ * for the false-match that produces.
+ *
+ * `equivalence` stays 'unverified' even though the provider's own server
+ * performed the redirect: a redirect establishes where a request was sent on one
+ * occasion, not that the body served is what the page intended to publish.
  */
-export function redirectAlternative(
-  discoveredUrl: string,
-  finalUrl: string,
+export function surfaceRedirectAlternative(
+  requestedSurfaceUrl: string,
+  finalSurfaceUrl: string,
   probe: UrlProbe,
 ): UrlAlternative {
   return {
-    url: finalUrl,
+    url: finalSurfaceUrl,
     relation: 'redirect-target',
-    derivedFrom: discoveredUrl,
+    scope: 'surface',
+    derivedFrom: requestedSurfaceUrl,
     transform: 'none — the server redirected this request and this is where it landed',
     discoveredProbe: probe,
     equivalence: 'unverified',
     statement:
-      'The provider’s server redirected a request for the discovered URL to this one. ' +
-      'That establishes where the request went on this occasion; it does not establish that ' +
-      'the two URLs are permanently equivalent, nor which one the provider intends to publish. ' +
-      'The discovered URL is retained verbatim.',
+      'The provider’s server redirected a request for this INDEX PAGE to another URL. That ' +
+      'establishes where the request went on this occasion; it does not establish that the two ' +
+      'URLs are permanently equivalent, nor which one the provider intends to publish. It is ' +
+      'evidence about the index page ONLY: it says nothing about any document listed on it, and ' +
+      'it takes no part in matching documents against the catalogue. The requested URL is ' +
+      'retained verbatim.',
   };
 }
 
@@ -168,6 +217,7 @@ export function canonicalHostAlternative(
   return {
     url: rewritten.href,
     relation: 'canonical-host',
+    scope: 'document',
     derivedFrom: discoveredUrl,
     transform: `host substitution ${parsed.hostname} → ${canonicalHost}; path, query and fragment preserved`,
     equivalence: 'not-probed',
@@ -194,6 +244,7 @@ export function coPublisherAlternative(
   return {
     url: catalogueUrl,
     relation: 'co-publisher-host',
+    scope: 'document',
     derivedFrom: discoveredUrl,
     transform: 'none — read from the existing catalogue entry',
     equivalence: 'not-probed',
@@ -209,7 +260,12 @@ export function coPublisherAlternative(
 
 /**
  * Every normalised key under which this candidate should be looked up in the
- * catalogue index: the discovered URL plus every recorded alternative.
+ * catalogue index: the discovered URL plus every DOCUMENT-SCOPED alternative.
+ *
+ * Surface-scoped alternatives are dropped unconditionally. That is the
+ * structural half of the guard in the module header: a surface redirect cannot
+ * make an unrelated document count as already held, even if a caller
+ * mistakenly attaches one to an item.
  *
  * Load-bearing rather than tidy. ROS stores its PDFs in the catalogue under the
  * CANONICAL host while publishing hrefs on the origin host, so a lookup keyed
@@ -224,6 +280,7 @@ export function coPublisherAlternative(
 export function matchKeys(discoveredUrl: string, alternatives: UrlAlternative[]): string[] {
   const keys = [normaliseCandidateUrl(discoveredUrl)];
   for (const alt of alternatives) {
+    if (alt.scope !== 'document') continue; // Surface evidence never matches a document.
     const key = normaliseCandidateUrl(alt.url);
     if (!keys.includes(key)) keys.push(key);
   }

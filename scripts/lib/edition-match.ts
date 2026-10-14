@@ -419,8 +419,27 @@ export function softMatches(
 // ─── Classification ─────────────────────────────────────────────────────────
 
 export interface ClassifyInput {
+  /**
+   * The sweep's registry key for this provider. Identity and reporting only —
+   * it is carried onto the candidate and hashed into the discovery id, and it
+   * is NEVER used for publisher comparison. See `catalogueProvider`.
+   */
   provider: string;
   providerName: string;
+  /**
+   * The provider's canonical label as the CATALOGUE spells it, which is what
+   * publisher comparison must use.
+   *
+   * Defaults to `provider` when omitted, which is correct for providers whose
+   * registry key already is the canonical label — and silently wrong for any
+   * provider where it is not. `'NHS EBI'` was exactly that case: it does not
+   * canonicalise to `'NHS EBI Programme'`, so comparing on the key produced an
+   * empty intersection against all 19 EBI entries and EBI soft matching never
+   * fired. Callers in the sweep pass
+   * `ProviderRegistryEntry.catalogueProvider`; the default exists only so a
+   * one-off call in a test need not restate it.
+   */
+  catalogueProvider?: string;
   surface: string;
   topic: string;
   /** The href the provider published. Preserved verbatim throughout. */
@@ -527,7 +546,7 @@ export function classify(input: ClassifyInput): DiscoveryCandidate | null {
   }
 
   // ── Not matched by URL ────────────────────────────────────────────────────
-  const registryPublishers = publisherSetOf(input.provider);
+  const registryPublishers = publisherSetOf(input.catalogueProvider ?? input.provider);
   const titlePublishers = publishersStatedInTitle(
     input.topic,
     input.index.knownPublisherLabels,
