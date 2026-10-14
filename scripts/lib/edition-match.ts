@@ -434,8 +434,8 @@ export interface ClassifyInput {
    * registry key already is the canonical label — and silently wrong for any
    * provider where it is not. `'NHS EBI'` was exactly that case: it does not
    * canonicalise to `'NHS EBI Programme'`, so comparing on the key produced an
-   * empty intersection against all 19 EBI entries and EBI soft matching never
-   * fired. Callers in the sweep pass
+   * empty intersection against the 18 EBI-owned catalogue entries and EBI
+   * soft matching never fired. Callers in the sweep pass
    * `ProviderRegistryEntry.catalogueProvider`; the default exists only so a
    * one-off call in a test need not restate it.
    */
