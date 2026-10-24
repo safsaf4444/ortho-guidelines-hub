@@ -636,10 +636,26 @@ console.log('\n[11] DiscoveryClass cannot leak into the database-facing union');
       message,
     );
   }
+  // The exact agreed members, in order — not a count. The seventh,
+  // POSSIBLE_SAME_DOCUMENT, was added deliberately for sync-providers' loose-only
+  // URL matches (see supabase/DISCOVERY-QUEUE-CONTRACT.md); it is not a discovery
+  // class. Any other change to the shared union must fail here.
+  // `eq` in this file is Object.is (reference equality), so compare
+  // element by element: same length, same members, same order.
+  const AGREED_CHANGE_REASONS = [
+    'NEW_GUIDELINE',
+    'REVISED',
+    'WITHDRAWN',
+    'CONTENT_DRIFT',
+    'URL_MOVED',
+    'UNREACHABLE_LINK',
+    'POSSIBLE_SAME_DOCUMENT',
+  ];
   check(
-    'the shared ChangeReason union is unchanged — still exactly 6 members',
-    ALL_CHANGE_REASONS.length === 6,
-    `got ${ALL_CHANGE_REASONS.length}: ${JSON.stringify(ALL_CHANGE_REASONS)}`,
+    'the shared ChangeReason union is exactly the seven agreed members, in order',
+    ALL_CHANGE_REASONS.length === AGREED_CHANGE_REASONS.length
+      && AGREED_CHANGE_REASONS.every((r, i) => ALL_CHANGE_REASONS[i] === r),
+    `expected ${JSON.stringify(AGREED_CHANGE_REASONS)}, got ${JSON.stringify(ALL_CHANGE_REASONS)}`,
   );
   check(
     'and contains no discovery-only member',
