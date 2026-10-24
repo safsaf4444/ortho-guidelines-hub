@@ -12,15 +12,32 @@ import { proposeGuidelineId } from './guideline-id';
  * `CANDIDATE_SCHEMA_VERSION` in sync with the same export in
  * scripts/lib/ingestion.ts by hand.
  */
-export const CANDIDATE_SCHEMA_VERSION = 1;
+export const CANDIDATE_SCHEMA_VERSION = 2;
 
+/**
+ * Every value public.staged_guidelines.change_reason can hold (its CHECK, as of
+ * supabase/migrations/20261024_discovery_review_queue.sql). This is the
+ * DATABASE-facing set, so it is wider than scripts/lib/ingestion.ts's
+ * ChangeReason: it also carries the two discovery classes, which are staged
+ * only by stage_discovery_candidate(). See supabase/DISCOVERY-QUEUE-CONTRACT.md.
+ */
 export type ChangeReason =
   | 'NEW_GUIDELINE'
   | 'REVISED'
   | 'WITHDRAWN'
   | 'CONTENT_DRIFT'
   | 'URL_MOVED'
-  | 'UNREACHABLE_LINK';
+  | 'UNREACHABLE_LINK'
+  | 'POSSIBLE_SAME_DOCUMENT'
+  | 'POSSIBLE_NEW_EDITION'
+  | 'EDITION_TOKEN_CHANGED';
+
+/**
+ * Every review status a queue row can hold. Open: pending, deferred. Closed:
+ * accepted (a new entry was PUBLISHED), rejected, resolved (a decision was
+ * recorded and NOTHING was published).
+ */
+export type ReviewStatus = 'pending' | 'deferred' | 'accepted' | 'rejected' | 'resolved';
 
 export interface CandidateVersionLink {
   label: string;
@@ -39,7 +56,7 @@ export interface StructuredCandidate {
   versions: CandidateVersionLink[];
   primaryUrl: string;
   changeReason: ChangeReason;
-  reviewStatus: 'pending' | 'accepted' | 'rejected' | 'deferred';
+  reviewStatus: ReviewStatus;
   discoveredAt: string;
   matchedGuidelineId: string | null;
   providerRef: string | null;
@@ -106,6 +123,19 @@ export interface DisplayCandidate {
   discoveredAt?: string;
   /** True when derived from the legacy `newCandidates` fallback, not the structured schema. */
   fromLegacyFallback: boolean;
+  /** Queue rows only. Absent for candidates read from a candidates.json payload. */
+  reviewStatus?: ReviewStatus;
+  /** Latest recorded decision on a comparison/edition row; may be an OPEN follow-up. */
+  reviewOutcome?: string | null;
+  /** The catalogue entry a comparison/edition row concerns. */
+  matchedGuidelineId?: string | null;
+  /** Producer notes, verbatim (for a comparison row: the comparison reason). */
+  notes?: string | null;
+  /**
+   * Which pipeline filed the row. NULL means it was filed BEFORE the review-queue
+   * migration, whose stored URL was lowercased — its original case is unknown.
+   */
+  producer?: string | null;
 }
 
 function structuredToDisplay(c: StructuredCandidate): DisplayCandidate {
@@ -182,6 +212,9 @@ const CHANGE_REASON_LABELS: Record<ChangeReason, string> = {
   CONTENT_DRIFT: 'Content changed',
   URL_MOVED: 'URL moved',
   UNREACHABLE_LINK: 'Link unreachable',
+  POSSIBLE_SAME_DOCUMENT: 'Possible same document — compare',
+  POSSIBLE_NEW_EDITION: 'Possible new edition',
+  EDITION_TOKEN_CHANGED: 'Edition token changed',
 };
 
 export function changeReasonLabel(reason: ChangeReason): string {

@@ -17,8 +17,8 @@ The database CHECK accepts nine `change_reason` values. **Four** of them can be 
 | `stage_sync_candidates` (service role) | `NEW_GUIDELINE`, `POSSIBLE_SAME_DOCUMENT`; pipeline `sync-providers` only | **Connected.** `sync-providers.ts` writes `candidates.json`, and `stage-candidates.ts` calls the function. It runs on manual workflow dispatch or locally, against a database with the migration, which today means local only. |
 | `stage_discovery_candidate` (service role) | `NEW_GUIDELINE`, `POSSIBLE_NEW_EDITION`, `EDITION_TOKEN_CHANGED`; producer `discover` only | **Not connected.** Implemented and tested by direct calls. #220's `discover.ts` writes reports only, and no adapter calls this function. |
 | `approve_staged_guideline` (editor) | `NEW_GUIDELINE` rows only, when `pending` and not linked to or matching a catalogue entry exactly or loosely | Connected: dashboard Approve. |
-| `reject_staged_candidate` (editor) | Any class, **`pending` only** (`deferred` refused with 55000) | Connected: dashboard Reject. |
-| `resolve_discovery_candidate` (editor) | `POSSIBLE_NEW_EDITION`, `EDITION_TOKEN_CHANGED`, `POSSIBLE_SAME_DOCUMENT`; `pending` or `deferred` | **Not connected.** There is no dashboard UI; it is tested by direct calls. |
+| `reject_staged_candidate` (editor) | Without 20261025: any class, **`pending` only**. With `20261025_reject_open_candidate.sql`: any **open** row (`pending` or `deferred`); a row with an open follow-up needs `p_confirm_open_follow_up = true` (else `RQ001`); every rejection is logged with the previous status and outcome | Connected: dashboard Reject (with a confirmation checkbox for open follow-ups). |
+| `resolve_discovery_candidate` (editor) | `POSSIBLE_NEW_EDITION`, `EDITION_TOKEN_CHANGED`, `POSSIBLE_SAME_DOCUMENT`; `pending` or `deferred` | Connected: dashboard decision buttons, a required note, and per-class actions from `src/lib/review-actions.ts`. |
 
 **Each `change_reason`**
 
@@ -31,7 +31,7 @@ The database CHECK accepts nine `change_reason` values. **Four** of them can be 
 | `CONTENT_DRIFT` | none on this branch | content-hash detector, #174 (paused) | No | — |
 | `REVISED`, `WITHDRAWN`, `URL_MOVED`, `UNREACHABLE_LINK` | none | reserved; no producer | No | — |
 
-A deferred row cannot be rejected today, because `reject_staged_candidate` accepts only `pending` rows. It can only be resolved, and only if its class has resolve actions. The proposed fix is in the dashboard scope; it is not on this branch.
+Rejecting a deferred row needs `20261025_reject_open_candidate.sql`. Without it, the dashboard reports the action as "feature unavailable" and writes nothing.
 
 Two places hold their own copies of the reason list:
 - `ChangeReason` in `scripts/lib/ingestion.ts` has 7 members. It lacks the two discovery classes, which #220's report types carry.
@@ -64,7 +64,9 @@ Discovery reports from #220 have their own `reportSchemaVersion`. No adapter yet
 | New scripts + database **without** the migration | The `stage_sync_candidates` call fails. The script exits 1 and nothing is written. |
 | **Old** `stage-candidates.ts` + migrated database | Its single INSERT fails the whole batch (23505) as soon as one document is already open under another ID. Otherwise it writes rows with `producer` NULL and a lowercased `primary_url`. Those rows are then treated as uncertain pre-migration rows. |
 | New `sync-providers.ts` + old `stage-candidates.ts` | Refused by the old script's schema-version check, since v2 is not v1. Nothing is written. |
-| Dashboard + migrated database | **Not verified.** From the code: it loads only `pending` rows, so `deferred` and `resolved` rows are invisible. It shows an unknown `change_reason` as the raw value, because its label lookup falls back to the raw string. It offers Approve on every row, and the server refuses non-`NEW_GUIDELINE` rows with 42809. It has no UI for the resolve actions. |
+| Dashboard + migrated database (20261024 + 20261025) | **Verified locally** (Playwright against a disposable stack). It shows Pending and Deferred groups. Publish is offered only for `NEW_GUIDELINE` + `pending`, and App refuses to open the publish form otherwise. It offers per-class decisions, rejection with follow-up confirmation, and on-demand evidence and decision history. |
+| Dashboard + 20261024 without 20261025 | Rejecting a deferred row, or confirming an open follow-up, shows "Feature unavailable" and writes nothing. Everything else works. |
+| Dashboard + database WITHOUT 20261024 | The queue shows "Review queue feature unavailable", **not** an empty queue. **Merging the dashboard to `main` redeploys it, so the production queue is unavailable until 20261024 is applied there.** |
 
 **Safe order:**
 1. Confirm #174's migration is not applied.
@@ -112,19 +114,20 @@ Both keys are pinned in TypeScript and SQL by `scripts/tests/fixtures/url-key-ve
 ## 6. Remaining work (not started)
 
 **Dashboard support**
-- [ ] Add the three new reasons and the `resolved` status to `src/lib/candidates.ts` and `src/lib/staged-service.ts`, and give them labels.
-- [ ] Bump `src/lib/candidates.ts` `CANDIDATE_SCHEMA_VERSION` to 2, and decide whether file mode should validate it.
-- [ ] Hide or disable Approve for non-`NEW_GUIDELINE` rows. The server already refuses them; the UI should not offer it.
-- [ ] Add resolve actions (`resolve_discovery_candidate`) with a required note, per the class table above.
-- [ ] Show the comparison for `POSSIBLE_SAME_DOCUMENT`: the matched entry, the catalogue link, the discovered link and the reason, read from `notes` and the evidence's `soft_match`.
-- [ ] Show the uncertainty flag (`legacy-match-key`) and candidate-ID collisions.
-- [ ] Decide whether `deferred` rows, and open rows with an outcome such as "awaiting re-filing", appear in the queue view.
-- [ ] Show the evidence and decision history (editors can read both tables).
-- [ ] Decide whether `reject_staged_candidate` should accept `deferred` rows. Today it accepts only `pending`. That is a database change and is not part of this branch.
+- [x] Add the three new reasons and the `resolved` status to `src/lib/candidates.ts` and `src/lib/staged-service.ts`, and give them labels.
+- [x] Bump `src/lib/candidates.ts` `CANDIDATE_SCHEMA_VERSION` to 2. (File mode still does not validate it; that is undecided.)
+- [x] Hide or disable Approve for non-`NEW_GUIDELINE` rows. The server already refuses them; the UI should not offer it.
+- [x] Add resolve actions (`resolve_discovery_candidate`) with a required note, per the class table above.
+- [x] Show the comparison for `POSSIBLE_SAME_DOCUMENT`: the matched entry, the catalogue link, the discovered link and the reason, read from `notes` and the evidence's `soft_match`.
+- [x] Show the uncertainty flag (`legacy-match-key`) and candidate-ID collisions.
+- [x] Decide whether `deferred` rows, and open rows with an outcome such as "awaiting re-filing", appear in the queue view.
+- [x] Show the evidence and decision history (editors can read both tables).
+- [x] Keep reject reasons and decision notes as drafts. They survive Cancel, a failed or refused attempt, and queue refreshes **within the page session**. They do **not** survive a full browser reload, closing the tab, or switching away from the review view. They are not persisted anywhere.
+- [x] `reject_staged_candidate` accepts `deferred` rows. This is `20261025_reject_open_candidate.sql`: local only, not applied to production.
 
 **Local end-to-end tests**
-- [ ] Run the dashboard against the migrated local stack: load, reject, refused approve, and each resolve action, as an editor and as a non-editor.
+- [x] Run the dashboard against the migrated local stack: load, reject, refused approve, and each resolve action, as an editor and as a non-editor.
 - [ ] Run the real `sync-providers.ts` with its real adapters (network, read-only) into `stage-candidates.ts` against the local stack, and record how many comparison rows the current catalogue produces.
 - [ ] Test the workflow's run sequence locally: dry run, then live, then rerun.
 - [ ] Rehearse the migration against a copy of production-shaped data, including pre-migration rows and the duplicate pre-flight, without touching production.
-- [ ] After #220 merges: build a discovery staging adapter for `stage_discovery_candidate` and test it end to end. Remove the known Hide-test failure by bringing in the new `main`.
+- [ ] Build a discovery staging adapter for `stage_discovery_candidate` and test it end to end. (#220 is merged into this branch, and the Hide-test failure is gone.)
