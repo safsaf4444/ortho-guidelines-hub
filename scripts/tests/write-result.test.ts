@@ -343,9 +343,11 @@ check('a reason is required at the DATABASE layer too, not only in the form',
 check('the migration adds no new policy', !/create policy/.test(sql));
 
 const dash = readFileSync('src/components/ReviewDashboard.tsx', 'utf8');
-check('the service exposes reject()', /async reject\(stagedId: string, reason: string\)/.test(staged));
+check('the service exposes reject()', /async reject\(stagedId: string, reason: string[,)]/.test(staged));
 check('reject handles the already-processed state via read-back',
-  /no longer pending, so it was NOT rejected/.test(staged) && /describeProcessedState/.test(staged));
+  // Since 20261025 a DEFERRED row is rejectable too, so the refusal names
+  // "open (pending or deferred)" rather than "pending".
+  /no longer open \(pending or deferred\), so it was NOT rejected/.test(staged) && /describeProcessedState/.test(staged));
 check('the dashboard confirms the target by name', /Reject <span className="font-semibold">\{candidate\.topic\}<\/span>\?/.test(dash));
 check('a reason is required before the confirm button enables',
   /disabled=\{reject\.busy \|\| reject\.reason\.trim\(\)\.length === 0\}/.test(dash));
@@ -369,13 +371,16 @@ check('the Hide-label check holds with LF and with CRLF line endings',
   HIDE_LABEL_LINE.test(dashLf) && HIDE_LABEL_LINE.test(dashCrlf));
 check('the Hide-label check still rejects "Hide" inside other text',
   !HIDE_LABEL_LINE.test('title="Hides this card"\r\n') && !HIDE_LABEL_LINE.test('<strong>Hide</strong> is temporary\n'));
-check('Reject is offered only for a candidate with a queue row', /canReject=\{Boolean\(candidate\.stagedId\)\}/.test(dash));
+// ...and only when the shared action matrix allows it (any OPEN row).
+check('Reject is offered only for a candidate with a queue row', /canReject=\{Boolean\(candidate\.stagedId\) && actions\.reject\}/.test(dash));
 // A re-wrapped error loses `error.code`, and the code is the only proof the
 // server answered. Without carrying the refusal across, the dashboard labels a
 // flat 42501 "not an approved editor" as "Save could not be confirmed" — i.e.
 // reports a decided refusal as an unknown outcome.
-const rejectStart = staged.indexOf('async reject(stagedId: string, reason: string)');
-const rejectFn = rejectStart < 0 ? '' : staged.slice(rejectStart, rejectStart + 2600);
+// The whole reject() body: from its signature to the next method.
+const rejectStart = staged.indexOf('async reject(stagedId: string, reason: string');
+const rejectEnd = rejectStart < 0 ? -1 : staged.indexOf('async resolve(', rejectStart);
+const rejectFn = rejectStart < 0 ? '' : staged.slice(rejectStart, rejectEnd < 0 ? undefined : rejectEnd);
 check('reject re-wraps errors without losing the confirmed-refusal signal',
   rejectFn.length > 0
   && /classifyWriteFailure\(error\) === 'refused' \? markRefused\(thrown\)/.test(rejectFn),

@@ -6,21 +6,34 @@ import {
   markAlreadyProcessed,
   markRefused,
 } from './write-result';
+import {
+  HISTORY_UNAVAILABLE_MESSAGE,
+  isMissingSchemaObject,
+  markFeatureUnavailable,
+  QUEUE_UPGRADE_COLUMNS,
+  QUEUE_UPGRADE_UNAVAILABLE_MESSAGE,
+  REJECT_OPEN_UNAVAILABLE_MESSAGE,
+  RESOLVE_UNAVAILABLE_MESSAGE,
+} from './schema-compat';
+import type { ResolveAction } from './review-actions';
 import { toDbRow } from './guidelines-mapper';
 import type { Guideline } from '../data/guidelines-data';
-import type { ChangeReason, CandidateVersionLink, DisplayCandidate } from './candidates';
+import type { ChangeReason, CandidateVersionLink, DisplayCandidate, ReviewStatus } from './candidates';
 
 /**
- * Reads the `staged_guidelines` ingestion queue, and publishes from it.
+ * Reads the `staged_guidelines` review queue, and records decisions on it.
  *
- * The queue is written ONLY by the sync GitHub Action using the service-role
- * key — the table has no INSERT/UPDATE/DELETE policy, so RLS denies all three
- * for anon and authenticated alike. Rows leave it exactly one way: the
- * `approve_staged_guideline` RPC. See
- * supabase/migrations/20261011_create_staging_and_editor_roles.sql.
+ * The queue is written by the staging functions (service role) — the table
+ * has no INSERT/UPDATE/DELETE policy, so RLS denies all three for anon and
+ * authenticated alike. Editors change a row only through SECURITY DEFINER
+ * functions: approve_staged_guideline (publish a NEW_GUIDELINE row),
+ * reject_staged_candidate (reject an open row) and resolve_discovery_candidate
+ * (record a comparison/edition decision). See
+ * supabase/migrations/20261011_create_staging_and_editor_roles.sql,
+ * 20261024_discovery_review_queue.sql and 20261025_reject_open_candidate.sql.
  */
 
-/** One row of public.staged_guidelines. */
+/** One row of public.staged_guidelines (with the 20261024 columns). */
 export interface DbStagedGuideline {
   id: string;                      // uuid — what the approve RPC takes
   candidate_id: string;            // the pipeline's deterministic id
@@ -35,7 +48,10 @@ export interface DbStagedGuideline {
   versions: CandidateVersionLink[];
   primary_url: string | null;
   change_reason: ChangeReason;
-  review_status: 'pending' | 'accepted' | 'rejected' | 'deferred';
+  review_status: ReviewStatus;
+  review_outcome: string | null;
+  producer: string | null;
+  changed_url: string | null;
   discovered_at: string | null;
   provider_ref: string | null;
   matched_guideline_id: string | null;
@@ -51,16 +67,26 @@ export type StagedLoad =
   | { ok: true; candidates: DisplayCandidate[] }
   /**
    * `reason` is load-bearing and the states are NOT interchangeable:
-   *   'static'    — no live database in this build; the queue cannot be read.
-   *   'signed-out'— readable only by editors. RLS returns an EMPTY LIST rather
-   *                 than an error for an unauthenticated SELECT, so without
-   *                 this distinction "sign in to see the queue" and "the queue
-   *                 is empty" would render identically. That is the same
-   *                 failure mode the dataState work fixed for the catalogue.
-   *   'no-table'  — the migration has not been applied yet.
-   *   'error'     — anything else, message passed through.
+   *   'static'      — no live database in this build; the queue cannot be read.
+   *   'signed-out'  — readable only by editors. RLS returns an EMPTY LIST rather
+   *                   than an error for an unauthenticated SELECT, so without
+   *                   this distinction "sign in to see the queue" and "the queue
+   *                   is empty" would render identically. That is the same
+   *                   failure mode the dataState work fixed for the catalogue.
+   *   'no-table'    — the migration has not been applied yet.
+   *   'unavailable' — the table exists but the review-queue upgrade (20261024)
+   *                   does not: the queue is NOT shown, rather than shown
+   *                   without the fields that decide what may be done with it.
+   *   'error'       — anything else, message passed through.
    */
-  | { ok: false; reason: 'static' | 'signed-out' | 'no-table' | 'error'; message: string };
+  | { ok: false; reason: 'static' | 'signed-out' | 'no-table' | 'unavailable' | 'error'; message: string };
+
+/** The columns the queue view reads. Explicit, so a missing upgrade column is an error, not a silent undefined. */
+const QUEUE_COLUMNS = [
+  'id', 'candidate_id', 'provider', 'provider_name', 'topic', 'source', 'notes', 'versions',
+  'primary_url', 'change_reason', 'review_status', 'review_outcome', 'producer', 'changed_url',
+  'identity_key', 'discovered_at', 'matched_guideline_id',
+].join(', ');
 
 function toDisplayCandidate(row: DbStagedGuideline): DisplayCandidate {
   return {
@@ -73,11 +99,18 @@ function toDisplayCandidate(row: DbStagedGuideline): DisplayCandidate {
     provider: row.source ?? row.provider,
     providerName: row.provider_name ?? undefined,
     changeReason: row.change_reason,
+    // primary_url is the href exactly as discovered (pre-migration rows hold a
+    // lowercased key instead — flagged via producer === null).
     sourceUrl: row.primary_url ?? row.versions?.[0]?.url ?? '',
     discoveredAt: row.discovered_at ?? undefined,
     // Rows in this table are always the structured schema — the legacy
     // `newCandidates` shape only ever existed in candidates.json.
     fromLegacyFallback: false,
+    reviewStatus: row.review_status,
+    reviewOutcome: row.review_outcome,
+    matchedGuidelineId: row.matched_guideline_id,
+    notes: row.notes,
+    producer: row.producer,
   };
 }
 
@@ -116,6 +149,10 @@ async function describeProcessedState(stagedId: string): Promise<string> {
       // same document filed under another candidate or added by hand.
       return 'This candidate is already rejected. This attempt made no changes.';
     }
+    if (row.review_status === 'resolved') {
+      // A resolution is a recorded decision, NOT a publication.
+      return 'It was already resolved: a decision was recorded and nothing was published. This attempt made no changes.';
+    }
     return `Its current status is "${row.review_status}".`;
   } catch {
     return 'Its current state could not be read back, so it is unknown whether it was published or '
@@ -123,9 +160,66 @@ async function describeProcessedState(stagedId: string): Promise<string> {
   }
 }
 
+/** Options for reject(). */
+export interface RejectOptions {
+  /**
+   * The row is deferred or carries an open follow-up, so the call MUST use the
+   * 20261025 signature. Without that migration it is reported as unavailable,
+   * never misreported as "already processed".
+   */
+  needsOpenRowSupport?: boolean;
+  /** The editor explicitly confirmed closing an open follow-up. */
+  confirmOpenFollowUp?: boolean;
+}
+
+/** SQLSTATE from reject_staged_candidate(): an open follow-up needs explicit confirmation. */
+export const FOLLOW_UP_CONFIRMATION_CODE = 'RQ001';
+
+export function needsFollowUpConfirmation(err: unknown): boolean {
+  return Boolean(err && typeof err === 'object'
+    && (err as { followUpConfirmationRequired?: unknown }).followUpConfirmationRequired === true);
+}
+
+export interface ResolveResult {
+  reviewStatus: ReviewStatus;
+  reviewOutcome: string | null;
+  open: boolean;
+}
+
+export interface EvidenceRow {
+  id: string;
+  discovery_run_id: string;
+  producer: string;
+  discovery_id: string;
+  discovered_url: string;
+  surface_url: string | null;
+  observed_topic: string | null;
+  soft_match: Record<string, unknown> | null;
+  token_change: Record<string, unknown> | null;
+  stated_labels: unknown[];
+  row_match_basis: 'identity' | 'legacy-match-key';
+  observed_at: string;
+  recorded_at: string;
+}
+
+export interface DecisionRow {
+  id: string;
+  action: string;
+  from_status: string;
+  to_status: string;
+  from_outcome?: string | null;
+  note: string;
+  decided_by: string;
+  decided_at: string;
+}
+
+export type HistoryLoad =
+  | { ok: true; evidence: EvidenceRow[]; decisions: DecisionRow[] }
+  | { ok: false; reason: 'unavailable' | 'error'; message: string };
+
 export const stagedService = {
-  /** Pending candidates, newest discovery first. */
-  async listPending(): Promise<StagedLoad> {
+  /** Open candidates (pending and deferred), newest discovery first. */
+  async listOpen(): Promise<StagedLoad> {
     if (!supabase) {
       return {
         ok: false,
@@ -149,23 +243,52 @@ export const stagedService = {
 
     const { data, error } = await supabase
       .from('staged_guidelines')
-      .select('*')
-      .eq('review_status', 'pending')
+      .select(QUEUE_COLUMNS)
+      .in('review_status', ['pending', 'deferred'])
       .order('discovered_at', { ascending: false, nullsFirst: false });
 
     if (error) {
-      if (MISSING_TABLE_CODES.has(error.code ?? '')) {
+      if (MISSING_TABLE_CODES.has(error.code ?? '') && /staged_guidelines/.test(error.message ?? '')) {
         return {
           ok: false,
           reason: 'no-table',
           message: 'The staged_guidelines table does not exist yet — the staging migration has not been applied.',
         };
       }
-      console.warn('[staged-service] listPending query error:', error.message);
+      if (isMissingSchemaObject(error, 'column', QUEUE_UPGRADE_COLUMNS)) {
+        return { ok: false, reason: 'unavailable', message: QUEUE_UPGRADE_UNAVAILABLE_MESSAGE };
+      }
+      console.warn('[staged-service] listOpen query error:', error.message);
       return { ok: false, reason: 'error', message: error.message };
     }
 
-    return { ok: true, candidates: (data as DbStagedGuideline[] | null)?.map(toDisplayCandidate) ?? [] };
+    return {
+      ok: true,
+      candidates: (data as unknown as DbStagedGuideline[] | null)?.map(toDisplayCandidate) ?? [],
+    };
+  },
+
+  /**
+   * Evidence (every sighting) and decision history for one row, on demand.
+   * Editors can read both tables (RLS); nothing here writes.
+   */
+  async loadHistory(stagedId: string): Promise<HistoryLoad> {
+    if (!supabase) return { ok: false, reason: 'error', message: 'Needs the live database.' };
+    const [ev, dec] = await Promise.all([
+      supabase.from('staged_discovery_evidence').select('*').eq('staged_id', stagedId)
+        .order('observed_at', { ascending: false }),
+      supabase.from('staged_discovery_decisions').select('*').eq('staged_id', stagedId)
+        .order('decided_at', { ascending: true }),
+    ]);
+    for (const res of [ev, dec]) {
+      if (res.error) {
+        if (isMissingSchemaObject(res.error, 'table', ['staged_discovery_evidence', 'staged_discovery_decisions'])) {
+          return { ok: false, reason: 'unavailable', message: HISTORY_UNAVAILABLE_MESSAGE };
+        }
+        return { ok: false, reason: 'error', message: res.error.message };
+      }
+    }
+    return { ok: true, evidence: (ev.data ?? []) as EvidenceRow[], decisions: (dec.data ?? []) as DecisionRow[] };
   },
 
   /**
@@ -214,6 +337,13 @@ export const stagedService = {
           + await describeProcessedState(stagedId),
         ));
       }
+      // 42809: the database refused to publish a comparison/edition row as a
+      // new entry (or a NEW row matching an existing entry). Nothing was written.
+      if (error.code === '42809') {
+        throw markRefused(new Error(
+          `Not published: ${error.message}. This item cannot be published as a new entry. Nothing was changed.`,
+        ));
+      }
       // 23505 is a unique violation, which on this path means the chosen id is
       // already taken. The form checks that too, but it can only see the
       // archived-filtered list it was given, so an id free in the UI can still
@@ -232,7 +362,8 @@ export const stagedService = {
   },
 
   /**
-   * Record a persistent, attributable rejection of a pending candidate.
+   * Record a persistent, attributable rejection of an OPEN (pending or
+   * deferred) candidate.
    *
    * Mirrors `approve` deliberately: same allowlist, same already-processed
    * handling, same refusal-versus-unknown distinction. The difference is what
@@ -242,14 +373,19 @@ export const stagedService = {
    * Returns the pipeline's candidate_id. Throws with a readable message on
    * refusal; the caller keeps the editor's reason either way.
    */
-  async reject(stagedId: string, reason: string): Promise<string> {
+  async reject(stagedId: string, reason: string, options: RejectOptions = {}): Promise<string> {
     if (!supabase) {
       throw new Error('Rejecting needs the live database — not available in offline/static mode.');
     }
-    const { data, error } = await supabase.rpc('reject_staged_candidate', {
-      p_candidate_id: stagedId,
-      p_reason: reason,
-    });
+    // An ordinary pending row uses the two-argument call, which works on a
+    // database with or without 20261025. A deferred row or an open follow-up
+    // needs the three-argument call — so a database without 20261025 answers
+    // "function not found" (unavailable) instead of a misleading 55000.
+    const args: Record<string, unknown> = { p_candidate_id: stagedId, p_reason: reason };
+    if (options.needsOpenRowSupport || options.confirmOpenFollowUp) {
+      args.p_confirm_open_follow_up = options.confirmOpenFollowUp === true;
+    }
+    const { data, error } = await supabase.rpc('reject_staged_candidate', args);
 
     if (error) {
       console.error('[staged-service] reject failed — raw error:', error);
@@ -263,13 +399,24 @@ export const stagedService = {
       const keepRefusal = (thrown: Error): Error =>
         classifyWriteFailure(error) === 'refused' ? markRefused(thrown) : thrown;
 
+      if (isMissingSchemaObject(error, 'function', ['reject_staged_candidate'])) {
+        throw markFeatureUnavailable(new Error(REJECT_OPEN_UNAVAILABLE_MESSAGE));
+      }
       if (isNotAnEditorError(error)) throw keepRefusal(new Error(NOT_AN_EDITOR_MESSAGE));
       if (error.code === ALREADY_PROCESSED_CODE) {
         // markAlreadyProcessed already implies refused.
         throw markAlreadyProcessed(new Error(
-          `This candidate is no longer pending, so it was NOT rejected. `
+          `This candidate is no longer open (pending or deferred), so it was NOT rejected. `
           + await describeProcessedState(stagedId),
         ));
+      }
+      if (error.code === FOLLOW_UP_CONFIRMATION_CODE) {
+        const e = keepRefusal(new Error(
+          'This item has an open follow-up. Rejecting it closes that follow-up, so it needs your explicit '
+          + 'confirmation. Nothing was changed.',
+        ));
+        (e as Error & { followUpConfirmationRequired?: boolean }).followUpConfirmationRequired = true;
+        throw e;
       }
       // 23514 is the reason-required check. Named because the generic
       // PostgREST text would send the editor looking for a database fault.
@@ -283,5 +430,43 @@ export const stagedService = {
       );
     }
     return data as string;
+  },
+
+  /**
+   * Record an editor decision on a comparison/edition row. Never publishes and
+   * never changes the catalogue; open actions leave the row in the queue.
+   */
+  async resolve(stagedId: string, action: ResolveAction, note: string): Promise<ResolveResult> {
+    if (!supabase) {
+      throw new Error('Recording a decision needs the live database — not available in offline/static mode.');
+    }
+    const { data, error } = await supabase.rpc('resolve_discovery_candidate', {
+      p_staged_id: stagedId,
+      p_action: action,
+      p_note: note,
+    });
+    if (error) {
+      console.error('[staged-service] resolve failed — raw error:', error);
+      const keepRefusal = (thrown: Error): Error =>
+        classifyWriteFailure(error) === 'refused' ? markRefused(thrown) : thrown;
+      if (isMissingSchemaObject(error, 'function', ['resolve_discovery_candidate'])) {
+        throw markFeatureUnavailable(new Error(RESOLVE_UNAVAILABLE_MESSAGE));
+      }
+      if (isNotAnEditorError(error)) throw keepRefusal(new Error(NOT_AN_EDITOR_MESSAGE));
+      if (error.code === ALREADY_PROCESSED_CODE) {
+        throw markAlreadyProcessed(new Error(
+          'This item is no longer open, so the decision was NOT recorded. ' + await describeProcessedState(stagedId),
+        ));
+      }
+      if (error.code === '23514') {
+        throw keepRefusal(new Error('A note is required to record a decision. Nothing was changed.'));
+      }
+      if (error.code === '22023' || error.code === '42809') {
+        throw keepRefusal(new Error(`That decision is not valid for this item: ${error.message}. Nothing was changed.`));
+      }
+      throw keepRefusal(new Error(`Recording the decision failed${error.code ? ` (${error.code})` : ''}: ${error.message}`));
+    }
+    const r = data as { reviewStatus: ReviewStatus; reviewOutcome: string | null; open: boolean };
+    return { reviewStatus: r.reviewStatus, reviewOutcome: r.reviewOutcome, open: r.open };
   },
 };

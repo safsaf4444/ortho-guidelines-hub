@@ -21,6 +21,7 @@ import {
   type MergeProgress,
 } from './lib/write-result'
 import { candidateToGuidelineDraft, type DisplayCandidate } from './lib/candidates'
+import { allowedActions } from './lib/review-actions'
 import { splitPublishers, canonicalProvider, providerUrl } from './lib/providers'
 import { findGapNote } from './lib/gap-detection'
 import { buildCatalogue, catalogueRowCount } from './lib/catalogue'
@@ -451,6 +452,16 @@ export default function App() {
   // for a candidate that has no row in the queue, which falls back to the
   // ordinary two-step save.
   const handleReviewCandidate = (candidate: DisplayCandidate) => {
+    // App-level guard, independent of which buttons the dashboard rendered:
+    // the publish form opens ONLY for a row the action matrix allows to be
+    // published (NEW_GUIDELINE, pending). A comparison or edition row must
+    // never reach approve_staged_guideline() as a new entry. The database
+    // refuses that too (42809); this keeps the UI from ever trying.
+    if (candidate.stagedId && !allowedActions(candidate.changeReason, candidate.reviewStatus, candidate.reviewOutcome).publish) {
+      console.warn(`[review] Refused to open the publish form for ${candidate.candidateId} (${candidate.changeReason}, ${candidate.reviewStatus}).`);
+      alert('This item cannot be published as a new entry. Record a decision on it in the review queue instead. Nothing was changed.');
+      return;
+    }
     // The draft is built HERE, not in the dashboard, because proposing a
     // non-colliding id needs every id already in use — see existingIds above.
     setEditingGuideline(candidateToGuidelineDraft(candidate, existingIds));
@@ -1250,7 +1261,14 @@ Add a note from the entry to restore the audit trail.`
             ) : currentSection === CHANGELOG_VIEW ? (
               <ChangelogPanel guidelines={guidelines} />
             ) : currentSection === REVIEW_QUEUE_VIEW ? (
-              <ReviewDashboard signedIn={session.signedIn} onEditCandidate={handleReviewCandidate} />
+              <ReviewDashboard
+                signedIn={session.signedIn}
+                onEditCandidate={handleReviewCandidate}
+                lookupEntry={id => {
+                  const g = guidelines.find(x => x.id === id);
+                  return g ? { topic: g.topic, url: g.versions?.find(v => v.url && v.url !== '#')?.url } : undefined;
+                }}
+              />
             ) : currentSection === CATALOGUE_VIEW ? (
               <CatalogueView guidelines={guidelines} />
             ) : currentSection === ABOUT_VIEW ? (

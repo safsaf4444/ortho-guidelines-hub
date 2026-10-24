@@ -8,10 +8,16 @@
  *
  * ─── WHY THIS IS NOT `ChangeReason` ─────────────────────────────────────────
  *
- * `ChangeReason` in scripts/lib/ingestion.ts is DATABASE-FACING: its six
- * members are mirrored by the live `staged_guidelines_change_reason_check`
- * constraint, and every member is a promise that some pipeline will produce it
- * and some reviewer will triage it from the queue.
+ * `ChangeReason` in scripts/lib/ingestion.ts is DATABASE-FACING: its seven
+ * members (the original six plus POSSIBLE_SAME_DOCUMENT, added for
+ * sync-providers' loose-only URL matches) are accepted by
+ * `staged_guidelines_change_reason_check`, and every member is a promise that
+ * some pipeline will produce it and some reviewer will triage it from the
+ * queue. That CHECK, as widened by
+ * supabase/migrations/20261024_discovery_review_queue.sql, ALSO accepts the
+ * two discovery classes below, but only through stage_discovery_candidate();
+ * they are still not ChangeReason members. See
+ * supabase/DISCOVERY-QUEUE-CONTRACT.md.
  *
  * The three classes here are a different kind of thing: they are what the
  * DISCOVERY SWEEP concluded about an item it found on a provider's index, before
@@ -20,11 +26,12 @@
  *
  * Keeping them in their own union is deliberate and load-bearing:
  *
- *   - The live approve path (`approve_staged_guideline()`) is INSERT-ONLY and
- *     has no guard refusing a non-NEW_GUIDELINE candidate. A revision-shaped
- *     value reaching the live queue and being approved would insert a DUPLICATE
- *     ROW rather than be refused. The guard that would refuse it is on PR #174
- *     and is NOT LIVE.
+ *   - The PRODUCTION approve path (`approve_staged_guideline()`) is
+ *     INSERT-ONLY and has no guard refusing a non-NEW_GUIDELINE candidate. A
+ *     revision-shaped value reaching that queue and being approved would insert
+ *     a DUPLICATE ROW rather than be refused. The guard that refuses it (42809)
+ *     is in 20261024_discovery_review_queue.sql (and in paused PR #174), and
+ *     is NOT APPLIED to production.
  *   - So the safe move is not "extend the union carefully". It is to make the
  *     new vocabulary structurally incapable of reaching that path: a
  *     DiscoveryClass is not a ChangeReason, does not widen it, and will not

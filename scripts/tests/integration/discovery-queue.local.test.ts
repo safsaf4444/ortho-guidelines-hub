@@ -691,6 +691,98 @@ try {
   psql('drop trigger _test_fail_ev2 on public.staged_discovery_evidence; drop function public._test_fail_ev2();');
   eq('discovery staging with a failing evidence write: error, and NO queue row left behind', [df.error?.code, psql(`select count(*) from public.staged_guidelines where candidate_id=${dq(discFail.discoveryId)}`).out], ['XX003', '0']);
   fs.rmSync(scratch, { recursive: true, force: true });
+
+  // ── 9. 20261025: rejecting OPEN rows (pending or deferred) ───────────────
+  const has20261025 = psql(`select to_regprocedure('public.reject_staged_candidate(uuid,text,boolean)') is not null`).out === 't';
+  if (!has20261025) {
+    console.log('\n[9] SKIPPED — 20261025_reject_open_candidate.sql is not applied to this database');
+  } else {
+    console.log('\n[9] Reject open rows (20261025): deferred, follow-ups, permissions, races');
+    const before9 = catalogueFingerprint();
+    const rej = (client: SupabaseClient, id: string, reason: string, confirm?: boolean) =>
+      client.rpc('reject_staged_candidate', confirm === undefined
+        ? { p_candidate_id: id, p_reason: reason }
+        : { p_candidate_id: id, p_reason: reason, p_confirm_open_follow_up: confirm });
+    const edRow = async (url: string, cls = 'POSSIBLE_NEW_EDITION') => {
+      const r = await stage(`run-9-${Math.random().toString(36).slice(2, 8)}`, cand({ classification: cls, matchedGuidelineId: 'ankle-fracture', discoveredUrl: url }));
+      return (r.data as { stagedId: string }).stagedId;
+    };
+    const state9 = (id: string) => psql(`select review_status||'|'||coalesce(review_outcome,'-')||'|'||coalesce(review_note,'-')||'|'||(reviewed_by is not null) from public.staged_guidelines where id='${id}'`).out;
+    const lastLog = (id: string) => psql(`select action||'|'||from_status||'|'||to_status||'|'||coalesce(from_outcome,'-')||'|'||note||'|'||(decided_by='${editor.id}')||'|'||(decided_at is not null) from public.staged_discovery_decisions where staged_id='${id}' order by decided_at desc, id desc limit 1`).out;
+
+    // Deferred row: rejectable now, logged with previous state.
+    const d1 = await edRow('https://example.org/9/deferred.pdf');
+    await editor.client.rpc('resolve_discovery_candidate', { p_staged_id: d1, p_action: 'defer', p_note: 'later' });
+    eq('setup: a deferred row', state9(d1).split('|')[0], 'deferred');
+    const r1 = await rej(editor.client, d1, '  Out of scope  ');
+    eq('a DEFERRED row can be rejected (two-argument call)', [r1.error?.code ?? null, state9(d1)], [null, 'rejected|-|Out of scope|true']);
+    eq('…the decision log records actor, time, reason, previous status', lastLog(d1), 'reject|deferred|rejected|-|Out of scope|true|true');
+
+    // Open follow-up: confirmation required, nothing written without it.
+    const f1 = await edRow('https://example.org/9/follow-up.pdf', 'EDITION_TOKEN_CHANGED');
+    await editor.client.rpc('resolve_discovery_candidate', { p_staged_id: f1, p_action: 'needs-document-check', p_note: 'check it' });
+    const f1Before = state9(f1);
+    eq('open follow-up, two-argument call: refused RQ001', (await rej(editor.client, f1, 'no')).error?.code, 'RQ001');
+    eq('open follow-up, confirm=false: refused RQ001', (await rej(editor.client, f1, 'no', false)).error?.code, 'RQ001');
+    eq('…and nothing changed', state9(f1), f1Before);
+    const r2 = await rej(editor.client, f1, 'Confirmed: not needed', true);
+    eq('with explicit confirmation: rejected, follow-up cleared from the row', [r2.error?.code ?? null, state9(f1)], [null, 'rejected|-|Confirmed: not needed|true']);
+    eq('…previous outcome kept in the log', lastLog(f1), 'reject|pending|rejected|needs-document-check|Confirmed: not needed|true|true');
+
+    // Permissions and refusals.
+    const p1 = await edRow('https://example.org/9/perm.pdf');
+    eq('anon cannot execute', (await rej(anon, p1, 'x')).error?.code, '42501');
+    eq('non-editor refused', (await rej(nonEditor.client, p1, 'x')).error?.code, '42501');
+    eq('service role refused (null-safe editor check)', (await rej(service, p1, 'x')).error?.code, '42501');
+    eq('blank reason refused', (await rej(editor.client, p1, ' \t\n')).error?.code, '23514');
+    eq('unknown row refused', (await rej(editor.client, '00000000-0000-0000-0000-000000000000', 'x')).error?.code, 'P0002');
+    eq('…none of those changed the row', state9(p1).split('|')[0], 'pending');
+    await rej(editor.client, p1, 'done');
+    eq('a closed (rejected) row cannot be rejected again: 55000', (await rej(editor.client, p1, 'again')).error?.code, '55000');
+    const res1 = await edRow('https://example.org/9/resolved.pdf');
+    await editor.client.rpc('resolve_discovery_candidate', { p_staged_id: res1, p_action: 'no-action', p_note: 'fine' });
+    eq('a resolved row cannot be rejected: 55000', (await rej(editor.client, res1, 'x')).error?.code, '55000');
+    eq('an accepted (published) row cannot be rejected: 55000',
+      (await rej(editor.client, (genuine.data as { stagedId: string }).stagedId, 'x')).error?.code, '55000');
+
+    // Races: one session holds the row lock inside a decision; the other waits, then sees the closed row.
+    const asEditorSql = (body: string) => `begin; set local role authenticated;
+      set local request.jwt.claim.sub = '${editor.id}';
+      set local request.jwt.claims = '{"sub":"${editor.id}","role":"authenticated"}';
+      ${body} select pg_sleep(3); commit;\n`;
+    const race = async (holderSql: string, contender: () => PromiseLike<{ error: { code?: string } | null }>) => {
+      const h = spawn('docker', ['exec', '-i', CONTAINER, 'psql', '-U', 'postgres', '-d', 'postgres', '-v', 'ON_ERROR_STOP=1', '-q']);
+      let herr = '';
+      h.stderr.on('data', (d) => { herr += String(d); });
+      h.stdin.write(asEditorSql(holderSql));
+      h.stdin.end();
+      const done = new Promise<number>((res) => h.on('close', (c) => res(c ?? -1)));
+      await new Promise((r) => setTimeout(r, 800));
+      const t0 = Date.now();
+      const c = await contender();
+      return { holderExit: await done, holderErr: herr, waited: Date.now() - t0, code: c.error?.code ?? null };
+    };
+    const ra = await edRow('https://example.org/9/race-a.pdf');
+    const raceA = await race(`select public.reject_staged_candidate('${ra}', 'holder rejects');`,
+      () => editor.client.rpc('resolve_discovery_candidate', { p_staged_id: ra, p_action: 'same-document', p_note: 'contender' }));
+    eq('race: reject holds the lock, a concurrent resolve waits then gets 55000', [raceA.holderExit, raceA.waited > 1500, raceA.code], [0, true, '55000']);
+    eq('…exactly one decision was recorded (the reject)', psql(`select string_agg(action, ',') from public.staged_discovery_decisions where staged_id='${ra}'`).out, 'reject');
+    const rb = await edRow('https://example.org/9/race-b.pdf');
+    const raceB = await race(`select public.resolve_discovery_candidate('${rb}', 'same-document', 'holder resolves');`,
+      () => rej(editor.client, rb, 'contender rejects'));
+    eq('race: resolve (closing) holds the lock, a concurrent reject waits then gets 55000', [raceB.holderExit, raceB.waited > 1500, raceB.code], [0, true, '55000']);
+    eq('…the row is resolved, not rejected', state9(rb).split('|')[0], 'resolved');
+    const rc = await edRow('https://example.org/9/race-c.pdf');
+    const raceC = await race(`select public.resolve_discovery_candidate('${rc}', 'defer', 'holder defers');`,
+      () => rej(editor.client, rc, 'contender rejects after defer'));
+    eq('race: an OPEN decision (defer) then a reject: the reject proceeds on the still-open row', [raceC.holderExit, raceC.code, state9(rc).split('|')[0]], [0, null, 'rejected']);
+    eq('…log order: defer, then reject from deferred', psql(`select string_agg(action||':'||from_status, ',' order by decided_at) from public.staged_discovery_decisions where staged_id='${rc}'`).out, 'defer:pending,reject:deferred');
+
+    // Append-only still holds for the new entries; catalogue untouched.
+    const upd = await service.from('staged_discovery_decisions').update({ note: 'tampered' }).eq('staged_id', d1);
+    eq('reject log entries are append-only too (service role UPDATE refused)', upd.error?.code, '42501');
+    eq('no rejection changed the catalogue or changelog', catalogueFingerprint(), before9);
+  }
 } finally {
   console.log(`\n──────── ${pass} passed, ${fail} failed ────────\n`);
 }
