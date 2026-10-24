@@ -271,8 +271,8 @@ export function makeDiscoveryId(input: {
  * production) adds both the edition categories and that 42809 guard. Even
  * then this mapping stays closed: edition classes are staged through
  * `stage_discovery_candidate()`, which takes the discovery class itself and
- * validates its evidence, not through a ChangeReason. No adapter calls that
- * function yet, and nothing calls this one; it exists so the boundary has a
+ * validates its evidence, not through a ChangeReason; scripts/stage-discovery.ts
+ * is that path. Nothing calls this function; it exists so the boundary has a
  * single auditable crossing point with the reasoning attached.
  */
 export function toChangeReason(cls: DiscoveryClass): ChangeReason {
