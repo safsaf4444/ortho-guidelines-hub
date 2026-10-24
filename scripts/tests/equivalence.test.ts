@@ -66,6 +66,15 @@ interface BaselineModule {
   BOAAdapter: ProviderAdapter;
 }
 
+// ── DELIBERATE DIVERGENCE FROM THE BASELINE (2026-10-24) ────────────────────
+// The baseline decided "already in the catalogue" with the LOOSE key alone, so
+// a link differing from a catalogue link only in path/query case was counted
+// as matched and never shown to anyone. The current pipeline counts only an
+// IDENTITY match as matched; a loose-only match becomes a
+// POSSIBLE_SAME_DOCUMENT candidate. So equivalence is now asserted as a
+// PARTITION: baseline.matched = current.matched + current.requiresComparison,
+// with newCandidates (genuinely new items) still identical.
+
 let baseline: BaselineModule;
 try {
   const source = execFileSync('git', ['show', `${BASELINE_COMMIT}:scripts/sync-providers.ts`], {
@@ -121,14 +130,20 @@ try {
 
   console.log('\n[1] Sweep equivalence (baseline vs current)');
   eq('totalDiscovered', oldR.totalDiscovered, newR.totalDiscovered);
-  eq('matchedExisting', oldR.matchedExisting, newR.matchedExisting);
+  const cur = newR as typeof newR & { requiresComparison: number; candidates: Array<{ changeReason: string; matchedGuidelineId: string | null; documentComparison?: { guidelineId: string; reason: string } }> };
+  eq('baseline matched = current exact matches + loose-only comparisons', oldR.matchedExisting, newR.matchedExisting + cur.requiresComparison);
+  check('the perturbed (upper-cased) catalogue links now surface for comparison', cur.requiresComparison > 0, String(cur.requiresComparison));
+  const cmp = cur.candidates.filter((c) => c.changeReason === 'POSSIBLE_SAME_DOCUMENT');
+  eq('every comparison is counted in requiresComparison', cmp.length, cur.requiresComparison);
+  check('every comparison names its matched entry and a reason', cmp.every((c) => c.matchedGuidelineId && c.documentComparison?.guidelineId === c.matchedGuidelineId && /Compare the documents/.test(c.documentComparison.reason)));
+  check('no comparison is classified NEW_GUIDELINE', cur.candidates.filter((c) => c.changeReason === 'NEW_GUIDELINE').length === newR.newCandidates.length);
   eq('skippedBlocked', oldR.skippedBlocked, newR.skippedBlocked);
   eq('adapter name', oldR.adapter, newR.adapter);
   eq('newCandidates length', oldR.newCandidates.length, newR.newCandidates.length);
   eq('newCandidates content (deep, ordered)', oldR.newCandidates, newR.newCandidates);
   check(
-    'coverage balanced in current report',
-    newR.matchedExisting + newR.skippedBlocked + newR.newCandidates.length === newR.totalDiscovered,
+    'coverage balanced in current report (comparisons are candidates, not matches)',
+    newR.matchedExisting + newR.skippedBlocked + newR.newCandidates.length + cur.requiresComparison === newR.totalDiscovered,
   );
   console.log(
     `      observed: discovered=${newR.totalDiscovered} matched=${newR.matchedExisting} ` +

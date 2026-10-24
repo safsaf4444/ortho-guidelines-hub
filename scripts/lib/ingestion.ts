@@ -47,8 +47,12 @@
 
 import { createHash } from 'node:crypto';
 
-/** Bumped when a field is added, removed, or changes meaning. */
-export const CANDIDATE_SCHEMA_VERSION = 1;
+/**
+ * Bumped when a field is added, removed, or changes meaning.
+ * v2: POSSIBLE_SAME_DOCUMENT and `documentComparison` (sync-providers no
+ * longer treats a loose-only URL match as "already catalogued").
+ */
+export const CANDIDATE_SCHEMA_VERSION = 2;
 
 /** Which checker produced a candidate. */
 export type PipelineId = 'sync-providers' | 'detect-changes' | 'flag-dead-links';
@@ -76,6 +80,19 @@ export type PipelineId = 'sync-providers' | 'detect-changes' | 'flag-dead-links'
  *                     at a new path).
  *   UNREACHABLE_LINK  Known URL no longer resolves acceptably.
  *                     (reserved for flag-dead-links)
+ *   POSSIBLE_SAME_DOCUMENT
+ *                     A discovered link matches a catalogue link only under
+ *                     the LOOSE match key (letter case in path or query,
+ *                     trailing slashes), not under the conservative identity
+ *                     key. It may be the catalogued document under a
+ *                     differently-cased link, or a distinct document a
+ *                     case-sensitive server tells apart. Neither is assumed:
+ *                     a human compares the documents. Never a new-entry
+ *                     candidate — approve_staged_guideline() refuses every
+ *                     non-NEW_GUIDELINE row. (emitted by sync-providers)
+ *                     Added deliberately, not casually: before it existed,
+ *                     these links were silently counted as "already in the
+ *                     catalogue" and never shown to anyone.
  */
 export type ChangeReason =
   | 'NEW_GUIDELINE'
@@ -83,7 +100,8 @@ export type ChangeReason =
   | 'WITHDRAWN'
   | 'CONTENT_DRIFT'
   | 'URL_MOVED'
-  | 'UNREACHABLE_LINK';
+  | 'UNREACHABLE_LINK'
+  | 'POSSIBLE_SAME_DOCUMENT';
 
 /**
  * Runtime mirror of the ChangeReason union, in declaration order. Exists so
@@ -98,6 +116,7 @@ export const ALL_CHANGE_REASONS = [
   'CONTENT_DRIFT',
   'URL_MOVED',
   'UNREACHABLE_LINK',
+  'POSSIBLE_SAME_DOCUMENT',
 ] as const satisfies readonly ChangeReason[];
 
 /**
@@ -115,6 +134,26 @@ export interface CandidateVersionLink {
   label: string;
   url: string;
   date?: string;
+}
+
+/**
+ * Why a POSSIBLE_SAME_DOCUMENT candidate needs a document comparison: the
+ * catalogue entry it loosely matches, the exact catalogue link, and the reason
+ * in words. Recorded verbatim in the queue's evidence (soft_match).
+ */
+export interface DocumentComparison {
+  /** Always 'match-key-only': same loose key, different identity key. */
+  basis: 'match-key-only';
+  /** The catalogue entry whose link matched loosely (first by id, if several). */
+  guidelineId: string;
+  /** Every catalogue entry sharing the loose key, sorted. Cross-listing is real. */
+  guidelineIds: string[];
+  /** The catalogue link that matched, exactly as stored in the catalogue. */
+  catalogueUrl: string;
+  /** The discovered link, exactly as published. */
+  discoveredUrl: string;
+  /** Human-readable reason, for the reviewer. */
+  reason: string;
 }
 
 /**
@@ -177,6 +216,9 @@ export interface IngestionCandidate {
 
   /** Free-text provenance for a reviewer. Never parsed. */
   notes?: string;
+
+  /** Present exactly when changeReason is POSSIBLE_SAME_DOCUMENT. */
+  documentComparison?: DocumentComparison;
 }
 
 /**
@@ -210,9 +252,22 @@ export interface CandidateReport {
 // ─── pure helpers ────────────────────────────────────────────────────────────
 
 /**
- * Strips a `ver` query parameter from a URL, case-insensitively, leaving
- * everything else — every other query parameter, parameter order, and any
- * fragment — untouched.
+ * Exactly the characters ECMAScript's `String.prototype.trim()` removes,
+ * spelled out so the SQL mirror (`public._url_strip_ver`) can list the
+ * same set rather than rely on a locale's idea of whitespace.
+ */
+const KEY_WHITESPACE = '\\t\\n\\v\\f\\r \\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff';
+const KEY_TRIM = new RegExp(`^[${KEY_WHITESPACE}]+|[${KEY_WHITESPACE}]+$`, 'g');
+
+/** A scheme prefix. Only such strings have their query string inspected. */
+const ABSOLUTE_URL = /^[A-Za-z][A-Za-z0-9+.-]*:/;
+
+/** Query-parameter name `ver`, ASCII case-insensitive, compared raw (undecoded). */
+const VER_NAME = /^[Vv][Ee][Rr]$/;
+
+/**
+ * Strips every `ver` query parameter from a URL, LEXICALLY: the string is cut
+ * and re-joined, never parsed and re-serialised.
  *
  * Scope is deliberately narrow: `ver` only. It exists because BOFAS's DNN CMS
  * appends a `?ver=<cache-busting-token>` to every document link that changes
@@ -222,53 +277,125 @@ export interface CandidateReport {
  * (checked against src/data/guidelines-data.ts before adding this), so
  * removing it cannot collide with a real document identity.
  *
- * Only reserializes the URL when a `ver` parameter was actually found and
- * removed — a URL with no `ver` parameter is returned completely unchanged,
- * byte for byte, specifically so this cannot alter the query-string encoding
- * of URLs like nhfd.co.uk's `?open&<filename>`, where the query string IS the
- * document identity (see normaliseCandidateUrl below) and must never be
- * touched, even cosmetically, by a change aimed at a different host.
+ * The rule, which `public._url_strip_ver` implements identically and
+ * scripts/tests/fixtures/url-key-vectors.json pins for both:
  *
- * Returns the input completely unchanged if it isn't a parseable absolute
- * URL — this function must never throw or change behaviour for inputs
- * normaliseCandidateUrl previously handled as opaque strings.
+ *   - Only a string with a scheme prefix is inspected; anything else is
+ *     returned unchanged.
+ *   - The fragment starts at the first `#`; the query at the first `?` before
+ *     it. A `?ver=` inside a fragment is not a query parameter.
+ *   - The query is split on `&`. A segment is a `ver` parameter when the text
+ *     before its first `=` (or the whole segment, if it has none) is `ver` in
+ *     any ASCII case. The name is NOT percent-decoded: `%76er` is not `ver`.
+ *   - If no segment is `ver`, the URL is returned unchanged, byte for byte.
+ *     nhfd.co.uk's `?open&<filename>` is the document identity there.
+ *   - Otherwise every `ver` segment is removed (repeats included), empty
+ *     segments are dropped, the rest are kept verbatim and in order —
+ *     repeated non-`ver` parameters included — and `?` is dropped if nothing
+ *     remains. The fragment is re-attached unchanged.
+ *
+ * Why not `new URL()`: the WHATWG serialiser re-encodes the WHOLE URL once
+ * anything changes (`a%20b` in the query became `a+b`, `,` became `%2C`, a raw
+ * space in the path became `%20`, `/a/../b` collapsed, `:443` vanished), so
+ * the key of a `ver` URL depended on encoding details the SQL mirror could not
+ * reproduce. Two keys for one document is exactly what this function exists
+ * to prevent.
  */
 function stripVolatileCacheBustingParam(url: string): string {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return url;
-  }
+  if (!ABSOLUTE_URL.test(url)) return url;
 
-  let stripped = false;
-  for (const key of Array.from(parsed.searchParams.keys())) {
-    if (key.toLowerCase() === 'ver') {
-      parsed.searchParams.delete(key);
-      stripped = true;
-    }
-  }
+  const hash = url.indexOf('#');
+  const head = hash < 0 ? url : url.slice(0, hash);
+  const fragment = hash < 0 ? '' : url.slice(hash);
+  const q = head.indexOf('?');
+  if (q < 0) return url;
 
-  return stripped ? parsed.toString() : url;
+  const segments = head.slice(q + 1).split('&');
+  const kept = segments.filter(s => !VER_NAME.test(s.split('=', 1)[0]));
+  if (kept.length === segments.length) return url;
+
+  const remaining = kept.filter(s => s !== '');
+  return head.slice(0, q) + (remaining.length > 0 ? `?${remaining.join('&')}` : '') + fragment;
 }
 
 /**
- * Canonical URL form for matching and for ID derivation.
+ * MATCH key — a deliberately LOOSE heuristic. Used for candidate IDs, for
+ * "is this already in the catalogue?" matching in sync-providers.ts, for
+ * staging holds, and for the approval near-match refusal. NOT the queue's
+ * document identity: see {@link documentIdentityKey}.
  *
- * Lowercase, trimmed, trailing slashes removed, and a `ver` cache-busting
- * query parameter stripped if present (see stripVolatileCacheBustingParam).
- * Otherwise intentionally conservative: it does NOT strip any other query
- * strings, fragments, or `www.`, because on these hosts those can be
- * load-bearing — nhfd.co.uk serves distinct documents from
- * `/FFFAP/Resources.nsf/doc?open&<filename>`, where the query string IS the
- * document identity.
+ * In order: trimmed (the ECMAScript trim set), `ver` cache-busting parameters
+ * stripped (see stripVolatileCacheBustingParam), ASCII letters lowercased
+ * EVERYWHERE — path and query values included — and trailing slashes removed
+ * from the end of the whole string. It does not strip other query strings,
+ * fragments or `www.`, does not decode or re-encode anything, and does not
+ * lowercase non-ASCII letters (Unicode case mapping differs between
+ * JavaScript and the database's locale).
  *
- * This mirrors the normalisation sync-providers.ts already applied when building
- * its URL index, so match behaviour is unchanged from before phase 1, other
- * than the narrow `ver`-stripping addition above.
+ * Because it folds path and query-value case, two DIFFERENT documents can
+ * share a match key (`/Docs/A.pdf` vs `/docs/a.pdf` on a case-sensitive
+ * server; `?token=AbC` vs `?token=abc`). That is acceptable for a heuristic
+ * that proposes "probably the same", and it is why the queue does not use it
+ * as identity. Its definition is unchanged from url-key v2 so candidate IDs
+ * — and the editor decisions keyed on them — do not move.
+ *
+ * `public.document_match_key` in
+ * supabase/migrations/20261024_discovery_review_queue.sql is its exact SQL
+ * mirror. Change both together, and the shared vectors with them.
+ *
+ * The result is a KEY, never a URL to store or display: original hrefs are
+ * kept verbatim in `versions[].url` and in the queue's primary_url.
  */
 export function normaliseCandidateUrl(url: string): string {
-  return stripVolatileCacheBustingParam(url).toLowerCase().trim().replace(/\/+$/, '');
+  const trimmed = url.replace(KEY_TRIM, '');
+  return stripVolatileCacheBustingParam(trimmed)
+    .replace(/[A-Z]+/g, s => s.toLowerCase())
+    .replace(/\/+$/, '');
+}
+
+/** Scheme and authority of a scheme-prefixed string; path onwards excluded. */
+const SCHEME_AUTHORITY = /^([A-Za-z][A-Za-z0-9+.-]*:)(\/\/[^/?#]*)?/;
+
+/**
+ * IDENTITY key — CONSERVATIVE. Defines "the same document" for the review
+ * queue: the one-open-row-per-document slot, and exact catalogue matches at
+ * approval. Two URLs share an identity key only when they are equivalent
+ * under RFC 3986 or under one of exactly two documented, deliberate merges.
+ *
+ * In order:
+ *   1. trim the ECMAScript trim set (whitespace around an href is not part of it);
+ *   2. remove `ver` query parameters exactly as {@link normaliseCandidateUrl}
+ *      does — DELIBERATE MERGE #1: on BOFAS's DNN CMS (and WordPress assets)
+ *      `?ver=` is a cache-buster, so a changed token is the same document. A
+ *      changed token is still recorded verbatim, as evidence;
+ *   3. lowercase the scheme and the host (after any `userinfo@`) — RFC 3986
+ *      §6.2.2.1: both are case-insensitive. Path, query and fragment keep
+ *      their case: servers may treat them as case-sensitive;
+ *   4. uppercase the hex digits of `%XX` escapes — RFC 3986 §6.2.2.1
+ *      (`%3d` ≡ `%3D`). Nothing is decoded or re-encoded;
+ *   5. strip trailing `/`s from the PATH only — DELIBERATE MERGE #2: `/a/` and
+ *      `/a` are treated as one document. A `/` ending a query value or a
+ *      fragment is kept.
+ * The fragment is kept verbatim: it never reaches the server, but on
+ * hash-routed sites it can select a different document, so keeping it can
+ * only split (a visible duplicate), never merge.
+ *
+ * A non-scheme string is only trimmed and has its trailing path slashes
+ * stripped. `public.document_identity_key` is the exact SQL mirror.
+ */
+export function documentIdentityKey(url: string): string {
+  let s = stripVolatileCacheBustingParam(url.replace(KEY_TRIM, ''));
+  const asciiLower = (t: string) => t.replace(/[A-Z]+/g, c => c.toLowerCase());
+  const m = SCHEME_AUTHORITY.exec(s);
+  if (m) {
+    let authority = m[2] ?? '';
+    const at = authority.lastIndexOf('@');
+    authority = at < 0 ? asciiLower(authority) : authority.slice(0, at + 1) + asciiLower(authority.slice(at + 1));
+    s = asciiLower(m[1]) + authority + s.slice(m[0].length);
+  }
+  s = s.replace(/%[0-9A-Fa-f]{2}/g, e => e.toUpperCase());
+  const cut = s.search(/[?#]/);
+  return cut < 0 ? s.replace(/\/+$/, '') : s.slice(0, cut).replace(/\/+$/, '') + s.slice(cut);
 }
 
 /**

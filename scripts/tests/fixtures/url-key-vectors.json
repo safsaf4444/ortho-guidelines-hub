@@ -1,0 +1,377 @@
+{
+  "description": "Document-key vectors shared by TypeScript (scripts/lib/ingestion.ts) and SQL (supabase/migrations/20261024_discovery_review_queue.sql). `match` = normaliseCandidateUrl / document_match_key (loose heuristic: candidate ids, catalogue matching, holds, approval near-match). `identity` = documentIdentityKey / document_identity_key (conservative: the queue's one-open-row-per-document slot and exact catalogue matches). Each expected value is asserted against BOTH implementations: offline in scripts/tests/ingestion.test.ts, against a local database in scripts/tests/integration/discovery-queue.local.test.ts. Change a vector only together with both implementations.",
+  "vectors": [
+    {
+      "why": "BOFAS ver token with %3d padding, ver only",
+      "input": "https://www.bofas.org.uk/Portals/0/Position%20Statements/FAME%20STUDY%20POSITION%20STATEMENT.pdf?ver=AdqcljKluax_khQUqZhiwg%3d%3d",
+      "match": "https://www.bofas.org.uk/portals/0/position%20statements/fame%20study%20position%20statement.pdf",
+      "identity": "https://www.bofas.org.uk/Portals/0/Position%20Statements/FAME%20STUDY%20POSITION%20STATEMENT.pdf"
+    },
+    {
+      "why": "BOFAS path with encoded non-breaking spaces",
+      "input": "https://www.bofas.org.uk/Portals/0/Position%20Statements/BOFAS%20Flatfoot%20Commissioning%20guidelines%C2%A0%C2%A0.pdf?ver=7dkk2GgKFmerP4n7n48uSw%3d%3d",
+      "match": "https://www.bofas.org.uk/portals/0/position%20statements/bofas%20flatfoot%20commissioning%20guidelines%c2%a0%c2%a0.pdf",
+      "identity": "https://www.bofas.org.uk/Portals/0/Position%20Statements/BOFAS%20Flatfoot%20Commissioning%20guidelines%C2%A0%C2%A0.pdf"
+    },
+    {
+      "why": "VER upper case",
+      "input": "https://example.org/a.pdf?VER=xyz",
+      "match": "https://example.org/a.pdf",
+      "identity": "https://example.org/a.pdf"
+    },
+    {
+      "why": "Ver mixed case",
+      "input": "https://example.org/a.pdf?Ver=xyz",
+      "match": "https://example.org/a.pdf",
+      "identity": "https://example.org/a.pdf"
+    },
+    {
+      "why": "ver first, real parameter survives",
+      "input": "https://example.org/a.pdf?ver=xyz&edition=2",
+      "match": "https://example.org/a.pdf?edition=2",
+      "identity": "https://example.org/a.pdf?edition=2"
+    },
+    {
+      "why": "ver last, real parameter survives",
+      "input": "https://example.org/a.pdf?edition=2&ver=xyz",
+      "match": "https://example.org/a.pdf?edition=2",
+      "identity": "https://example.org/a.pdf?edition=2"
+    },
+    {
+      "why": "previously divergent: %20 in a remaining parameter is kept verbatim, not re-encoded as +",
+      "input": "https://example.org/a?q=a%20b&ver=9",
+      "match": "https://example.org/a?q=a%20b",
+      "identity": "https://example.org/a?q=a%20b"
+    },
+    {
+      "why": "+ in a remaining parameter is kept verbatim",
+      "input": "https://example.org/a?q=a+b&ver=9",
+      "match": "https://example.org/a?q=a+b",
+      "identity": "https://example.org/a?q=a+b"
+    },
+    {
+      "why": "comma in a remaining parameter is kept verbatim, not %2C",
+      "input": "https://example.org/a?q=a,b&ver=1",
+      "match": "https://example.org/a?q=a,b",
+      "identity": "https://example.org/a?q=a,b"
+    },
+    {
+      "why": "percent-escape hex is lowercased with the rest, never decoded",
+      "input": "https://example.org/a?q=%2F%3D&ver=1",
+      "match": "https://example.org/a?q=%2f%3d",
+      "identity": "https://example.org/a?q=%2F%3D"
+    },
+    {
+      "why": "encoded = inside a remaining value",
+      "input": "https://example.org/a?token=AB%3d%3d&ver=1",
+      "match": "https://example.org/a?token=ab%3d%3d",
+      "identity": "https://example.org/a?token=AB%3D%3D"
+    },
+    {
+      "why": "raw space in the path is not percent-encoded",
+      "input": "https://example.org/My Doc.pdf?ver=1",
+      "match": "https://example.org/my doc.pdf",
+      "identity": "https://example.org/My Doc.pdf"
+    },
+    {
+      "why": "dot segments and default port are not canonicalised",
+      "input": "https://example.org:443/a/../b.pdf?ver=1",
+      "match": "https://example.org:443/a/../b.pdf",
+      "identity": "https://example.org:443/a/../b.pdf"
+    },
+    {
+      "why": "repeated ver: every occurrence removed",
+      "input": "https://example.org/a?ver=1&ver=2",
+      "match": "https://example.org/a",
+      "identity": "https://example.org/a"
+    },
+    {
+      "why": "repeated ver, mixed case, interleaved with a repeated real parameter kept in order",
+      "input": "https://example.org/a?ver=1&a=1&VER=2&a=2",
+      "match": "https://example.org/a?a=1&a=2",
+      "identity": "https://example.org/a?a=1&a=2"
+    },
+    {
+      "why": "repeated real parameter with no ver is untouched",
+      "input": "https://example.org/a?a=2&a=1",
+      "match": "https://example.org/a?a=2&a=1",
+      "identity": "https://example.org/a?a=2&a=1"
+    },
+    {
+      "why": "empty segments dropped when ver is removed",
+      "input": "https://example.org/a?&ver=1&&x=1&",
+      "match": "https://example.org/a?x=1",
+      "identity": "https://example.org/a?x=1"
+    },
+    {
+      "why": "empty segments untouched when no ver is present",
+      "input": "https://example.org/a?&x=1&",
+      "match": "https://example.org/a?&x=1&",
+      "identity": "https://example.org/a?&x=1&"
+    },
+    {
+      "why": "valueless parameter survives",
+      "input": "https://example.org/doc?open&ver=1",
+      "match": "https://example.org/doc?open",
+      "identity": "https://example.org/doc?open"
+    },
+    {
+      "why": "NHFD identity query untouched",
+      "input": "https://www.nhfd.co.uk/FFFAP/Resources.nsf/doc?open&Sheffield,+Pathway.pdf",
+      "match": "https://www.nhfd.co.uk/fffap/resources.nsf/doc?open&sheffield,+pathway.pdf",
+      "identity": "https://www.nhfd.co.uk/FFFAP/Resources.nsf/doc?open&Sheffield,+Pathway.pdf"
+    },
+    {
+      "why": "bare ver with no =",
+      "input": "https://example.org/a?ver&x=1",
+      "match": "https://example.org/a?x=1",
+      "identity": "https://example.org/a?x=1"
+    },
+    {
+      "why": "ver with empty value",
+      "input": "https://example.org/a?x=1&ver=",
+      "match": "https://example.org/a?x=1",
+      "identity": "https://example.org/a?x=1"
+    },
+    {
+      "why": "version is not ver",
+      "input": "https://example.org/a?version=2",
+      "match": "https://example.org/a?version=2",
+      "identity": "https://example.org/a?version=2"
+    },
+    {
+      "why": "xver is not ver",
+      "input": "https://example.org/a?xver=1",
+      "match": "https://example.org/a?xver=1",
+      "identity": "https://example.org/a?xver=1"
+    },
+    {
+      "why": "ver_id is not ver",
+      "input": "https://example.org/a?ver_id=1",
+      "match": "https://example.org/a?ver_id=1",
+      "identity": "https://example.org/a?ver_id=1"
+    },
+    {
+      "why": "percent-encoded name is not decoded, so %76er is not ver",
+      "input": "https://example.org/a?%76er=1",
+      "match": "https://example.org/a?%76er=1",
+      "identity": "https://example.org/a?%76er=1"
+    },
+    {
+      "why": "a value equal to ver is not a ver parameter",
+      "input": "https://example.org/a?x=ver",
+      "match": "https://example.org/a?x=ver",
+      "identity": "https://example.org/a?x=ver"
+    },
+    {
+      "why": "ver inside the fragment is not a query parameter",
+      "input": "https://example.org/a#?ver=1",
+      "match": "https://example.org/a#?ver=1",
+      "identity": "https://example.org/a#?ver=1"
+    },
+    {
+      "why": "fragment survives ver stripping",
+      "input": "https://example.org/a.pdf?ver=xyz#section2",
+      "match": "https://example.org/a.pdf#section2",
+      "identity": "https://example.org/a.pdf#section2"
+    },
+    {
+      "why": "fragment with ver-like text after a real query is untouched",
+      "input": "https://example.org/a?x=1#ver=2",
+      "match": "https://example.org/a?x=1#ver=2",
+      "identity": "https://example.org/a?x=1#ver=2"
+    },
+    {
+      "why": "trailing slash before a stripped ver is removed",
+      "input": "https://example.org/a/?ver=1",
+      "match": "https://example.org/a",
+      "identity": "https://example.org/a"
+    },
+    {
+      "why": "trailing slash in a fragment is removed",
+      "input": "https://example.org/a?ver=2#frag/",
+      "match": "https://example.org/a#frag",
+      "identity": "https://example.org/a#frag/"
+    },
+    {
+      "why": "ver in the path is not a query parameter",
+      "input": "https://example.org/ver=1/a",
+      "match": "https://example.org/ver=1/a",
+      "identity": "https://example.org/ver=1/a"
+    },
+    {
+      "why": "upper-case scheme, host and path; trailing slash",
+      "input": "HTTPS://Example.ORG/Doc.PDF/",
+      "match": "https://example.org/doc.pdf",
+      "identity": "https://example.org/Doc.PDF"
+    },
+    {
+      "why": "repeated trailing slashes",
+      "input": "https://x.ac.uk/a///",
+      "match": "https://x.ac.uk/a",
+      "identity": "https://x.ac.uk/a"
+    },
+    {
+      "why": "BOA asset URL, no query",
+      "input": "https://www.boa.ac.uk/asset/F8B1C499-C38A-4805-8CB8D8EB3087BCA7/",
+      "match": "https://www.boa.ac.uk/asset/f8b1c499-c38a-4805-8cb8d8eb3087bca7",
+      "identity": "https://www.boa.ac.uk/asset/F8B1C499-C38A-4805-8CB8D8EB3087BCA7"
+    },
+    {
+      "why": "ASCII spaces trimmed",
+      "input": "  https://example.org/a  ",
+      "match": "https://example.org/a",
+      "identity": "https://example.org/a"
+    },
+    {
+      "why": "tab and newline trimmed, then ver stripped",
+      "input": "\t https://example.org/A?ver=1 \n",
+      "match": "https://example.org/a",
+      "identity": "https://example.org/A"
+    },
+    {
+      "why": "non-breaking space and BOM trimmed",
+      "input": "\ufeff\u00a0https://example.org/a\u00a0",
+      "match": "https://example.org/a",
+      "identity": "https://example.org/a"
+    },
+    {
+      "why": "ideographic space and line separator trimmed",
+      "input": "\u3000https://example.org/a\u2028",
+      "match": "https://example.org/a",
+      "identity": "https://example.org/a"
+    },
+    {
+      "why": "internal whitespace kept",
+      "input": "https://example.org/a b",
+      "match": "https://example.org/a b",
+      "identity": "https://example.org/a b"
+    },
+    {
+      "why": "non-ASCII letters are not case-mapped (locale-independent)",
+      "input": "https://example.org/\u00c9/\u03a3.pdf?ver=1",
+      "match": "https://example.org/\u00c9/\u03a3.pdf",
+      "identity": "https://example.org/\u00c9/\u03a3.pdf"
+    },
+    {
+      "why": "non-scheme input: not inspected for ver, only trimmed/lowercased/slash-stripped",
+      "input": "  /relative/path/A?ver=1/  ",
+      "match": "/relative/path/a?ver=1",
+      "identity": "/relative/path/A?ver=1/"
+    },
+    {
+      "why": "opaque text",
+      "input": "not a url/",
+      "match": "not a url",
+      "identity": "not a url"
+    },
+    {
+      "why": "non-hierarchical scheme still has its ver stripped",
+      "input": "urn:x:Doc?ver=1",
+      "match": "urn:x:doc",
+      "identity": "urn:x:Doc"
+    },
+    {
+      "why": "empty query string untouched",
+      "input": "https://example.org/a?",
+      "match": "https://example.org/a?",
+      "identity": "https://example.org/a?"
+    },
+    {
+      "why": "UK-FALCON hold key",
+      "input": "https://www.bofas.org.uk/Portals/0/Research/FALCON-Report-Phase%201%20and%202%20final.pdf?ver=hsYlmJh0ouIwz8sw99_7eA%3d%3d",
+      "match": "https://www.bofas.org.uk/portals/0/research/falcon-report-phase%201%20and%202%20final.pdf",
+      "identity": "https://www.bofas.org.uk/Portals/0/Research/FALCON-Report-Phase%201%20and%202%20final.pdf"
+    },
+    {
+      "why": "path case: distinct documents on a case-sensitive server (1 of 2)",
+      "input": "https://example.org/Docs/A.pdf",
+      "match": "https://example.org/docs/a.pdf",
+      "identity": "https://example.org/Docs/A.pdf"
+    },
+    {
+      "why": "path case: distinct documents on a case-sensitive server (2 of 2) \u2014 same match key, different identity",
+      "input": "https://example.org/docs/a.pdf",
+      "match": "https://example.org/docs/a.pdf",
+      "identity": "https://example.org/docs/a.pdf"
+    },
+    {
+      "why": "query-value case (1 of 2): tokens are case-sensitive",
+      "input": "https://www.nature.com/articles/x?sharing_token=ABC123",
+      "match": "https://www.nature.com/articles/x?sharing_token=abc123",
+      "identity": "https://www.nature.com/articles/x?sharing_token=ABC123"
+    },
+    {
+      "why": "query-value case (2 of 2)",
+      "input": "https://www.nature.com/articles/x?sharing_token=abc123",
+      "match": "https://www.nature.com/articles/x?sharing_token=abc123",
+      "identity": "https://www.nature.com/articles/x?sharing_token=abc123"
+    },
+    {
+      "why": "fragment case kept in identity (hash-routed document)",
+      "input": "https://example.org/app#/Doc/1",
+      "match": "https://example.org/app#/doc/1",
+      "identity": "https://example.org/app#/Doc/1"
+    },
+    {
+      "why": "a fragment is part of identity: splits from the bare URL, never merges",
+      "input": "https://example.org/a.pdf#page=2",
+      "match": "https://example.org/a.pdf#page=2",
+      "identity": "https://example.org/a.pdf#page=2"
+    },
+    {
+      "why": "userinfo keeps its case; host is lowercased",
+      "input": "https://User:Pw@Example.ORG/a",
+      "match": "https://user:pw@example.org/a",
+      "identity": "https://User:Pw@example.org/a"
+    },
+    {
+      "why": "scheme, host and port lowercased; path case and trailing-slash rule",
+      "input": "HTTP://WWW.Example.ORG:8080/Path/",
+      "match": "http://www.example.org:8080/path",
+      "identity": "http://www.example.org:8080/Path"
+    },
+    {
+      "why": "percent-escape hex uppercased in identity (RFC 3986 equivalence)",
+      "input": "https://example.org/a%c2%a0b.pdf",
+      "match": "https://example.org/a%c2%a0b.pdf",
+      "identity": "https://example.org/a%C2%A0b.pdf"
+    },
+    {
+      "why": "percent-escape scanning: stray % and partial escapes untouched",
+      "input": "https://example.org/x%%a1%a%ab",
+      "match": "https://example.org/x%%a1%a%ab",
+      "identity": "https://example.org/x%%A1%a%AB"
+    },
+    {
+      "why": "percent-escape followed by hex-looking text",
+      "input": "https://example.org/%1a1a",
+      "match": "https://example.org/%1a1a",
+      "identity": "https://example.org/%1A1a"
+    },
+    {
+      "why": "trailing / in a query value: kept by identity, stripped by match",
+      "input": "https://example.org/a?path=/docs/",
+      "match": "https://example.org/a?path=/docs",
+      "identity": "https://example.org/a?path=/docs/"
+    },
+    {
+      "why": "root URL with trailing slash",
+      "input": "https://Example.org/",
+      "match": "https://example.org",
+      "identity": "https://example.org"
+    },
+    {
+      "why": "scheme lowercased without an authority; the rest keeps its case",
+      "input": "URN:X:Doc",
+      "match": "urn:x:doc",
+      "identity": "urn:X:Doc"
+    },
+    {
+      "why": "deliberate merge #1: a different ver token is the same document",
+      "input": "https://www.bofas.org.uk/Portals/0/A.pdf?ver=TWO",
+      "match": "https://www.bofas.org.uk/portals/0/a.pdf",
+      "identity": "https://www.bofas.org.uk/Portals/0/A.pdf"
+    }
+  ]
+}

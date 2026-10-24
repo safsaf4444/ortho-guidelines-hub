@@ -28,27 +28,78 @@
  * cannot publish. Anyone changing this file is changing a privileged path —
  * review it as one.
  *
- * ─── INSERT-IF-ABSENT, NEVER OVERWRITE ──────────────────────────────────────
+ * ─── STAGE THROUGH THE RPC, NEVER OVERWRITE ────────────────────────────────
  * This is the load-bearing decision in this file, and the one thing not to
  * "simplify" later.
  *
  * `candidateId` is deterministic — same pipeline, provider, reason and URL
  * produce the same id every week (see makeCandidateId in lib/ingestion.ts). So
- * every scheduled run rediscovers all the same candidates, and the natural
- * `upsert` would rewrite each existing row back to `review_status = 'pending'`.
+ * every scheduled run rediscovers all the same candidates, and a natural
+ * `upsert` would rewrite each existing row back to `review_status = 'pending'`,
+ * silently undoing editorial work: a candidate an editor had REJECTED would
+ * reappear the following Sunday as if never looked at.
  *
- * That would silently undo editorial work: a candidate an editor had reviewed
- * and REJECTED as out of scope would reappear in the queue the following
- * Sunday, as if it had never been looked at, and an ACCEPTED one would return
- * alongside the guideline it had already become. The reviewer would have no way
- * to tell a genuinely new find from one they had already judged.
+ * So rows are filed by `public.stage_sync_candidates` (migration
+ * 20261024_discovery_review_queue.sql), which never modifies an existing row
+ * and reports one outcome per candidate:
  *
- * So the write is ON CONFLICT DO NOTHING (`ignoreDuplicates: true`). New
- * candidates are added; rows that already exist are left exactly as the editor
- * left them. The cost is that a provider silently editing a title under the
- * same URL will not refresh an existing queue row — the right fix for that is a
- * CONTENT_DRIFT candidate with its own id, which is what change detection is
- * for, not a blind overwrite here.
+ *   staged        new row filed (pending); this sighting recorded on it
+ *   existing      this candidate id is already queued, in ANY status — left
+ *                 exactly as the editor left it; this sighting is appended
+ *                 to that row's evidence
+ *   already_open  a DIFFERENT candidate (possibly from another producer)
+ *                 holds this document's one open queue slot; no row is
+ *                 filed, and this sighting is appended to THAT row
+ *   held          the document is on the editorial staging-hold list
+ *   failed        refused or errored; that candidate alone was rolled back
+ *
+ * Why an RPC and not INSERT … ON CONFLICT (candidate_id) DO NOTHING: since the
+ * one-open-row-per-document index, a candidate whose document is already open
+ * under another id raised 23505, which failed the ENTIRE statement and filed
+ * nothing — one duplicate discarding every unrelated candidate.
+ *
+ * ─── PARTIAL SUCCESS, NOT ALL-OR-NOTHING ─────────────────────────────────────
+ * This script used to be all-or-nothing per run (one INSERT statement). It is
+ * no longer, deliberately. The RPC is one transaction with each candidate in
+ * its own subtransaction:
+ *   - a candidate that fails — validation, its queue row, or its evidence row —
+ *     is rolled back entirely and reported 'failed'; the exit code is 1;
+ *   - every other candidate's row and evidence COMMIT;
+ *   - if the call itself fails (network, missing function), NOTHING is written.
+ *
+ * Run identity: the run id is derived from the candidates file itself
+ * (generatedAt + content hash). Re-running the SAME file is a RETRY of the
+ * same run, not a new discovery run: failed candidates are attempted again,
+ * and everything already committed comes back 'existing' with no new row and
+ * no new evidence. A new sync-providers report is a new run.
+ *
+ * ─── DOCUMENT KEYS ───────────────────────────────────────────────────────────
+ * `primary_url` is the href exactly as discovered (versions[0].url). The
+ * candidate's own `primaryUrl` is the LOOSE match key (lowercased; it also
+ * feeds the candidate id) and `sourceUrlKey` is the CONSERVATIVE identity key
+ * (documentIdentityKey; path and query case preserved). The database
+ * re-derives both and refuses the candidate if either disagrees.
+ *
+ * Three cases are reported explicitly, never folded into a plain count:
+ *   - POSSIBLE_SAME_DOCUMENT candidates (a loose-only match with a catalogue
+ *     link): staged for document comparison, naming the entry and the reason.
+ *     Never approvable as a new entry.
+ *   - matches against rows filed BEFORE the migration, whose stored URL was
+ *     already lowercased: the database can only match them by the loose key,
+ *     so they are reported as "pre-migration row, original case unknown" —
+ *     not as exact matches. The sighting is still recorded.
+ *   - candidate-id collisions (two different documents, one id, because ids
+ *     come from the loose key): the second document is filed under a derived
+ *     id `<id>~<hash>` and reported as a collision — never merged into the
+ *     first, and its sighting is never dropped.
+ *
+ * ─── DEPLOYMENT ORDER ────────────────────────────────────────────────────────
+ * Requires supabase/migrations/20261024_discovery_review_queue.sql. Against a
+ * database without it, the RPC call fails and nothing is written (exit 1). The
+ * old version of this script against a database WITH it fails its whole batch
+ * on the first already-open document. Apply the migration, then deploy this
+ * script, with no staging run (workflow dispatch or local) in between. Full
+ * order and rollback limits: the migration header.
  *
  * Run locally:  npx tsx scripts/stage-candidates.ts
  *               (reads ./candidates.json; needs SUPABASE_URL +
@@ -56,10 +107,11 @@
  * Dry run:      DRY_RUN=true npx tsx scripts/stage-candidates.ts
  */
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { config } from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
-import { CANDIDATE_SCHEMA_VERSION, type IngestionCandidate } from './lib/ingestion';
+import { CANDIDATE_SCHEMA_VERSION, documentIdentityKey, type IngestionCandidate } from './lib/ingestion';
 
 // Local convenience only; in CI these arrive as real environment variables and
 // dotenv finds no file to load. .env.local first, matching scripts/seed.ts.
@@ -81,48 +133,70 @@ const INPUT_PATH = process.argv[2]
   ? path.resolve(process.argv[2])
   : path.join(process.cwd(), 'candidates.json');
 
-/** One row of public.staged_guidelines, as written here. */
-interface StagedRow {
-  candidate_id: string;
-  schema_version: number;
+/** One candidate as stage_sync_candidates() reads it. */
+interface StagePayload {
+  candidateId: string;
+  schemaVersion: number;
   pipeline: string;
   provider: string;
-  provider_name: string;
+  providerName: string;
   topic: string;
-  source: string;
   summary: string | null;
   notes: string | null;
+  /** Verbatim hrefs; versions[0].url becomes primary_url. */
   versions: IngestionCandidate['versions'];
-  primary_url: string;
-  change_reason: string;
-  discovered_at: string;
-  provider_ref: string | null;
-  matched_guideline_id: string | null;
-  // review_status is deliberately omitted: the column defaults to 'pending',
-  // and naming it here would be the first step towards overwriting it.
+  /** LOOSE match key of versions[0].url (also the candidate-id input). Checked by the database. */
+  primaryUrl: string;
+  /** CONSERVATIVE identity key of versions[0].url. Checked by the database. */
+  sourceUrlKey: string;
+  /** POSSIBLE_SAME_DOCUMENT only: the matched entry and reason. Verified by the database. */
+  documentComparison: IngestionCandidate['documentComparison'] | null;
+  changeReason: string;
+  discoveredAt: string;
+  providerRef: string | null;
+  matchedGuidelineId: string | null;
+  // reviewStatus is deliberately omitted: new rows are always 'pending', and
+  // nothing here may set the status of an existing row.
 }
 
-function toStagedRow(c: IngestionCandidate): StagedRow {
+function toPayload(c: IngestionCandidate): StagePayload {
   return {
-    candidate_id: c.candidateId,
-    schema_version: CANDIDATE_SCHEMA_VERSION,
+    candidateId: c.candidateId,
+    schemaVersion: CANDIDATE_SCHEMA_VERSION,
     pipeline: c.pipeline,
     provider: c.provider,
-    provider_name: c.providerName,
+    providerName: c.providerName,
     topic: c.topic,
-    // The short publisher tag, matching what the catalogue's own `source`
-    // column holds (e.g. 'BOA'). provider_name carries the full title; the
-    // dashboard prefers that and falls back to this.
-    source: c.provider,
     summary: c.summary ?? null,
     notes: c.notes ?? null,
     versions: c.versions,
-    primary_url: c.primaryUrl,
-    change_reason: c.changeReason,
-    discovered_at: c.discoveredAt,
-    provider_ref: c.providerRef ?? null,
-    matched_guideline_id: c.matchedGuidelineId ?? null,
+    primaryUrl: c.primaryUrl,
+    sourceUrlKey: documentIdentityKey(c.versions[0]?.url ?? ''),
+    changeReason: c.changeReason,
+    discoveredAt: c.discoveredAt,
+    providerRef: c.providerRef ?? null,
+    matchedGuidelineId: c.matchedGuidelineId ?? null,
+    documentComparison: c.documentComparison ?? null,
   };
+}
+
+/** One element of stage_sync_candidates()'s result, in input order. */
+interface StageOutcome {
+  candidateId: string | null;
+  status: 'staged' | 'existing' | 'already_open' | 'held' | 'failed';
+  evidence: 'appended' | 'already_recorded' | 'none';
+  stagedId?: string;
+  reviewStatus?: string;
+  heldByCandidateId?: string | null;
+  heldByProducer?: string | null;
+  heldByStatus?: string | null;
+  holdStatus?: string;
+  code?: string;
+  message?: string;
+  /** 'identity' = exact; 'legacy-match-key' = pre-migration row, original case unknown. */
+  identityBasis?: 'identity' | 'legacy-match-key';
+  /** Set when the requested id already named a different document. */
+  candidateIdCollision?: { requestedId: string; filedAs: string };
 }
 
 interface CandidatesFile {
@@ -139,20 +213,28 @@ interface CandidatesFile {
   }>;
 }
 
-function readCandidates(): IngestionCandidate[] {
+function readCandidates(): { candidates: IngestionCandidate[]; runId: string } {
   if (!fs.existsSync(INPUT_PATH)) {
     console.error(`[Stage] No candidates file at ${INPUT_PATH}. Run scripts/sync-providers.ts first.`);
     process.exit(1);
   }
 
-  const payload = JSON.parse(fs.readFileSync(INPUT_PATH, 'utf-8')) as CandidatesFile;
+  const raw = fs.readFileSync(INPUT_PATH, 'utf-8');
+  const payload = JSON.parse(raw) as CandidatesFile;
+
+  // Evidence is recorded once per (queue row, run). The run id is derived from
+  // the file itself, so re-staging the same candidates.json (a retried job)
+  // appends nothing twice, while next week's sweep is a new run.
+  const runId = `sync-providers:${payload.generatedAt ?? 'undated'}:`
+    + createHash('sha256').update(raw, 'utf8').digest('hex').slice(0, 16);
 
   // A schema bump means the column mapping below may no longer be right. Fail
   // rather than write rows shaped by guesswork into a clinical review queue.
   if (payload.schemaVersion !== undefined && payload.schemaVersion !== CANDIDATE_SCHEMA_VERSION) {
     console.error(
-      `[Stage] candidates.json is schema v${payload.schemaVersion}, but this script writes `
-      + `v${CANDIDATE_SCHEMA_VERSION}. Update toStagedRow() before staging it.`,
+      `[Stage] candidates.json is schema v${payload.schemaVersion}, but this script stages `
+      + `v${CANDIDATE_SCHEMA_VERSION}. Nothing was written. Regenerate the file with `
+      + '`npx tsx scripts/sync-providers.ts` (the workflow does this in the same job) and stage that.',
     );
     process.exit(1);
   }
@@ -198,46 +280,73 @@ function readCandidates(): IngestionCandidate[] {
   }
 
   // Deterministic ids mean one run can legitimately rediscover the same URL
-  // from two adapters; the unique constraint would reject the whole batch.
-  const seen = new Set<string>();
+  // from two adapters: those exact repeats are collapsed. Collapse ONLY when the
+  // document is also the same — the id comes from the LOOSE match key, so two
+  // case-distinct documents can share one id. Those are both submitted; the
+  // database files the second under a derived id and reports the collision.
+  const seen = new Map<string, string>();
+  let collisions = 0;
   const deduped = out.filter(c => {
-    if (seen.has(c.candidateId)) return false;
-    seen.add(c.candidateId);
+    const identity = documentIdentityKey(c.versions[0]?.url ?? '');
+    const prior = seen.get(c.candidateId);
+    if (prior === undefined) {
+      seen.set(c.candidateId, identity);
+      return true;
+    }
+    if (prior === identity) return false;
+    collisions++;
     return true;
   });
-  if (deduped.length !== out.length) {
-    console.log(`[Stage] Collapsed ${out.length - deduped.length} duplicate candidate id(s) within this run.`);
+  const collapsed = out.length - deduped.length;
+  if (collapsed > 0) {
+    console.log(`[Stage] Collapsed ${collapsed} duplicate candidate id(s) within this run (same document).`);
+  }
+  if (collisions > 0) {
+    console.warn(
+      `[Stage] ${collisions} candidate(s) share a candidate id with a DIFFERENT document in this run `
+      + '(case-distinct URLs). Both submitted; the database files each separately and reports the collision.',
+    );
   }
 
-  return deduped;
+  return { candidates: deduped, runId };
+}
+
+/** Counts by outcome. Every input candidate lands in exactly one bucket. */
+function tallyOutcomes(outcomes: StageOutcome[]): Record<StageOutcome['status'], number> {
+  const t = { staged: 0, existing: 0, already_open: 0, held: 0, failed: 0 };
+  // An unrecognised status is counted as a failure, never silently dropped.
+  for (const o of outcomes) t[o.status in t ? o.status : 'failed']++;
+  return t;
 }
 
 async function main() {
   console.log('=== Stage candidates into staged_guidelines ===');
   console.log(DRY_RUN ? 'MODE: DRY RUN — no database writes.\n' : 'MODE: LIVE — new candidates will be filed.\n');
 
-  const candidates = readCandidates();
+  const { candidates, runId } = readCandidates();
 
   if (candidates.length === 0) {
     console.log('[Stage] Nothing to file. Exiting cleanly.');
     return;
   }
 
-  const rows = candidates.map(toStagedRow);
+  const payload = candidates.map(toPayload);
 
   if (DRY_RUN) {
-    console.log(`[Stage] Would file ${rows.length} candidate(s):`);
-    rows.slice(0, 10).forEach(r => console.log(`   • [${r.candidate_id}] ${r.provider} — "${r.topic}"`));
-    if (rows.length > 10) console.log(`   … and ${rows.length - 10} more`);
-    console.log('\n[Stage] Dry run complete. No writes performed.');
+    // A dry run does not contact the database, so it cannot know which of these
+    // are new, already queued, held, or blocked by an open row for the document.
+    console.log(`[Stage] Would submit ${payload.length} candidate(s) as run ${runId}:`);
+    payload.slice(0, 10).forEach(r => console.log(`   • [${r.candidateId}] ${r.provider} — "${r.topic}"`));
+    if (payload.length > 10) console.log(`   … and ${payload.length - 10} more`);
+    console.log('\n[Stage] Dry run complete. No writes performed; outcomes are decided by the database.');
     return;
   }
 
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
     console.error(
       '[Stage] Missing SUPABASE_URL and/or SUPABASE_SERVICE_ROLE_KEY.\n'
-      + 'The service-role key is required: staged_guidelines has no INSERT policy, so an anon '
-      + 'or editor client cannot write to it by design.',
+      + 'The service-role key is required: stage_sync_candidates() is executable by service_role only, '
+      + 'and staged_guidelines has no INSERT policy for any client role.',
     );
     process.exit(1);
   }
@@ -246,38 +355,84 @@ async function main() {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
-  // ONE statement for every row: supabase-js sends a single
-  // INSERT ... ON CONFLICT (candidate_id) DO NOTHING, and a single Postgres
-  // statement is atomic, so either every new candidate is filed or none is.
-  // That atomicity comes from it being one statement — there is no explicit
-  // transaction here. DO NOT introduce chunking (slicing `rows` into batches)
-  // without wrapping the batches in an RPC or a transaction: separate
-  // statements can partially succeed, and a half-filed queue is a review list
-  // nobody can trust.
+  // After this call, failures set process.exitCode and RETURN rather than
+  // calling process.exit(): on Windows, Node 24 aborts with a libuv assertion
+  // (UV_HANDLE_CLOSING, exit 0xC0000409/127 instead of 1) when exit() runs
+  // while fetch's socket is still closing. Returning lets it close cleanly.
   //
-  // `select` returns only the rows actually inserted, which is what makes
-  // "3 new this week" reportable rather than guessed at.
-  const { data, error } = await supabase
-    .from('staged_guidelines')
-    .upsert(rows, { onConflict: 'candidate_id', ignoreDuplicates: true })
-    .select('candidate_id, topic');
+  // ONE call for every candidate: a single transaction on the server, with
+  // each candidate in its own subtransaction — PARTIAL SUCCESS: failed
+  // candidates are rolled back alone and the rest commit. If the call itself
+  // fails (network, missing function, bad run id) nothing at all is written.
+  const { data, error } = await supabase.rpc('stage_sync_candidates', {
+    p_run_id: runId,
+    p_candidates: payload,
+  });
 
   if (error) {
-    console.error('[Stage] Insert failed:', error.message, error.details ?? '', error.hint ?? '');
-    process.exit(1);
+    console.error('[Stage] stage_sync_candidates failed; NOTHING was filed:', error.code ?? '', error.message,
+      error.details ?? '', error.hint ?? '');
+    process.exitCode = 1;
+    return;
   }
 
-  const inserted = data ?? [];
-  console.log(`\n[Stage] Filed ${inserted.length} NEW candidate(s); ${rows.length - inserted.length} already in the queue (left untouched).`);
-  inserted.forEach(r => console.log(`   + ${r.topic}`));
+  const outcomes = (data ?? []) as StageOutcome[];
+  if (!Array.isArray(outcomes) || outcomes.length !== payload.length) {
+    // The function returns one outcome per input, in order. Anything else
+    // means the counts below would be guesses, so say so and fail.
+    console.error(`[Stage] Expected ${payload.length} outcome(s), received ${Array.isArray(outcomes) ? outcomes.length : typeof outcomes}. Treating the run as failed.`);
+    process.exitCode = 1;
+    return;
+  }
 
-  if (inserted.length > 0) {
-    console.log('\n[Stage] These are now visible to signed-in editors in Review Staged Guidelines.');
+  const t = tallyOutcomes(outcomes);
+  const appended = outcomes.filter(o => o.evidence === 'appended').length;
+  console.log(`\n[Stage] Run ${runId}: ${payload.length} candidate(s) submitted. Re-running this same file retries only what failed.`);
+  console.log(`   staged (new)   ${t.staged}`);
+  console.log(`   existing       ${t.existing}   (already queued; editor decisions untouched)`);
+  console.log(`   already open   ${t.already_open}   (another candidate holds this document's open slot)`);
+  console.log(`   held           ${t.held}   (editorial staging hold)`);
+  console.log(`   failed         ${t.failed}`);
+  console.log(`   evidence rows appended: ${appended}`);
+  const comparisons = outcomes.filter((o, i) => payload[i].changeReason === 'POSSIBLE_SAME_DOCUMENT' && o.status !== 'failed' && o.status !== 'held');
+  const legacy = outcomes.filter(o => o.identityBasis === 'legacy-match-key');
+  const collided = outcomes.filter(o => o.candidateIdCollision);
+  console.log(`   require document comparison: ${comparisons.length}   (loose-only match with a catalogue entry; not approvable as new)`);
+  console.log(`   pre-migration row, case unknown: ${legacy.length}   (matched by loose key only — NOT an exact match)`);
+  console.log(`   candidate-id collisions: ${collided.length}   (different document, same id — filed separately, not merged)`);
+
+  outcomes.forEach((o, i) => {
+    const topic = payload[i].topic;
+    const cmp = payload[i].documentComparison;
+    if (cmp && o.status !== 'failed' && o.status !== 'held') {
+      console.log(`   ≈ ${topic} — ${o.status}; compare with entry ${cmp.guidelineIds.join(', ')}: ${cmp.reason}`);
+    }
+    if (o.identityBasis === 'legacy-match-key') {
+      console.log(`   ? ${topic} — ${o.status} via a pre-migration row matched by LOOSE key only; original URL case unknown, so this is not confirmed as the same document`);
+    }
+    if (o.candidateIdCollision) {
+      console.log(`   ! ${topic} — candidate id ${o.candidateIdCollision.requestedId} already names a different document; filed as ${o.candidateIdCollision.filedAs}`);
+    }
+    if (o.status === 'staged') console.log(`   + ${topic}`);
+    else if (o.status === 'already_open') {
+      console.log(`   = ${topic} — open as ${o.heldByCandidateId ?? '?'} (${o.heldByProducer ?? 'unrecorded producer'}, ${o.heldByStatus ?? '?'})`);
+    } else if (o.status === 'held') console.log(`   ‖ ${topic} — held (${o.holdStatus ?? '?'})`);
+    else if (o.status !== 'existing') console.error(`   ✗ [${payload[i].candidateId}] ${topic} — ${o.code ?? ''} ${o.message ?? o.status}`);
+  });
+
+  if (t.staged > 0) {
+    console.log('\n[Stage] New candidates are now visible to signed-in editors in Review Staged Guidelines.');
     console.log('[Stage] Nothing has been published — publishing is a human action via the app.');
+  }
+
+  if (t.failed > 0) {
+    console.error(`\n[Stage] ${t.failed} candidate(s) FAILED and were not filed. The other outcomes above are COMMITTED. `
+      + 'Re-run with the same file to retry the failures; nothing committed will be duplicated.');
+    process.exitCode = 1;
   }
 }
 
 main().catch(err => {
   console.error('[Stage] Unexpected failure:', err);
-  process.exit(1);
+  process.exitCode = 1;
 });
