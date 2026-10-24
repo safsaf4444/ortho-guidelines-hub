@@ -329,8 +329,7 @@ export default function App() {
   const [currentSection, setCurrentSection] = useState(initialSectionFromHash);
   const [searchQuery, setSearchQuery] = useState('');
   const [linkStatusFilter, setLinkStatusFilter] = useState('All');
-  // Sidebar navigation always filters by clinical section; this toggle only
-  // changes how the resulting cards are grouped/labelled in the main panel —
+  // This toggle only changes how cards are grouped/labelled in the main panel —
   // same underlying data, no schema change, just a different lens on it.
   const [groupBy, setGroupBy] = useState<'section' | 'provider'>('section');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -366,7 +365,6 @@ export default function App() {
    */
   const existingIds = useMemo(() => new Set(guidelines.map(g => g.id)), [guidelines]);
 
-  const sections = sortSections([...new Set(guidelines.map(g => g.section))]);
 
   const duplicateCandidates = useMemo(
     () => findDuplicateCandidates(guidelines).filter(c => !dismissedPairs.has(pairKey(c.a, c.b))),
@@ -1103,30 +1101,9 @@ Add a note from the entry to restore the audit trail.`
                 <span className="text-[12px] font-medium">About &amp; methodology</span>
               </button>
 
-              {sections.map(section => {
-                const count = guidelines.filter(
-                  g => g.section === section || (g.crossListedIn ?? []).includes(section)
-                ).length;
-                const isActive = currentSection === section;
-                return (
-                  <button
-                    key={section}
-                    onClick={() => { setCurrentSection(section); setIsSidebarOpen(false); }}
-                    className={cn(
-                      "flex justify-between items-center px-2.5 py-1.5 min-h-[44px] md:min-h-0 rounded transition-colors",
-                      isActive ? "bg-[#0F172A] text-white" : "text-slate-600 hover:bg-slate-50"
-                    )}
-                  >
-                    <span className="text-[12px]">{section}</span>
-                    <span className={cn(
-                      "px-1.5 py-px rounded text-[11px] font-medium",
-                      isActive ? "bg-white/20 text-white" : "bg-slate-100 text-slate-600"
-                    )}>
-                      {count}
-                    </span>
-                  </button>
-                );
-              })}
+              {/* Per-topic links (Emergencies, Trauma, …) were removed at the
+                  user's request: "All guidelines" already groups every entry
+                  by topic in collapsible sections, so the list duplicated it. */}
             </nav>
           </div>
 
