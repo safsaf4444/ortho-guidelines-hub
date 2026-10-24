@@ -73,6 +73,23 @@ function serverError(status: number): () => Response {
   return () => new Response('nope', { status, statusText: 'Boom' });
 }
 
+
+/**
+ * Remove a throwaway temp directory. On Windows a just-written file can be held
+ * briefly by antivirus or the search indexer, and rmSync then throws EPERM or
+ * EBUSY even though nothing is wrong with the test. Retry as Node documents for
+ * exactly this case; if it still fails, WARN — never throw. A leftover OS temp
+ * directory is not a test failure, and an exception here would also skip the
+ * pass/fail summary and replace the suite's real result with a crash.
+ */
+function removeTempDir(dir: string): void {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  } catch (err) {
+    console.warn(`  (cleanup) could not remove ${dir}: ${(err as Error).message}`);
+  }
+}
+
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'disc-cache-test-'));
 const originalCwd = process.cwd();
 process.chdir(TMP);
@@ -82,6 +99,17 @@ const URL_A = 'https://example.test/surface-a';
 try {
   const mod = await import('../lib/discovery-cache');
   const { fetchSurface, CACHE_DIR, MAX_VALIDATOR_AGE_MS, DISCOVERY_USER_AGENT } = mod;
+
+  // Virtual clock for per-host pacing, so no test here ever really sleeps.
+  // Every sleep is recorded and advances the clock by exactly what was asked.
+  let clock = 1_000_000;
+  const sleeps: number[] = [];
+  const events: string[] = [];
+  const virtualPacing = {
+    now: () => clock,
+    sleep: async (ms: number) => { sleeps.push(ms); events.push('sleep'); clock += ms; },
+  };
+  mod.configurePacing(virtualPacing);
 
   console.log('\n[1] A cold fetch sends no validators and stores the body');
   requests.length = 0;
@@ -337,10 +365,153 @@ try {
       fs.existsSync(path.join(CACHE_DIR, 'volatile-tokens.json')),
     );
   }
+
+  console.log('\n[11] Requests to one host are paced; the wait is bounded; hosts are independent');
+  {
+    const { resetPacing, configurePacing, MIN_HOST_INTERVAL_MS } = mod;
+    resetPacing();
+    configurePacing(virtualPacing);
+    sleeps.length = 0;
+    const H1 = 'https://paced-one.test/a';
+    const H1b = 'https://paced-one.test/b';
+    const H2 = 'https://paced-two.test/a';
+
+    scripted = [ok('1')];
+    const first = await fetchSurface(H1);
+    eq('a host contacted for the first time waits nothing', first.pacedMs, 0);
+    eq('so no sleep happened', sleeps.length, 0);
+
+    // A different path on the SAME host, immediately after.
+    scripted = [() => { events.push('fetch'); return new Response('2', { status: 200 }); }];
+    events.length = 0;
+    const second = await fetchSurface(H1b);
+    eq('an immediate second request to the same host waits the full interval', second.pacedMs, MIN_HOST_INTERVAL_MS);
+    eq('the sleep asked for exactly that', sleeps[0], MIN_HOST_INTERVAL_MS);
+    eq('the wait happened BEFORE the request was sent', events.join(','), 'sleep,fetch');
+
+    scripted = [ok('3')];
+    const other = await fetchSurface(H2);
+    eq('a different host is not delayed by the first one', other.pacedMs, 0);
+
+    clock += 3_000;
+    scripted = [ok('4')];
+    const partial = await fetchSurface(H1);
+    eq('only the remainder of the interval is waited', partial.pacedMs, MIN_HOST_INTERVAL_MS - 3_000);
+
+    clock += MIN_HOST_INTERVAL_MS * 10;
+    scripted = [ok('5')];
+    eq('after the interval has passed, no wait (never negative)', (await fetchSurface(H1)).pacedMs, 0);
+
+    // A clock that steps backwards (NTP correction) must not produce a wait
+    // longer than the interval: the wait is bounded by construction.
+    clock -= 60_000;
+    scripted = [ok('6')];
+    const skewed = await fetchSurface(H1);
+    check('a backwards clock step cannot exceed the interval', skewed.pacedMs <= MIN_HOST_INTERVAL_MS, String(skewed.pacedMs));
+
+    // A failed request still counts as having asked the host.
+    clock += MIN_HOST_INTERVAL_MS * 10;
+    const H3 = 'https://paced-fail.test/a';
+    scripted = [() => { throw new Error('connection reset'); }];
+    let threw = false;
+    try { await fetchSurface(H3); } catch { threw = true; }
+    check('the failing request threw', threw);
+    scripted = [ok('7')];
+    eq('the next request to a host that just FAILED is still paced', (await fetchSurface(H3)).pacedMs, MIN_HOST_INTERVAL_MS);
+    resetPacing();
+  }
+
+  console.log('\n[12] Pacing holds under CONCURRENT requests, including when one fails');
+  {
+    const { resetPacing, configurePacing, MIN_HOST_INTERVAL_MS: GAP } = mod;
+    resetPacing();
+    configurePacing(virtualPacing);
+
+    // A response the test releases by hand, so overlap is real and controlled.
+    type Gate = { promise: Promise<Response>; answer: (body: string) => void; fail: (msg: string) => void };
+    const gate = (label: string): Gate => {
+      let answer!: (b: string) => void;
+      let fail!: (m: string) => void;
+      const promise = new Promise<Response>((resolve, reject) => {
+        answer = (b) => { events.push(`answered:${label}`); inFlight--; resolve(new Response(b, { status: 200 })); };
+        fail = (m) => { events.push(`failed:${label}`); inFlight--; reject(new Error(m)); };
+      });
+      return { promise, answer, fail };
+    };
+    let inFlight = 0;
+    let maxInFlightPerHost = 0;
+    const sent = (label: string, g: Gate) => () => {
+      events.push(`sent:${label}`);
+      inFlight++;
+      maxInFlightPerHost = Math.max(maxInFlightPerHost, inFlight);
+      return g.promise as unknown as Response;
+    };
+    const settle = async () => { for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r)); };
+
+    // (a) Two concurrent requests to ONE host.
+    events.length = 0; sleeps.length = 0; requests.length = 0;
+    const g1 = gate('a1'); const g2 = gate('a2');
+    scripted = [sent('a1', g1), sent('a2', g2)];
+    const p1 = fetchSurface('https://conc-one.test/1');
+    const p2 = fetchSurface('https://conc-one.test/2');
+    await settle();
+    eq('while the first is unanswered, only ONE request to the host has been sent', requests.length, 1);
+    clock += 1_200; // the first request takes 1.2s to be answered
+    g1.answer('one');
+    await p1;
+    await settle();
+    g2.answer('two');
+    const r2 = await p2;
+    eq('the second was sent only after the first was answered AND the gap was slept',
+      events.join(','), 'sent:a1,answered:a1,sleep,sent:a2,answered:a2');
+    eq('the sleep was the full gap, measured from when the first finished', sleeps[0], GAP);
+    eq('pacedMs includes the time spent queued, not just the sleep', r2.pacedMs, 1_200 + GAP);
+
+    // (b) Concurrent requests to DIFFERENT hosts are not serialised together.
+    events.length = 0; requests.length = 0;
+    const gx = gate('x'); const gy = gate('y');
+    scripted = [sent('x', gx), sent('y', gy)];
+    const px = fetchSurface('https://conc-x.test/a');
+    const py = fetchSurface('https://conc-y.test/a');
+    await settle();
+    eq('both hosts were contacted at once', requests.length, 2);
+    gx.answer('x'); gy.answer('y');
+    await Promise.all([px, py]);
+
+    // (c) The first of two concurrent same-host requests FAILS.
+    events.length = 0; sleeps.length = 0; requests.length = 0;
+    const f1 = gate('f1'); const f2 = gate('f2');
+    scripted = [sent('f1', f1), sent('f2', f2)];
+    const pf1 = fetchSurface('https://conc-fail.test/1').then(() => 'resolved', (e: Error) => `rejected:${e.message}`);
+    const pf2 = fetchSurface('https://conc-fail.test/2');
+    await settle();
+    eq('the second is held while the first is in flight', requests.length, 1);
+    f1.fail('connection reset');
+    eq('the failing request rejects to its own caller', await pf1, 'rejected:connection reset');
+    await settle();
+    f2.answer('ok');
+    const rf2 = await pf2;
+    eq('the failure did not wedge the host queue: the second completed', rf2.body, 'ok');
+    eq('and the failure still paced it: sent only after a full-gap sleep',
+      events.join(','), 'sent:f1,failed:f1,sleep,sent:f2,answered:f2');
+
+    // (d) Three concurrent requests to one host go out in call order, one at a time.
+    events.length = 0; sleeps.length = 0; requests.length = 0; maxInFlightPerHost = 0; inFlight = 0;
+    const gs = [gate('t1'), gate('t2'), gate('t3')];
+    scripted = gs.map((g, i) => sent(`t${i + 1}`, g));
+    const ps = [1, 2, 3].map((i) => fetchSurface(`https://conc-three.test/${i}`));
+    for (const g of gs) { await settle(); g.answer('b'); }
+    await Promise.all(ps);
+    eq('sent strictly in call order', events.filter((e) => e.startsWith('sent')).join(','), 'sent:t1,sent:t2,sent:t3');
+    eq('never more than one request in flight to that host', maxInFlightPerHost, 1);
+    eq('each later request slept the full gap', sleeps.join(','), `${GAP},${GAP}`);
+    check('no sleep ever exceeded the gap', sleeps.every((ms) => ms <= GAP), sleeps.join(','));
+    resetPacing();
+  }
 } finally {
   globalThis.fetch = realFetch;
   process.chdir(originalCwd);
-  fs.rmSync(TMP, { recursive: true, force: true });
+  removeTempDir(TMP);
 }
 
 console.log(`\n──────── ${pass} passed, ${fail} failed ────────\n`);

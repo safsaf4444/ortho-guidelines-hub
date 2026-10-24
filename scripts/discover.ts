@@ -51,6 +51,7 @@ import {
   readTokenStore,
   writeTokenStore,
   MAX_VALIDATOR_AGE_MS,
+  MIN_HOST_INTERVAL_MS,
   type FetchOutcome,
 } from './lib/discovery-cache';
 import {
@@ -71,8 +72,12 @@ import type { SurfaceParse } from './adapters/types';
 // BOFAS keeps its existing parser. Its parse rules are deliberately unchanged
 // by this batch — what improves is the MATCHING applied to what it returns.
 import { parseBofasPublicationsIndex } from './sync-providers';
+import { parseBofasStatedLabels } from './adapters/bofas';
 
 const OUTPUT_DIR = path.join(process.cwd(), 'reports');
+
+/** How long the entrypoint lets the event loop drain before forcing an exit. */
+export const EXIT_WATCHDOG_MS = 30_000;
 
 /**
  * A surface and how to parse it.
@@ -83,10 +88,24 @@ const OUTPUT_DIR = path.join(process.cwd(), 'reports');
  * the selector broke. Treating it as "nothing found" is exactly the silent
  * undercount this project has already been bitten by.
  */
-interface SurfacePlan {
+export interface SurfacePlan {
   url: string;
   parse: (html: string, surfaceUrl: string) => SurfaceParse;
   expectItems: boolean;
+  /**
+   * True ONLY for a surface whose listing is itself the publisher's statement
+   * that its documents are retired — today, EBI's /specialty/retired-guidance/.
+   * An admitted item on such a surface that matches a catalogue entry is then
+   * reported as a PUBLISHER-ASSERTED RETIREMENT of that entry.
+   *
+   * Deliberately independent of `gate`. A gate is a scope filter; being filtered,
+   * or being admitted by a filter, says nothing about retirement. Before this
+   * flag existed the retirement assertion was keyed off "this surface has a
+   * gate", so the first scope filter added to any other provider would have
+   * reported every catalogue document on that page as retired by its publisher.
+   * Absent means false.
+   */
+  assertsRetirement?: boolean;
   /**
    * Optional admission test applied to each parsed item BEFORE classification.
    *
@@ -164,7 +183,57 @@ function gateRetiredGuidance(
   );
 }
 
-function surfacePlansFor(entry: ProviderRegistryEntry): SurfacePlan[] {
+export type RetirementAssertion = {
+  url: string;
+  topic: string;
+  guidelineId: string;
+  statement: string;
+};
+
+/**
+ * Decide what happens to one parsed item on one surface, before classification.
+ *
+ *   filtered   the plan's gate declined it (scope). Says nothing about retirement.
+ *   admitted   it goes on to classification; `retirementAssertion` is non-null
+ *              ONLY when the plan opts in with `assertsRetirement` AND the item's
+ *              URL matches a catalogue entry.
+ *
+ * Exported so the rule "a scope filter can never imply retirement" is tested
+ * directly, not only through a full sweep.
+ */
+export function admitItem(
+  plan: Pick<SurfacePlan, 'gate' | 'assertsRetirement'>,
+  item: { topic: string; discoveredUrl: string },
+  ctx: { index: ReturnType<typeof buildCatalogueIndex>; seenEarlier: Set<string> },
+  surfaceFinalUrl: string,
+):
+  | { admitted: false; reason: string }
+  | { admitted: true; retirementAssertion: RetirementAssertion | null } {
+  if (plan.gate) {
+    const reason = plan.gate(item, ctx);
+    if (reason !== null) return { admitted: false, reason };
+  }
+  if (plan.assertsRetirement !== true) return { admitted: true, retirementAssertion: null };
+
+  const hit = ctx.index.byUrlKey.get(normaliseCandidateUrl(item.discoveredUrl));
+  if (!hit) return { admitted: true, retirementAssertion: null };
+  return {
+    admitted: true,
+    retirementAssertion: {
+      url: item.discoveredUrl,
+      topic: item.topic,
+      guidelineId: hit.guideline.id,
+      statement:
+        `The publisher lists this document under its own retired-guidance term at ` +
+        `${surfaceFinalUrl}, and its URL matches catalogue entry ${hit.guideline.id}. ` +
+        'That is the PUBLISHER ASSERTING RETIREMENT — it is not a withdrawal we have ' +
+        'verified, no document was fetched or read, and no catalogue status has changed. ' +
+        'A human should open the page and decide what, if anything, the entry needs.',
+    },
+  };
+}
+
+export function surfacePlansFor(entry: ProviderRegistryEntry): SurfacePlan[] {
   switch (entry.key) {
     case 'NHS EBI':
       // ORDER MATTERS. The musculoskeletal surface runs first so that the
@@ -182,6 +251,9 @@ function surfacePlansFor(entry: ProviderRegistryEntry): SurfacePlan[] {
           parse: parseEbiSpecialtyIndex,
           expectItems: false,
           gate: gateRetiredGuidance,
+          // This page IS the programme's retirement list — the one surface in
+          // the batch where a listing means "the publisher says this is retired".
+          assertsRetirement: true,
         },
       ];
     case 'BESS':
@@ -190,14 +262,19 @@ function surfacePlansFor(entry: ProviderRegistryEntry): SurfacePlan[] {
       return [
         {
           url: entry.surfaces[0].url,
-          parse: (html, surfaceUrl) => ({
-            items: parseBofasPublicationsIndex(html, surfaceUrl).map((d) => ({
-              topic: d.topic,
-              discoveredUrl: d.versions[0].url,
-              statedLabels: [],
-            })),
-            excluded: [],
-          }),
+          parse: (html, surfaceUrl) => {
+            // The year the page prints beside each link, verbatim. See
+            // scripts/adapters/bofas.ts for what is and is not read.
+            const stated = parseBofasStatedLabels(html, surfaceUrl);
+            return {
+              items: parseBofasPublicationsIndex(html, surfaceUrl).map((d) => ({
+                topic: d.topic,
+                discoveredUrl: d.versions[0].url,
+                statedLabels: stated.get(d.versions[0].url) ?? [],
+              })),
+              excluded: [],
+            };
+          },
           expectItems: true,
         },
       ];
@@ -215,6 +292,12 @@ interface SurfaceReport {
   revalidated: boolean;
   requestMode: FetchOutcome['requestMode'];
   validatorsSent: string[];
+  /**
+   * How long this request waited before it was sent: queued behind earlier
+   * requests to the same host, plus the per-host pacing sleep. 0 on a host's
+   * first request when nothing else to that host is in flight.
+   */
+  pacedMs: number;
   conditionalSkippedReason: FetchOutcome['conditionalSkippedReason'];
   bodySha256: string;
   previousBodySha256: string | null;
@@ -243,7 +326,7 @@ interface SurfaceReport {
    * a SOURCE ASSERTION, attributed to the surface it was read from, and it
    * changes no catalogue status.
    */
-  retirementAssertions: Array<{ url: string; topic: string; guidelineId: string; statement: string }>;
+  retirementAssertions: RetirementAssertion[];
   error?: string;
 }
 
@@ -277,6 +360,7 @@ async function runProvider(
   index: ReturnType<typeof buildCatalogueIndex>,
   tokenStore: Record<string, { parameter: string; value: string; observedAt: string }>,
   discoveredAt: string,
+  plansFor: (entry: ProviderRegistryEntry) => SurfacePlan[],
 ): Promise<ProviderReport> {
   const base: ProviderReport = {
     provider: entry.key,
@@ -305,7 +389,7 @@ async function runProvider(
     };
   }
 
-  const plans = surfacePlansFor(entry);
+  const plans = plansFor(entry);
   if (plans.length === 0) {
     return {
       ...base,
@@ -348,31 +432,16 @@ async function runProvider(
       for (const item of parsed.items) {
         seenHere.push(normaliseCandidateUrl(item.discoveredUrl));
 
-        if (plan.gate) {
-          const reason = plan.gate(item, { index, seenEarlier });
-          if (reason !== null) {
-            filtered.push({ url: item.discoveredUrl, topic: item.topic, reason });
-            itemsFiltered++;
-            continue;
-          }
-          // Admitted by the gate on the strength of a catalogue match: record
-          // the publisher's retirement assertion before classification, which
-          // will report this item as matched and otherwise say nothing.
-          const hit = index.byUrlKey.get(normaliseCandidateUrl(item.discoveredUrl));
-          if (hit) {
-            retirementAssertions.push({
-              url: item.discoveredUrl,
-              topic: item.topic,
-              guidelineId: hit.guideline.id,
-              statement:
-                `The publisher lists this document under its own retired-guidance term at ` +
-                `${fetched.finalUrl}, and its URL matches catalogue entry ${hit.guideline.id}. ` +
-                'That is the PUBLISHER ASSERTING RETIREMENT — it is not a withdrawal we have ' +
-                'verified, no document was fetched or read, and no catalogue status has changed. ' +
-                'A human should open the page and decide what, if anything, the entry needs.',
-            });
-          }
+        const admission = admitItem(plan, item, { index, seenEarlier }, fetched.finalUrl);
+        if (!admission.admitted) {
+          filtered.push({ url: item.discoveredUrl, topic: item.topic, reason: admission.reason });
+          itemsFiltered++;
+          continue;
         }
+        // Recorded before classification, which will report a catalogue match
+        // as matched and otherwise say nothing. Only an opted-in retirement-list
+        // surface can produce one — see SurfacePlan.assertsRetirement.
+        if (admission.retirementAssertion) retirementAssertions.push(admission.retirementAssertion);
 
         // A redirect on the INDEX PAGE is provenance about the surface, not
         // evidence about this document, so it is recorded once on the surface
@@ -429,6 +498,7 @@ async function runProvider(
         revalidated: fetched.revalidated,
         requestMode: fetched.requestMode,
         validatorsSent: fetched.validatorsSent,
+        pacedMs: fetched.pacedMs,
         conditionalSkippedReason: fetched.conditionalSkippedReason,
         bodySha256: fetched.bodySha256,
         previousBodySha256: fetched.previousBodySha256,
@@ -461,6 +531,7 @@ async function runProvider(
         revalidated: false,
         requestMode: 'unconditional',
         validatorsSent: [],
+        pacedMs: 0,
         conditionalSkippedReason: null,
         bodySha256: '',
         previousBodySha256: null,
@@ -558,7 +629,7 @@ function renderCoverageReport(reports: ProviderReport[], generatedAt: string): s
           : `unconditional — ${WHY[s.conditionalSkippedReason ?? ''] ?? 'reason not recorded'}`;
         lines.push(
           `  - \`${s.url}\` — HTTP ${s.status}${s.revalidated ? ' (304, stored body reused)' : ''}, ` +
-            `${validator}, ${s.itemsParsed} item(s) parsed, ${s.excluded.length} rejected by the parser, ` +
+            `${validator}${s.pacedMs > 0 ? `, waited ${(s.pacedMs / 1000).toFixed(1)}s for per-host pacing (queue + sleep)` : ''}, ${s.itemsParsed} item(s) parsed, ${s.excluded.length} rejected by the parser, ` +
             `${s.filtered.length} filtered as out of scope`,
         );
         for (const f of s.filtered) {
@@ -614,6 +685,18 @@ function renderCoverageReport(reports: ProviderReport[], generatedAt: string): s
           lines.push(`  - ${l.fieldLabel ? `${l.fieldLabel}: ` : ''}"${l.value}" (${l.origin}, from \`${l.readFrom}\`)`);
         }
       }
+      if (c.matchedGuidelineId) {
+        // Shown beside the publisher-stated labels above, both verbatim. Neither
+        // string is parsed and no ordering between them is inferred: "(2025)"
+        // beside "April 2025" may be the same edition, or may not.
+        const held = GUIDELINES_DATA.find((g) => g.id === c.matchedGuidelineId);
+        const heldLabels = (held?.versions ?? [])
+          .filter((v) => !/fallback|index page/i.test(v.label))
+          .map((v) => `"${v.label}" (\`${v.url}\`)`);
+        if (heldLabels.length) {
+          lines.push(`- Catalogue entry's own version label(s), verbatim: ${heldLabels.join('; ')}`);
+        }
+      }
       if (c.softMatch) lines.push(`- Soft match: ${c.softMatch.statement}`);
       if (c.tokenChange) lines.push(`- Token observation: ${c.tokenChange.statement}`);
       for (const alt of c.urlAlternatives) {
@@ -631,11 +714,19 @@ function renderCoverageReport(reports: ProviderReport[], generatedAt: string): s
     'Two different things are counted separately. **Rejected by the parser** means markup the ' +
       'parser declined — a navigation link, a duplicate download button, an anchor with no text. ' +
       '**Filtered as out of scope** means an item the parser read correctly that a surface gate ' +
-      'declined on scope grounds, with its reason printed above. The EBI retired-guidance term is ' +
-      'the only gated surface: it is not specialty-filtered, so an item there is admitted only if ' +
-      'it matches our catalogue or was independently listed under the programme’s own ' +
-      'musculoskeletal/spine term. A filtered item is NOT a judgement about the document — only ' +
-      'about whether it falls inside this hub’s scope.',
+      'declined on scope grounds, with its reason printed above. The EBI retired-guidance term, ' +
+      'for example, is not specialty-filtered, so an item there is admitted only if it matches ' +
+      'our catalogue or was independently listed under the programme’s own musculoskeletal/spine ' +
+      'term. A filtered item is NOT a judgement about the document — only about whether it falls ' +
+      'inside this hub’s scope — and being filtered, or admitted by a filter, does NOT mean the ' +
+      'publisher retired it.',
+  );
+  lines.push('');
+  lines.push(
+    '**PUBLISHER-ASSERTED RETIREMENT** lines come only from a surface explicitly marked as the ' +
+      'publisher’s own retirement list (currently only EBI’s retired-guidance term), and only for ' +
+      'an item whose URL matches a catalogue entry. No other surface, and no scope filter, can ' +
+      'produce one.',
   );
   lines.push('');
   lines.push('## Cache behaviour');
@@ -645,14 +736,23 @@ function renderCoverageReport(reports: ProviderReport[], generatedAt: string): s
       `prevents a request. The on-disk store supplies validators and a previous body hash; a stored ` +
       `validator is trusted for ${MAX_VALIDATOR_AGE_MS / 3_600_000}h, after which the request is made ` +
       'unconditionally even if the provider would have answered 304. A 304 means "the provider says ' +
-      'this did not change since the validator we sent" — not "nothing was published".',
+      'this did not change since the validator we sent" — not "nothing was published". ' +
+      `Requests to the same host are spaced at least ${MIN_HOST_INTERVAL_MS / 1000}s apart.`,
   );
   lines.push('');
 
   return lines.join('\n');
 }
 
-export async function runDiscovery(providerFilter?: string): Promise<{
+export async function runDiscovery(
+  providerFilter?: string,
+  /**
+   * Test seam: the surface plans to run. Defaults to surfacePlansFor. Lets a
+   * test drive a full sweep with a plan the shipped code does not (yet) have —
+   * e.g. a scope filter on BOFAS — without adding one to production.
+   */
+  plansFor: (entry: ProviderRegistryEntry) => SurfacePlan[] = surfacePlansFor,
+): Promise<{
   reports: ProviderReport[];
   exitCode: number;
 }> {
@@ -680,11 +780,11 @@ export async function runDiscovery(providerFilter?: string): Promise<{
   const reports: ProviderReport[] = [];
   for (const entry of selected) {
     if (entry.participation === 'active') {
-      console.log(`[discover] ${entry.key}: fetching ${surfacePlansFor(entry).length} surface(s)`);
+      console.log(`[discover] ${entry.key}: fetching ${plansFor(entry).length} surface(s)`);
     } else {
       console.log(`[discover] ${entry.key}: skipped (${entry.participation}) — no request made`);
     }
-    reports.push(await runProvider(entry, index, tokenStore, discoveredAt));
+    reports.push(await runProvider(entry, index, tokenStore, discoveredAt, plansFor));
   }
 
   writeTokenStore(tokenStore);
@@ -737,6 +837,75 @@ export async function runDiscovery(providerFilter?: string): Promise<{
   return { reports, exitCode: failed.length > 0 || unbalanced.length > 0 ? 1 : 0 };
 }
 
+/**
+ * Exit status when the watchdog has to force termination.
+ *
+ * Deliberately NOT the sweep's own result, and deliberately not 1 either. Once
+ * termination is forced, the sweep's result can no longer be vouched for as the
+ * process's outcome — something it started was still running — so a forced exit
+ * is NEVER reported as success, and is distinguishable from an ordinary failed
+ * sweep (1) by anything reading the status.
+ */
+export const WATCHDOG_EXIT_CODE = 3;
+
+/**
+ * What the watchdog reports when it fires. Pure, so the decision is testable
+ * without waiting for a real timeout.
+ */
+export function watchdogVerdict(
+  pendingExitCode: number | string | null | undefined,
+  activeResources: string[],
+  timeoutMs: number,
+): { exitCode: number; message: string } {
+  const pending =
+    pendingExitCode === undefined || pendingExitCode === null || pendingExitCode === ''
+      ? 'none set'
+      : String(pendingExitCode);
+  const sweepSaid =
+    pending === '0' ? 'success (0)' : pending === 'none set' ? 'no result recorded' : `failure (${pending})`;
+  return {
+    exitCode: WATCHDOG_EXIT_CODE,
+    message:
+      `[discover] FORCED EXIT: the event loop was still busy ${timeoutMs / 1000}s after the sweep ` +
+      `finished. The sweep's own result was ${sweepSaid}; exiting ${WATCHDOG_EXIT_CODE} instead, ` +
+      'because a forced termination is never reported as success. Still open: ' +
+      `${activeResources.length ? activeResources.join(', ') : 'nothing Node can name'}. ` +
+      'Find what holds that handle rather than raising the timeout.',
+  };
+}
+
+/**
+ * Arm the exit watchdog. The timer is unref()d: it never itself keeps the
+ * process alive, so on a clean run Node exits as soon as the loop drains and
+ * this never fires. It fires only if something else is holding the loop open.
+ *
+ * `process.exit()` is used here, and only here, because by the time it runs the
+ * alternative is a job that never ends. On Windows that forced exit can itself
+ * hit the libuv teardown assertion and die with 127 — still nonzero, and the
+ * message above has already been written to stderr by then.
+ */
+export function armExitWatchdog(
+  timeoutMs: number = EXIT_WATCHDOG_MS,
+  deps: {
+    exit: (code: number) => void;
+    error: (message: string) => void;
+    resources: () => string[];
+  } = {
+    exit: (code) => process.exit(code),
+    error: (message) => console.error(message),
+    resources: () => process.getActiveResourcesInfo(),
+  },
+): NodeJS.Timeout {
+  const timer = setTimeout(() => {
+    const verdict = watchdogVerdict(process.exitCode, deps.resources(), timeoutMs);
+    deps.error(verdict.message);
+    process.exitCode = verdict.exitCode;
+    deps.exit(verdict.exitCode);
+  }, timeoutMs);
+  timer.unref();
+  return timer;
+}
+
 const isMain = process.argv[1]
   ? import.meta.url === pathToFileURL(process.argv[1]).href
   : false;
@@ -744,10 +913,30 @@ const isMain = process.argv[1]
 if (isMain) {
   const idx = process.argv.indexOf('--provider');
   const filter = idx >= 0 ? process.argv[idx + 1] : undefined;
+  // Set process.exitCode and let Node exit on its own; do NOT call
+  // process.exit(). On Windows, a forced exit while a just-closed TLS socket is
+  // still being torn down trips a libuv assertion (src\win\async.c,
+  // "!(handle->flags & UV_HANDLE_CLOSING)") and the process dies with 127 —
+  // AFTER a successful sweep has written its reports. Reproduced live against
+  // BOFAS, whose server closes the connection after every response: 8 of 9
+  // forced exits crashed, 3 of 3 natural exits returned the real code. A
+  // wrapper reading 127 would report a good run as failed, which is exactly
+  // the failure-reporting this script exists to keep honest.
+  //
+  // Natural exit needs an empty event loop. The pacing sleep is awaited, the
+  // request timeout is cleared in a finally, and fetch's idle sockets do not
+  // hold the loop open. Should anything ever regress that, armExitWatchdog
+  // fires — and only then — so a run can never hang a job, and never reports
+  // success when it does.
   runDiscovery(filter)
-    .then(({ exitCode }) => process.exit(exitCode))
+    .then(({ exitCode }) => {
+      process.exitCode = exitCode;
+    })
     .catch((err) => {
       console.error('[discover] sweep aborted:', err);
-      process.exit(1);
+      process.exitCode = 1;
+    })
+    .finally(() => {
+      armExitWatchdog();
     });
 }
