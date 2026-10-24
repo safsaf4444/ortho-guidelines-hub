@@ -15,7 +15,7 @@ The database CHECK accepts nine `change_reason` values. **Four** of them can be 
 | Function (who may call it) | Accepts exactly | Connected producer or caller on this branch |
 |---|---|---|
 | `stage_sync_candidates` (service role) | `NEW_GUIDELINE`, `POSSIBLE_SAME_DOCUMENT`; pipeline `sync-providers` only | **Connected.** `sync-providers.ts` writes `candidates.json`, and `stage-candidates.ts` calls the function. It runs on manual workflow dispatch or locally, against a database with the migration, which today means local only. |
-| `stage_discovery_candidate` (service role) | `NEW_GUIDELINE`, `POSSIBLE_NEW_EDITION`, `EDITION_TOKEN_CHANGED`; producer `discover` only; evidence validated (see "Discovery evidence" below) | **Not connected.** Implemented and tested by direct calls. #220's `discover.ts` writes reports only, and no adapter calls this function. |
+| `stage_discovery_candidate` (service role) | `NEW_GUIDELINE`, `POSSIBLE_NEW_EDITION`, `EDITION_TOKEN_CHANGED`; producer `discover` only; evidence validated (see "Discovery evidence" below) | **Connected, manually:** `scripts/stage-discovery.ts` stages one #220 report when an operator runs it in write mode against an explicit target (see "Discovery staging adapter" below). No workflow runs it. |
 | `approve_staged_guideline` (editor) | `NEW_GUIDELINE` rows only, when `pending`, not linked to or matching a catalogue entry exactly or loosely, and not on the hold list (`RQ002`, checking both the row's document and the links being published). Each approval is logged in `staged_discovery_decisions` in the same transaction | Connected: dashboard Approve. |
 | `reject_staged_candidate` (editor) | Without 20261025: any class, **`pending` only**. With `20261025_reject_open_candidate.sql`: any **open** row (`pending` or `deferred`); a row with an open follow-up needs `p_confirm_open_follow_up = true` (else `RQ001`); every rejection is logged with the previous status and outcome | Connected: dashboard Reject (with a confirmation checkbox for open follow-ups). |
 | `resolve_discovery_candidate` (editor) | `POSSIBLE_NEW_EDITION`, `EDITION_TOKEN_CHANGED`, `POSSIBLE_SAME_DOCUMENT`; `pending` or `deferred` | Connected: dashboard decision buttons, a required note, and per-class actions from `src/lib/review-actions.ts`. |
@@ -44,10 +44,10 @@ The database CHECK accepts nine `change_reason` values. **Four** of them can be 
 
 | `change_reason` | Staged by | Intended producer | New-entry approval | Resolve actions (open ones keep the row in the queue) |
 |---|---|---|---|---|
-| `NEW_GUIDELINE` | `stage_sync_candidates`, `stage_discovery_candidate` | `sync-providers` (connected); discovery (not connected) | **Yes**, under the conditions above | — (approve or reject) |
+| `NEW_GUIDELINE` | `stage_sync_candidates`, `stage_discovery_candidate` | `sync-providers` (connected); discovery (adapter, manual) | **Yes**, under the conditions above | — (approve or reject) |
 | `POSSIBLE_SAME_DOCUMENT` | `stage_sync_candidates` | `sync-providers` (connected): a loose-only URL match | No (42809) | `same-document` closes it; `different-document` (open); `defer` (open) |
-| `POSSIBLE_NEW_EDITION` | `stage_discovery_candidate` | discovery, #220 (not connected) | No (42809) | `same-document`, `no-action` close it; `different-document`, `new-edition`, `defer` (open) |
-| `EDITION_TOKEN_CHANGED` | `stage_discovery_candidate` | discovery, #220 (not connected) | No (42809) | `acknowledged` closes it; `needs-document-check`, `defer` (open) |
+| `POSSIBLE_NEW_EDITION` | `stage_discovery_candidate` | discovery, #220 (adapter, manual) | No (42809) | `same-document`, `no-action` close it; `different-document`, `new-edition`, `defer` (open) |
+| `EDITION_TOKEN_CHANGED` | `stage_discovery_candidate` | discovery, #220 (adapter, manual) | No (42809) | `acknowledged` closes it; `needs-document-check`, `defer` (open) |
 | `CONTENT_DRIFT` | none on this branch | content-hash detector, #174 (paused) | No | — |
 | `REVISED`, `WITHDRAWN`, `URL_MOVED`, `UNREACHABLE_LINK` | none | reserved; no producer | No | — |
 
@@ -75,7 +75,38 @@ Two places hold their own copies of the reason list:
 
 `src/lib/candidates.ts` declares `CANDIDATE_SCHEMA_VERSION = 2`. File mode does not validate the version.
 
-Discovery reports from #220 have their own `reportSchemaVersion`. No adapter yet stages them; `stage_discovery_candidate` exists but nothing calls it.
+Discovery reports from #220 have their own `schemaVersion` (v1). `scripts/stage-discovery.ts` stages them; it refuses any other version before doing anything.
+
+**Discovery staging adapter** (`scripts/stage-discovery.ts`)
+- **Modes:**
+  - Dry run is the default. It makes no database contact and reads no `.env` file.
+  - Writing needs `--write` and `--target <url>`. A non-loopback target also needs `--allow-remote-target`. The service key must be in `SUPABASE_SERVICE_ROLE_KEY`.
+  - There is no URL fallback: `SUPABASE_URL` and the `VITE_` variables are never read.
+- **What it submits:** the three discovery classes, verbatim. That covers the URL, alternatives, stated labels, soft-match or token evidence and notes; the database derives the keys and validates the evidence.
+- **Never submitted, always listed:**
+  - publisher retirement assertions (report-only);
+  - any other class;
+  - providers whose discovery run failed or was skipped;
+  - providers it does not own.
+- **Outcomes:** `staged`, `existing`, `already_open`, `held`, `unsupported` (refused by the database as unsupported or contradictory, or not a stageable class), `failed`, `not-owner`, `unowned`, `provider-not-ok`.
+  - It exits 1 on `failed`, `unsupported` or `unowned`.
+- **Run identity:** `discover:` + sha256 over the canonical JSON (keys sorted, candidates sorted by `discoveryId`) of the schema version and the exact payloads submitted.
+  - The payloads include each candidate's own `discoveredAt`, the sweep time.
+  - The report's `generatedAt`, `note`, coverage and fetch metadata, formatting and key order are excluded. So re-stamping or re-saving a report keeps the run id, and a retry adds no evidence.
+  - A new sweep is a new run: its sightings are appended to the existing rows, never filed as new rows.
+  - (The sync path's run id is unchanged. It still hashes the whole `candidates.json`, including its `generatedAt`.)
+
+**Provider ownership** (`scripts/lib/staging-ownership.ts`): one staging producer per provider, consulted by both `stage-candidates.ts` and `stage-discovery.ts`.
+
+| Provider | Staged by | Note |
+|---|---|---|
+| BOA, BSG, BSSH | `sync-providers` | Only sync has adapters for them |
+| BOFAS | `sync-providers` | A transition to `discover` is **awaiting approval**. Until approved, discovery only shows BOFAS in a dry-run comparison (`--compare-sync candidates.json`). |
+| NHS EBI, BESS | `discover` | Only discovery has adapters for them |
+
+- A provider owned by the other producer is listed as `not-owner`.
+- A provider in no row is listed as `unowned` and fails the run. Adding a provider is a decision, not a default.
+- **Enforced by the scripts, not the database.** A direct service-role RPC call bypasses it.
 
 ## 3. Dependencies between migration, scripts and dashboard
 
@@ -150,7 +181,7 @@ Both keys are pinned in TypeScript and SQL by `scripts/tests/fixtures/url-key-ve
 - [ ] Run the real `sync-providers.ts` with its real adapters (network, read-only) into `stage-candidates.ts` against the local stack, and record how many comparison rows the current catalogue produces.
 - [ ] Test the workflow's run sequence locally: dry run, then live, then rerun.
 - [x] Rehearse the migration on synthetic, production-shaped data, including pre-migration rows, a held legacy row, the duplicate pre-flight and the rejection-gap check, without touching production (`run.ts rehearsal`). A copy of real production data has not been used.
-- [ ] Build a discovery staging adapter for `stage_discovery_candidate` and test it end to end. (#220 is merged into this branch, and the Hide-test failure is gone.)
+- [x] Build a discovery staging adapter for `stage_discovery_candidate` and test it end to end (`run.ts adapter`: the actual script against a local stack).
 
 ## 7. Open decisions (deliberately unchanged on this branch)
 

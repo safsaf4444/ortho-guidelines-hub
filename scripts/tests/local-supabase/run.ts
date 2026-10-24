@@ -10,7 +10,8 @@
  *   integration-25   the same on 20261024 + 20261025 (adds section 9)
  *   e2e              the dashboard in Chromium (./e2e.ts); prepares its own schema states
  *   rehearsal        the upgrade rehearsal (./rehearsal.ts); prepares its own schema states
- *   all              all four, in that order
+ *   adapter          the discovery staging adapter, run for real (./discovery-adapter.ts), on 20261024 + 20261025
+ *   all              all five, in that order
  *   stop             stop the stack and delete its data (also: --stop after the suites)
  *
  * Each suite runs as a child process with ONLY the loopback URL and the local
@@ -23,7 +24,7 @@ import path from 'node:path';
 import { chromium } from 'playwright';
 import { dockerAvailable, HERE, localEnv, prepareSchema, REPO, stopStack, testEnv, WORK } from './stack';
 
-const SUITES = ['integration', 'integration-25', 'e2e', 'rehearsal'] as const;
+const SUITES = ['integration', 'integration-25', 'e2e', 'rehearsal', 'adapter'] as const;
 type Suite = typeof SUITES[number];
 
 const args = process.argv.slice(2);
@@ -42,6 +43,7 @@ const SCRIPT: Record<Suite, string> = {
   'integration-25': path.join(REPO, 'scripts/tests/integration/discovery-queue.local.test.ts'),
   e2e: path.join(HERE, 'e2e.ts'),
   rehearsal: path.join(HERE, 'rehearsal.ts'),
+  adapter: path.join(HERE, 'discovery-adapter.ts'),
 };
 
 function runChild(suite: Suite, env: Record<string, string>): Promise<{ code: number; summary: string }> {
@@ -77,8 +79,8 @@ if (suites.length > 0) {
   for (const suite of suites) {
     console.log(`\n════════ ${suite} ════════`);
     try {
-      if (suite === 'integration' || suite === 'integration-25') {
-        prepareSchema({ with24: true, with25: suite === 'integration-25' });
+      if (suite === 'integration' || suite === 'integration-25' || suite === 'adapter') {
+        prepareSchema({ with24: true, with25: suite !== 'integration' });
       }
       // e2e and rehearsal prepare their own schema states; the stack must be up for localEnv().
       if (suite === 'e2e' || suite === 'rehearsal') prepareSchema({ with24: false, with25: false });

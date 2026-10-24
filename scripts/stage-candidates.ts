@@ -105,6 +105,10 @@
  *               (reads ./candidates.json; needs SUPABASE_URL +
  *                SUPABASE_SERVICE_ROLE_KEY, or the VITE_ equivalents)
  * Dry run:      DRY_RUN=true npx tsx scripts/stage-candidates.ts
+ *
+ * Provider ownership: only providers whose staging owner is sync-providers
+ * (scripts/lib/staging-ownership.ts) are submitted. Others are listed as
+ * not-owner; a provider with no owner is listed as unowned and fails the run.
  */
 import fs from 'node:fs';
 import { createHash } from 'node:crypto';
@@ -112,6 +116,7 @@ import path from 'node:path';
 import { config } from 'dotenv';
 import { createClient } from '@supabase/supabase-js';
 import { CANDIDATE_SCHEMA_VERSION, documentIdentityKey, type IngestionCandidate } from './lib/ingestion';
+import { checkOwnership } from './lib/staging-ownership';
 
 // Local convenience only; in CI these arrive as real environment variables and
 // dotenv finds no file to load. .env.local first, matching scripts/seed.ts.
@@ -323,10 +328,32 @@ async function main() {
   console.log('=== Stage candidates into staged_guidelines ===');
   console.log(DRY_RUN ? 'MODE: DRY RUN — no database writes.\n' : 'MODE: LIVE — new candidates will be filed.\n');
 
-  const { candidates, runId } = readCandidates();
+  const { candidates: read, runId } = readCandidates();
+
+  // One staging producer per provider (scripts/lib/staging-ownership.ts).
+  // Never silently dropped: every candidate not submitted is listed with why.
+  // A provider owned by discovery is expected and not an error; a provider
+  // with NO owner fails the run (after the owned candidates are filed).
+  const candidates: IngestionCandidate[] = [];
+  let unowned = 0;
+  const notSubmitted: string[] = [];
+  for (const c of read) {
+    const own = checkOwnership(c.provider, 'sync-providers');
+    if (own.ok) { candidates.push(c); continue; }
+    if (own.status === 'unowned') unowned++;
+    notSubmitted.push(`   ⊘ [${c.candidateId}] ${c.provider} — "${c.topic}": ${own.status}: ${own.message}`);
+  }
+  if (notSubmitted.length > 0) {
+    console.warn(`[Stage] NOT submitted, ${notSubmitted.length} candidate(s) (provider ownership):`);
+    notSubmitted.forEach(l => console.warn(l));
+  }
+  if (unowned > 0) {
+    console.error(`[Stage] ${unowned} candidate(s) come from a provider with no staging owner. The run will exit 1.`);
+    process.exitCode = 1;
+  }
 
   if (candidates.length === 0) {
-    console.log('[Stage] Nothing to file. Exiting cleanly.');
+    console.log('[Stage] Nothing to file.');
     return;
   }
 

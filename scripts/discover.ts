@@ -21,8 +21,10 @@
  *     are structurally not ChangeReason values and cannot satisfy a
  *     `change_reason` column — see scripts/lib/discovery-classification.ts for
  *     why that matters while PR #174's 42809 guard is unapplied.
- *   * NO automatic consumer. The files land in reports/ (gitignored), are read
- *     by a person, and nothing downstream picks them up.
+ *   * NO automatic consumer. The files land in reports/ (gitignored) and are
+ *     read by a person. scripts/stage-discovery.ts can stage one into the
+ *     review queue, but only when an operator runs it in write mode against
+ *     an explicit target; nothing runs it automatically.
  *   * NO fetch of a provider whose participation is not 'active'. ROS is
  *     `awaiting-approval` and is never requested.
  *

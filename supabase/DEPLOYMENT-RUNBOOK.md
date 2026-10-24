@@ -8,7 +8,7 @@ For: whoever applies `20261024_discovery_review_queue.sql` and `20261025_reject_
 
 From the start of §3 until §6 is complete:
 
-- **No staging run of any kind.** The "Guideline & Provider Sync" workflow schedule must stay disabled (it is today: manual dispatch only). Do not dispatch it, and do not run `npx tsx scripts/stage-candidates.ts` locally from any checkout.
+- **No staging run of any kind.** The "Guideline & Provider Sync" workflow schedule must stay disabled (it is today: manual dispatch only). Do not dispatch it, and do not run `npx tsx scripts/stage-candidates.ts` locally from any checkout. Do not run `scripts/stage-discovery.ts` in write mode either; its dry run makes no database contact and is always safe.
   - The OLD script against the upgraded database fails its whole batch (23505) as soon as one document is already open. When it doesn't fail, it files rows in the old lowercased shape.
   - The NEW script against the old database exits 1 and writes nothing.
   - Rehearsed: R2, R6.
@@ -73,7 +73,7 @@ P8 uses a coarser key than the migration, so "no rows" guarantees the migration'
 | 2 | Apply `20261025_reject_open_candidate.sql` (requires step 1), **immediately after step 1** (see "History gap" below) | works (2-argument reject is still accepted) | not deployed yet | must not run | not deployed yet |
 | 3 | Verify: the queries at the end of each migration; preflight P3 = `t,t,t`; P10 unchanged from step 0; the rejection-gap check below | works | — | — | — |
 | 4 | Merge the branch to `main` (this deploys the frontend via `deploy.yml`) | replaced | works | — | deployed |
-| 5 | First staging: manual dispatch with `dry_run = true`, then `false` | — | shows results | — | runs |
+| 5 | First staging: manual dispatch with `dry_run = true`, then `false`. Discovery reports are staged separately, only when the owner chooses: `stage-discovery.ts` dry run first, then `--write --target <url> --allow-remote-target`. | — | shows results | — | runs |
 
 Expect many `POSSIBLE_SAME_DOCUMENT` rows on the first live run, wherever catalogue links differ only in letter case from the providers' links. That is the intended visibility, not an error.
 

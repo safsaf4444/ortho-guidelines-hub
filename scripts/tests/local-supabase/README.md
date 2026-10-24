@@ -12,11 +12,15 @@ These tests run the review-queue migrations, scripts and dashboard against a **d
 | `integration` | `scripts/tests/integration/discovery-queue.local.test.ts`: keys, permissions, staging, evidence validation, holds, approval, history, the real sync scripts | 20261024 |
 | `integration-25` | The same suite, plus section 9 (rejecting open rows) | 20261024 + 20261025 |
 | `e2e` | `e2e.ts`: the real app (Vite) in Chromium. Covers queue actions, holds, draft privacy, and "feature unavailable" states | Old schema, then 20261024, then 20261025 |
+| `adapter` | `discovery-adapter.ts`: the **actual** `scripts/stage-discovery.ts` and `scripts/stage-candidates.ts`, run as an operator would. Covers dry run (a decoy server proves zero requests), write-mode refusals, verbatim evidence, retry, re-stamped `generatedAt`, a new sweep, editor decisions left unchanged, partial-failure retry, competing producers, and ownership on both paths | 20261024 + 20261025 |
 | `rehearsal` | `rehearsal.ts`: `supabase/DEPLOYMENT-RUNBOOK.md` step by step, run with the **old** scripts (from `REHEARSAL_OLD_REF`, default `f2b71d9`) and with the new ones. Covers the preflight, the history-gap query and compatibility at every step | Old schema, then upgraded |
 
 ## Prerequisites
 
-- Node and `npm ci` (Playwright is a pinned devDependency).
+- Node and `npm ci`.
+  - `playwright` is a devDependency pinned to exactly **1.55.0** (no caret).
+  - It has no install scripts, so `npm ci`, including in CI and in `deploy.yml`, downloads no browser.
+  - Keep the pin exact. A version change also changes the Chromium build that `npx playwright install chromium` fetches.
 - Docker Desktop or a Docker daemon, running.
 - Chromium for Playwright, once per machine: `npx playwright install chromium`.
   - It installs into Playwright's default cache. Set `PLAYWRIGHT_BROWSERS_PATH` to put it elsewhere; the runner passes that variable through.
@@ -32,7 +36,7 @@ From the repository root:
 npx tsx scripts/tests/local-supabase/run.ts all --stop
 ```
 
-- Instead of `all`, name suites: `integration`, `integration-25`, `e2e`, `rehearsal`.
+- Instead of `all`, name suites: `integration`, `integration-25`, `e2e`, `rehearsal`, `adapter`.
 - Each suite starts the stack if it is not running, or resets its database if it is. Each then prepares the schema it needs.
 - Output is printed and saved to `scripts/tests/local-supabase/.work/logs/<suite>.log`.
 - The exit code is 1 if any suite fails.

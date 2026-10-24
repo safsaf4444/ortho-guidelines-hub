@@ -493,7 +493,7 @@ try {
 
   const newA = syncCand('BOFAS', 'https://www.bofas.org.uk/Portals/0/Sync/New-A.PDF?ver=T1&Edition=2', 'Sync new A');
   const newB = syncCand('BSG', 'https://www.example.org/Docs/New B.pdf', 'Sync new B');
-  const sameDocOtherId = syncCand('BSG2', 'https://www.example.org/Docs/New B.pdf', 'Sync new B, other adapter');
+  const sameDocOtherId = syncCand('BSSH', 'https://www.example.org/Docs/New B.pdf', 'Sync new B, other adapter');
   const rejected = syncCand('BOFAS', 'https://www.bofas.org.uk/Portals/0/Sync/Rejected.pdf', 'Sync previously rejected');
   const openElsewhere = syncCand('BOFAS', 'https://www.bofas.org.uk/Portals/0/Research/Race.pdf?ver=sync', 'Open under discovery');
   const heldFalcon = syncCand('BOFAS', falcon, 'UK-FALCON via sync');
@@ -603,8 +603,8 @@ try {
     `${colA.versions[0].url}<-${colA.candidateId} | ${colB.versions[0].url}<-${colA.candidateId}`);
   const rcAgain = runStage(fileC);
   eq('re-running the same file: both existing, collision still reported, no new rows or evidence', [rcAgain.status, counts(rcAgain.out).existing, counts(rcAgain.out).evidence, /candidate-id collisions: 1/.test(rcAgain.out)], [0, 2, 0, true]);
-  const otherProvider = syncCand('BSG3', 'https://www.example.org/case/doc.pdf', 'Case variant B, own id');
-  const rc2 = runStage(writeFile('candidates-collision-2.json', '2026-11-14T07:00:00.000Z', [{ adapter: 'Local C', provider: 'BSG3', candidates: [otherProvider] }]));
+  const otherProvider = syncCand('BOA', 'https://www.example.org/case/doc.pdf', 'Case variant B, own id');
+  const rc2 = runStage(writeFile('candidates-collision-2.json', '2026-11-14T07:00:00.000Z', [{ adapter: 'Local C', provider: 'BOA', candidates: [otherProvider] }]));
   eq('another candidate for the second document finds the row of THAT document already open, not the first', [rc2.status, counts(rc2.out).alreadyOpen, new RegExp(`open as ${colA.candidateId}~[0-9a-f]{12} `).test(rc2.out)], [0, 1, true]);
 
   // A row filed by the OLD script: producer NULL, primary_url = lowercased match key.
@@ -691,23 +691,23 @@ try {
   console.log('\n[8e] Derived collision ids: retries, reordered input, and first filing');
   const derivedId = (cid: string, url: string) => `${cid}~${createHash('md5').update(documentIdentityKey(url), 'utf8').digest('hex').slice(0, 12)}`;
   const assignment = (cid: string) => psql(`select string_agg(candidate_id||' '||primary_url, ' | ' order by candidate_id) from public.staged_guidelines where candidate_id like ${dq(cid + '%')}`).out;
-  const oA = syncCand('ORD', 'https://www.example.org/Order/Doc.pdf', 'Order A');
-  const oB = syncCand('ORD', 'https://www.example.org/order/doc.pdf', 'Order B');
+  const oA = syncCand('BOA', 'https://www.example.org/Order/Doc.pdf', 'Order A');
+  const oB = syncCand('BOA', 'https://www.example.org/order/doc.pdf', 'Order B');
   check('setup: one candidate id for two documents', oA.candidateId === oB.candidateId);
-  const fBA = writeFile('order-ba.json', '2026-12-05T06:00:00.000Z', [{ adapter: 'Local', provider: 'ORD', candidates: [oB, oA] }]);
+  const fBA = writeFile('order-ba.json', '2026-12-05T06:00:00.000Z', [{ adapter: 'Local', provider: 'BOA', candidates: [oB, oA] }]);
   const o1 = runStage(fBA);
   const expected = `${oA.candidateId} ${oB.versions[0].url} | ${derivedId(oA.candidateId, oA.versions[0].url)} ${oA.versions[0].url}`;
   eq('first filing [B, A]: B takes the base id, A the derived id (formula recomputed independently)', [o1.status, assignment(oA.candidateId)], [0, expected]);
   const o2 = runStage(fBA);
   eq('retry of the same file: assignment unchanged, nothing new', [o2.status, counts(o2.out).staged, counts(o2.out).evidence, assignment(oA.candidateId)], [0, 0, 0, expected]);
-  const o3 = runStage(writeFile('order-ab.json', '2026-12-12T06:00:00.000Z', [{ adapter: 'Local', provider: 'ORD', candidates: [oA, oB] }]));
+  const o3 = runStage(writeFile('order-ab.json', '2026-12-12T06:00:00.000Z', [{ adapter: 'Local', provider: 'BOA', candidates: [oA, oB] }]));
   eq('a later run with REVERSED order: both existing, assignment unchanged, sighting on each own row', [o3.status, counts(o3.out).existing, counts(o3.out).staged, assignment(oA.candidateId)], [0, 2, 0, expected]);
   eq('…each sighting landed on its own document row', psql(`select s.primary_url||' <- '||e.observed_topic from public.staged_discovery_evidence e join public.staged_guidelines s on s.id=e.staged_id where e.discovery_run_id like 'sync-providers:2026-12-12%'`).out.split('\n').sort(),
     [`${oA.versions[0].url} <- ${oA.topic}`, `${oB.versions[0].url} <- ${oB.topic}`].sort());
   // The FIRST filing depends on arrival order: a fresh id pair filed [A, B] gives A the base id.
-  const pA = syncCand('ORD2', 'https://www.example.org/Order2/Doc.pdf', 'Order A2');
-  const pB = syncCand('ORD2', 'https://www.example.org/order2/doc.pdf', 'Order B2');
-  runStage(writeFile('order-ab-fresh.json', '2026-12-05T07:00:00.000Z', [{ adapter: 'Local', provider: 'ORD2', candidates: [pA, pB] }]));
+  const pA = syncCand('BSSH', 'https://www.example.org/Order2/Doc.pdf', 'Order A2');
+  const pB = syncCand('BSSH', 'https://www.example.org/order2/doc.pdf', 'Order B2');
+  runStage(writeFile('order-ab-fresh.json', '2026-12-05T07:00:00.000Z', [{ adapter: 'Local', provider: 'BSSH', candidates: [pA, pB] }]));
   eq('documented limit: on FIRST filing, whichever document arrives first takes the base id',
     assignment(pA.candidateId), `${pA.candidateId} ${pA.versions[0].url} | ${derivedId(pA.candidateId, pB.versions[0].url)} ${pB.versions[0].url}`);
 

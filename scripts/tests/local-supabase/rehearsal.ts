@@ -252,7 +252,7 @@ try {
     o3.status === 0 && q(`select coalesce(producer,'NULL')||'|'||primary_url from public.staged_guidelines where id='${idOf(U.J)}'`) === `NULL|${old.normaliseCandidateUrl(U.J)}`, o3.out.slice(-300));
   const n1 = runScript(NEW_SCRIPT, writeFile('v2-step1.json', cur.CANDIDATE_SCHEMA_VERSION, '2026-10-22T06:00:00.000Z', [
     candidate(cur, 'BOFAS', U.A, 'Synthetic alpha (DNN ver token)'), candidate(cur, 'BOFAS', U.I, 'Synthetic interim'),
-    candidate(cur, 'BOFAS3', U.DUP1, 'Same document as an open row, other provider')]));
+    candidate(cur, 'BSG', U.DUP1, 'Same document as an open row, other provider')]));
   const num = (label: string) => Number(n1.out.match(new RegExp(`${label}\\s+(\\d+)`))?.[1] ?? NaN);
   eq('NEW script: legacy row existing, new row staged, same-document row already open; exit 0',
     [n1.status, num('staged \\(new\\)'), num('existing'), num('already open'), num('failed')], [0, 1, 1, 1, 0]);
