@@ -355,8 +355,20 @@ check('the reason survives a failure', /\.\.\.rejecting,\s*\n\s*busy: false,/.te
 check('an unconfirmed reject is not reported as a refusal',
   /classifyWriteFailure\(err\) !== 'refused'/.test(dash) && /UNCONFIRMED_SAVE_MESSAGE/.test(dash));
 // Hide and Reject must not read as the same action.
+// "Hide" must be a button label on a line of its own — not merely a word in a
+// comment or tooltip. Matched as a whole line so it is independent of line
+// endings: on a Windows checkout with core.autocrlf the file is CRLF, and a
+// literal `Hide\n` never matched there. Checked against BOTH endings below so a
+// regression to an LF-only pattern fails on every machine, not just Windows.
+const HIDE_LABEL_LINE = /^[ \t]*Hide[ \t]*\r?$/m;
+const dashLf = dash.replace(/\r\n/g, '\n');
+const dashCrlf = dashLf.replace(/\n/g, '\r\n');
 check('persistent Reject and temporary Hide are separate controls',
-  /Reject…/.test(dash) && /Hide\n/.test(dash) && /Writes nothing, and the card returns on reload/.test(dash));
+  /Reject…/.test(dash) && HIDE_LABEL_LINE.test(dash) && /Writes nothing, and the card returns on reload/.test(dash));
+check('the Hide-label check holds with LF and with CRLF line endings',
+  HIDE_LABEL_LINE.test(dashLf) && HIDE_LABEL_LINE.test(dashCrlf));
+check('the Hide-label check still rejects "Hide" inside other text',
+  !HIDE_LABEL_LINE.test('title="Hides this card"\r\n') && !HIDE_LABEL_LINE.test('<strong>Hide</strong> is temporary\n'));
 check('Reject is offered only for a candidate with a queue row', /canReject=\{Boolean\(candidate\.stagedId\)\}/.test(dash));
 // A re-wrapped error loses `error.code`, and the code is the only proof the
 // server answered. Without carrying the refusal across, the dashboard labels a
