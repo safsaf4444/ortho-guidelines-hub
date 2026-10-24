@@ -4,7 +4,7 @@ Scope: `supabase/migrations/20261024_discovery_review_queue.sql`, `scripts/stage
 `scripts/sync-providers.ts` and `scripts/lib/ingestion.ts` on `feat/discovery-review-queue-schema`.
 
 **Status:** verified on a disposable local Supabase only. **Not applied to production.** The
-dashboard has not been changed and has not been run against this schema (see the checklist at the end).
+dashboard has been updated for this schema and verified against it locally with Playwright (see the checklist at the end).
 
 ## 1. Change reasons
 
@@ -35,7 +35,7 @@ Rejecting a deferred row needs `20261025_reject_open_candidate.sql`. Without it,
 
 Two places hold their own copies of the reason list:
 - `ChangeReason` in `scripts/lib/ingestion.ts` has 7 members. It lacks the two discovery classes, which #220's report types carry.
-- The dashboard's copy in `src/lib/candidates.ts` has the original 6 only.
+- The dashboard's copy in `src/lib/candidates.ts` has all 9, with labels.
 
 **Review statuses:**
 - Open: `pending` and `deferred`. An open row holds its document's single queue slot.
@@ -53,7 +53,7 @@ Two places hold their own copies of the reason list:
 - **In CI:** the "Guideline & Provider Sync" workflow runs `sync-providers.ts` and `stage-candidates.ts` in the same job, so it always stages a freshly generated v2 file. The schedule is disabled; the workflow runs only on manual dispatch.
 - **Locally:** run `npx tsx scripts/sync-providers.ts`. It reads provider sites and writes only `candidates.json`. Then run `DRY_RUN=true npx tsx scripts/stage-candidates.ts`, and drop `DRY_RUN` for a live run.
 
-`src/lib/candidates.ts` still declares `CANDIDATE_SCHEMA_VERSION = 1`. It doesn't validate the version, but it needs updating with the dashboard work.
+`src/lib/candidates.ts` declares `CANDIDATE_SCHEMA_VERSION = 2`. File mode does not validate the version.
 
 Discovery reports from #220 have their own `reportSchemaVersion`. No adapter yet stages them; `stage_discovery_candidate` exists but nothing calls it.
 
@@ -122,7 +122,7 @@ Both keys are pinned in TypeScript and SQL by `scripts/tests/fixtures/url-key-ve
 - [x] Show the uncertainty flag (`legacy-match-key`) and candidate-ID collisions.
 - [x] Decide whether `deferred` rows, and open rows with an outcome such as "awaiting re-filing", appear in the queue view.
 - [x] Show the evidence and decision history (editors can read both tables).
-- [x] Keep reject reasons and decision notes as drafts. They survive Cancel, a failed or refused attempt, and queue refreshes **within the page session**. They do **not** survive a full browser reload, closing the tab, or switching away from the review view. They are not persisted anywhere.
+- [x] Keep reject reasons and decision notes as drafts. They survive Cancel, a failed or refused attempt, and queue refreshes **within the page session, for the same account**. They do **not** survive a full browser reload, closing the tab, switching away from the review view, signing out, or another account signing in (including from another tab). They are not persisted anywhere. The same applies to card notes and an open Edit modal (`src/lib/draft-owner.ts`).
 - [x] `reject_staged_candidate` accepts `deferred` rows. This is `20261025_reject_open_candidate.sql`: local only, not applied to production.
 
 **Local end-to-end tests**
