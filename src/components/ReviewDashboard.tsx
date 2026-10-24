@@ -45,6 +45,14 @@ import { cn } from '../lib/utils';
  * as an empty queue.
  */
 
+/** What evidence.catalogue_relation says about a discovery sighting, in words. */
+const CATALOGUE_RELATION_TEXT: Record<'exact' | 'loose' | 'alternative' | 'none', string> = {
+  exact: 'Link vs the named entry: the same document as one of its catalogue links.',
+  loose: 'Link vs the named entry: matches one of its links only if letter case is ignored. Not confirmed as the same document.',
+  alternative: 'Link vs the named entry: only an observed redirect or canonical-host form of the link matches its links; the link itself does not.',
+  none: 'Link vs the named entry: no match with its links. The relationship rests on the other evidence (e.g. the title match).',
+};
+
 /** How long the undo toast stays on screen after a dismiss. */
 const UNDO_TIMEOUT_MS = 6000;
 
@@ -174,7 +182,7 @@ export default function ReviewDashboard({
   const openReject = (candidate: DisplayCandidate) => {
     const stagedId = candidate.stagedId;
     if (!stagedId) return;   // not a queue row, so there is nothing to reject
-    const actions = allowedActions(candidate.changeReason, candidate.reviewStatus, candidate.reviewOutcome);
+    const actions = allowedActions(candidate.changeReason, candidate.reviewStatus, candidate.reviewOutcome, candidate.hold != null);
     setRejected(null);
     setDecided(null);
     setResolving(null);
@@ -345,7 +353,7 @@ export default function ReviewDashboard({
   const totals = groupOpenRows(load.candidates);
 
   const renderCard = (candidate: DisplayCandidate) => {
-    const actions = allowedActions(candidate.changeReason, candidate.reviewStatus, candidate.reviewOutcome);
+    const actions = allowedActions(candidate.changeReason, candidate.reviewStatus, candidate.reviewOutcome, candidate.hold != null);
     const stagedId = candidate.stagedId ?? '';
     return (
       <CandidateCard
@@ -565,6 +573,11 @@ function CandidateCard({
           {candidate.reviewStatus === 'deferred' && (
             <span className="text-[10px] px-1.5 py-px rounded border border-slate-300 bg-slate-100 text-slate-700">Deferred</span>
           )}
+          {candidate.hold && (
+            <span data-testid="held" className="text-[10px] px-1.5 py-px rounded border border-red-200 bg-red-50 text-red-800">
+              On hold
+            </span>
+          )}
           {followUp && (
             <span data-testid="follow-up" className="text-[10px] px-1.5 py-px rounded border border-violet-200 bg-violet-50 text-violet-800">
               {followUp}
@@ -614,6 +627,12 @@ function CandidateCard({
         </p>
       )}
 
+      {candidate.hold && (
+        <p data-testid="hold-reason" className="text-[11px] text-red-900 bg-red-50 border border-red-200 rounded px-2 py-1">
+          Editorial hold ({candidate.hold.status}): {candidate.hold.reason} It cannot be published while the hold
+          stands; the database refuses it. It can still be rejected or have a decision recorded.
+        </p>
+      )}
       {candidate.producer === null && (
         <p data-testid="uncertain" className="text-[11px] text-amber-900 bg-amber-50 border border-amber-200 rounded px-2 py-1">
           Filed before the review-queue upgrade: its stored link was lowercased, so the original letter case is
@@ -836,6 +855,11 @@ function HistoryPanel({ state }: { state: HistoryLoad | 'loading' }) {
                   <div>Comparison: {String((e.soft_match as { reason?: unknown }).reason)}</div>
                 )}
                 {e.token_change && <div>Token change: {JSON.stringify(e.token_change)}</div>}
+                {e.catalogue_relation && (
+                  <div data-testid="catalogue-relation" className={e.catalogue_relation === 'loose' || e.catalogue_relation === 'alternative' ? 'text-amber-800' : undefined}>
+                    {CATALOGUE_RELATION_TEXT[e.catalogue_relation]}
+                  </div>
+                )}
               </li>
             ))}
           </ul>

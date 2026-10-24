@@ -14,15 +14,13 @@
  *     form and a test account's id, because the production allowlist names
  *     real accounts that do not exist locally.
  *
- * Prerequisites (outside the repo):
- *   1. A local stack: `npx supabase@2.119.0 start` in a scratch directory.
- *   2. Schema applied in supabase/REBUILD-ORDER.md order, then
- *      20261012_approve_guard_null_safe.sql, 20261012_reject_staged_candidate.sql
- *      and 20261024_discovery_review_queue.sql.
- *   3. Env: LOCAL_SUPABASE_URL, LOCAL_SUPABASE_ANON_KEY,
- *      LOCAL_SUPABASE_SERVICE_KEY, LOCAL_DB_CONTAINER.
+ * Run it through the local runner, which starts the stack, applies the schema
+ * (supabase/REBUILD-ORDER.md order, both 20261012 migrations, 20261024, and for
+ * `integration-25` also 20261025) and sets the four LOCAL_* variables:
  *
- * Run:  npx tsx scripts/tests/integration/discovery-queue.local.test.ts
+ *   npx tsx scripts/tests/local-supabase/run.ts integration integration-25
+ *
+ * See scripts/tests/local-supabase/README.md.
  *
  * Section [8] runs the ACTUAL scripts/stage-candidates.ts as a child process,
  * from an empty scratch directory (so no repo .env file can be loaded), with
@@ -110,6 +108,36 @@ function cand(over: Record<string, unknown> & { discoveredUrl: string }) {
 }
 const stage = (run: string, c: object, client: SupabaseClient = service) =>
   client.rpc('stage_discovery_candidate', { p_run_id: run, p_producer: 'discover', p_candidate: c });
+
+/** Edition evidence, shaped as #220's producer emits it. */
+const softMatch = (guidelineId: string) => ({
+  guidelineId, guidelineTopic: 'synthetic', guidelineSource: 'synthetic', titleSimilarity: 0.8,
+  sharedTitleTokens: ['test'], sharedPublishers: ['BOFAS'], discoveredPublishers: ['BOFAS'],
+  publishersFromTitle: [], cataloguePublishers: ['BOFAS'],
+});
+const tokenChange = (guidelineId: string, previousValue = 'OLD', observedValue = 'NEW') => ({
+  parameter: 'ver', previousValue, observedValue, previousObservedAt: '2026-10-01T00:00:00.000Z', guidelineId,
+  statement: 'Synthetic token change.',
+});
+
+/**
+ * Catalogue links held by exactly ONE entry and carrying no query, excluding
+ * entries other sections use by name: a token change on one of them relates
+ * exactly to its own entry and to no other.
+ */
+const RESERVED = new Set(['ankle-fracture', 'mobilisation-weightbearing', 'end-stage-ankle-arthritis', 'bofas-vte-position-statement']);
+const linkKeyCount = new Map<string, number>();
+for (const g of GUIDELINES_DATA) for (const v of g.versions ?? []) {
+  if (v.url && v.url !== '#') linkKeyCount.set(normaliseCandidateUrl(v.url), (linkKeyCount.get(normaliseCandidateUrl(v.url)) ?? 0) + 1);
+}
+const SINGLE = GUIDELINES_DATA.flatMap((g) => {
+  if (RESERVED.has(g.id)) return [];
+  const v = (g.versions ?? []).find((x) => x.url && x.url !== '#' && !x.url.includes('?') && /[a-z]/.test(new URL(x.url).pathname)
+    && linkKeyCount.get(normaliseCandidateUrl(x.url)) === 1);
+  return v ? [{ id: g.id, url: v.url }] : [];
+});
+/** The same link with its PATH uppercased: same loose key, different identity. */
+const pathUpper = (u: string) => { const x = new URL(u); return `${x.protocol}//${x.host}${x.pathname.toUpperCase()}${x.search}`; };
 
 function catalogueFingerprint(): string {
   return psql(`select count(*)||':'||md5(coalesce(string_agg(g::text, '|' order by id), '')) from public.guidelines g;
@@ -314,13 +342,13 @@ try {
   const pne = await stage('run-ed', cand({
     classification: 'POSSIBLE_NEW_EDITION', matchedGuidelineId: 'end-stage-ankle-arthritis',
     discoveredUrl: 'https://www.bofas.org.uk/Portals/0/Position%20Statements/SpecS-Management-of-End-Stage-Ankle-Arthritis.pdf?ver=IfQNo1o8FEhD87h8-uYmQA%3d%3d',
-    softMatch: { guidelineId: 'end-stage-ankle-arthritis', jaccard: 0.8, containment: 1 },
+    softMatch: softMatch('end-stage-ankle-arthritis'),
   }));
   const pneId = (pne.data as { stagedId: string }).stagedId;
   const etc = await stage('run-ed', cand({
     classification: 'EDITION_TOKEN_CHANGED', matchedGuidelineId: 'mobilisation-weightbearing',
     discoveredUrl: 'https://www.boa.ac.uk/asset/C735F86B-6172-43EF-AA90005C8E3F0706/?ver=NEW',
-    tokenChange: { parameter: 'ver', previousValue: 'OLD', observedValue: 'NEW' },
+    tokenChange: tokenChange('mobilisation-weightbearing'),
   }));
   const etcId = (etc.data as { stagedId: string }).stagedId;
   eq('edition rows staged', [(pne.data as { status: string }).status, (etc.data as { status: string }).status], ['staged', 'staged']);
@@ -385,7 +413,7 @@ try {
 
   eq('resolving an already-resolved row: 55000', (await res(pneId, 'no-action')).error?.code, '55000');
   eq('resolving a NEW_GUIDELINE row: 42809', (await res(permStaged, 'same-document')).error?.code, '42809');
-  const pne2 = await stage('run-ed2', cand({ classification: 'POSSIBLE_NEW_EDITION', matchedGuidelineId: 'ankle-fracture', discoveredUrl: 'https://www.bofas.org.uk/Portals/0/Position%20Statements/BOFAS-BOA%20ankle%20fractures.pdf' }));
+  const pne2 = await stage('run-ed2', cand({ classification: 'POSSIBLE_NEW_EDITION', matchedGuidelineId: 'ankle-fracture', discoveredUrl: 'https://www.bofas.org.uk/Portals/0/Position%20Statements/BOFAS-BOA%20ankle%20fractures.pdf', softMatch: softMatch('ankle-fracture') }));
   const pne2Id = (pne2.data as { stagedId: string }).stagedId;
   eq('an action from the other class is refused: 22023', (await res(pne2Id, 'acknowledged')).error?.code, '22023');
   eq('a blank note is refused: 23514', (await res(pne2Id, 'no-action', '   ')).error?.code, '23514');
@@ -402,7 +430,7 @@ try {
   check('…nor with the old closing outcome "different-document" (CHECK)', ddLegacy.status !== 0 && /review_outcome_check|resolved_is_closed_outcome/.test(ddLegacy.err), ddLegacy.err);
   const direct = psql(`update public.staged_guidelines set review_status='resolved' where id='${pne2Id}';`);
   check('a direct write marking resolved without an outcome or reviewer violates the CHECK', direct.status !== 0 && /resolved_is_closed_outcome/.test(direct.err), direct.err);
-  const again = await stage('run-ed3', cand({ classification: 'POSSIBLE_NEW_EDITION', matchedGuidelineId: 'end-stage-ankle-arthritis',
+  const again = await stage('run-ed3', cand({ classification: 'POSSIBLE_NEW_EDITION', matchedGuidelineId: 'end-stage-ankle-arthritis', softMatch: softMatch('end-stage-ankle-arthritis'),
     discoveryId: (await service.from('staged_guidelines').select('candidate_id').eq('id', pneId).single()).data?.candidate_id,
     discoveredUrl: 'https://www.bofas.org.uk/Portals/0/Position%20Statements/SpecS-Management-of-End-Stage-Ankle-Arthritis.pdf?ver=IfQNo1o8FEhD87h8-uYmQA%3d%3d' }));
   eq('rediscovering a resolved item appends evidence but does NOT reopen it', [(again.data as { status: string }).status, (again.data as { evidence: string }).evidence, (again.data as { reviewStatus: string }).reviewStatus], ['existing', 'appended', 'resolved']);
@@ -692,6 +720,133 @@ try {
   eq('discovery staging with a failing evidence write: error, and NO queue row left behind', [df.error?.code, psql(`select count(*) from public.staged_guidelines where candidate_id=${dq(discFail.discoveryId)}`).out], ['XX003', '0']);
   fs.rmSync(scratch, { recursive: true, force: true });
 
+  // ── 10. Discovery evidence validation ──────────────────────────────────
+  console.log('\n[10] stage_discovery_candidate validates the evidence it is given');
+  check('setup: at least 9 single-entry catalogue links to build fixtures from', SINGLE.length >= 9, String(SINGLE.length));
+  const [S0, S1, S2, S3, S4, S5, S6, S7] = SINGLE;
+  const rows10 = psql('select count(*) from public.staged_guidelines').out;
+  const refused = async (label: string, c: object, msg: RegExp) => {
+    const r = await stage('run-10', c);
+    check(`${label}: refused 22023`, r.error?.code === '22023' && msg.test(r.error?.message ?? ''), JSON.stringify(r.error ?? r.data));
+  };
+  const staged = async (label: string, c: object, relation: string) => {
+    const r = await stage('run-10', c);
+    const d = r.data as { status?: string; catalogueRelation?: string; stagedId?: string } | null;
+    eq(`${label}: staged, catalogue relation "${relation}"`, [d?.status ?? r.error?.message, d?.catalogueRelation], ['staged', relation]);
+    return d?.stagedId ?? '';
+  };
+  // Evidence shape (always checked)
+  await refused('NEW_GUIDELINE carrying softMatch', cand({ discoveredUrl: 'https://example.org/10/a.pdf', softMatch: softMatch(S0.id) }), /cannot carry softMatch or tokenChange/);
+  await refused('NEW_GUIDELINE carrying tokenChange', cand({ discoveredUrl: 'https://example.org/10/a2.pdf', tokenChange: tokenChange(S0.id) }), /cannot carry softMatch or tokenChange/);
+  await refused('POSSIBLE_NEW_EDITION without softMatch', cand({ classification: 'POSSIBLE_NEW_EDITION', matchedGuidelineId: S2.id, discoveredUrl: 'https://example.org/10/f.pdf' }), /needs softMatch evidence naming the same entry/);
+  await refused('POSSIBLE_NEW_EDITION whose softMatch names a different entry', cand({ classification: 'POSSIBLE_NEW_EDITION', matchedGuidelineId: S2.id, discoveredUrl: 'https://example.org/10/g.pdf', softMatch: softMatch(S3.id) }), /needs softMatch evidence naming the same entry/);
+  await refused('POSSIBLE_NEW_EDITION carrying tokenChange', cand({ classification: 'POSSIBLE_NEW_EDITION', matchedGuidelineId: S2.id, discoveredUrl: 'https://example.org/10/h.pdf', softMatch: softMatch(S2.id), tokenChange: tokenChange(S2.id) }), /cannot carry tokenChange/);
+  await refused('EDITION_TOKEN_CHANGED without tokenChange', cand({ classification: 'EDITION_TOKEN_CHANGED', matchedGuidelineId: S7.id, discoveredUrl: `${S7.url}?ver=m1` }), /needs tokenChange evidence/);
+  await refused('EDITION_TOKEN_CHANGED whose tokenChange names a different entry', cand({ classification: 'EDITION_TOKEN_CHANGED', matchedGuidelineId: S7.id, discoveredUrl: `${S7.url}?ver=m2`, tokenChange: tokenChange(S6.id) }), /needs tokenChange evidence/);
+  await refused('EDITION_TOKEN_CHANGED whose two values are equal (no change)', cand({ classification: 'EDITION_TOKEN_CHANGED', matchedGuidelineId: S7.id, discoveredUrl: `${S7.url}?ver=m3`, tokenChange: tokenChange(S7.id, 'SAME', 'SAME') }), /two different values/);
+  await refused('EDITION_TOKEN_CHANGED carrying softMatch', cand({ classification: 'EDITION_TOKEN_CHANGED', matchedGuidelineId: S7.id, discoveredUrl: `${S7.url}?ver=m4`, tokenChange: tokenChange(S7.id), softMatch: softMatch(S7.id) }), /cannot carry softMatch/);
+  // NEW_GUIDELINE against the catalogue
+  await refused('NEW_GUIDELINE that is a catalogue link exactly (ver token only)', cand({ discoveredUrl: `${S0.url}?ver=x` }), new RegExp(`already catalogued exactly as entry ${S0.id}`));
+  await refused('NEW_GUIDELINE that matches a catalogue link loosely (path case)', cand({ discoveredUrl: pathUpper(S0.url) }), new RegExp(`loosely matches catalogue entry ${S0.id}.*needs a document comparison`));
+  await refused('NEW_GUIDELINE whose observed redirect target is catalogued', cand({ discoveredUrl: 'https://example.org/10/redirect-src.pdf', urlAlternatives: [{ url: S1.url, relation: 'redirect-target', scope: 'document', derivedFrom: 'https://example.org/10/redirect-src.pdf', transform: 'none — observed' }] }), new RegExp(`observed alternative URL .* is catalogued as entry ${S1.id}`));
+  // POSSIBLE_NEW_EDITION: a different URL is normal; contradictions are refused
+  const kId = await staged('POSSIBLE_NEW_EDITION at a URL unrelated to the entry\'s links (a new edition usually is)', cand({ discoveryId: 'v10-k', classification: 'POSSIBLE_NEW_EDITION', matchedGuidelineId: S2.id, discoveredUrl: 'https://example.org/10/new-edition-2026.pdf', softMatch: softMatch(S2.id) }), 'none');
+  const lId = await staged('POSSIBLE_NEW_EDITION matching its own entry only up to letter case: uncertain, kept for review', cand({ classification: 'POSSIBLE_NEW_EDITION', matchedGuidelineId: S3.id, discoveredUrl: pathUpper(S3.url), softMatch: softMatch(S3.id) }), 'loose');
+  await refused('POSSIBLE_NEW_EDITION that IS the entry\'s own link', cand({ classification: 'POSSIBLE_NEW_EDITION', matchedGuidelineId: S3.id, discoveredUrl: S3.url, softMatch: softMatch(S3.id) }), /own catalogued link, not a new edition/);
+  await refused('POSSIBLE_NEW_EDITION that is exactly a DIFFERENT entry\'s link', cand({ classification: 'POSSIBLE_NEW_EDITION', matchedGuidelineId: S3.id, discoveredUrl: S4.url, softMatch: softMatch(S3.id) }), new RegExp(`catalogued exactly as a different entry \\(${S4.id}\\)`));
+  await refused('POSSIBLE_NEW_EDITION that loosely matches only a DIFFERENT entry', cand({ classification: 'POSSIBLE_NEW_EDITION', matchedGuidelineId: S3.id, discoveredUrl: pathUpper(S4.url), softMatch: softMatch(S3.id) }), new RegExp(`loosely matches a different entry \\(${S4.id}\\)`));
+  // EDITION_TOKEN_CHANGED needs a URL relationship, not identical URLs
+  await refused('EDITION_TOKEN_CHANGED with no URL relationship to the entry', cand({ classification: 'EDITION_TOKEN_CHANGED', matchedGuidelineId: S5.id, discoveredUrl: 'https://example.org/10/unrelated.pdf?ver=2', tokenChange: tokenChange(S5.id) }), /no URL relationship/);
+  await refused('EDITION_TOKEN_CHANGED related only through a co-publisher alternative (a catalogue copy, not an observation)', cand({ classification: 'EDITION_TOKEN_CHANGED', matchedGuidelineId: S5.id, discoveredUrl: 'https://example.org/10/copub.pdf?ver=2', tokenChange: tokenChange(S5.id), urlAlternatives: [{ url: S5.url, relation: 'co-publisher-host', scope: 'document', derivedFrom: 'https://example.org/10/copub.pdf?ver=2', transform: 'catalogue link' }] }), /no URL relationship/);
+  const pId = await staged('EDITION_TOKEN_CHANGED related through an OBSERVED redirect target', cand({ classification: 'EDITION_TOKEN_CHANGED', matchedGuidelineId: S5.id, discoveredUrl: 'https://example.org/10/redirect.pdf?ver=2', tokenChange: tokenChange(S5.id), urlAlternatives: [{ url: S5.url, relation: 'redirect-target', scope: 'document', derivedFrom: 'https://example.org/10/redirect.pdf?ver=2', transform: 'none — observed' }] }), 'alternative');
+  await refused('EDITION_TOKEN_CHANGED via a redirect to its entry, but itself exactly another entry\'s link', cand({ classification: 'EDITION_TOKEN_CHANGED', matchedGuidelineId: S5.id, discoveredUrl: `${S6.url}?ver=2`, tokenChange: tokenChange(S5.id), urlAlternatives: [{ url: S5.url, relation: 'redirect-target', scope: 'document', derivedFrom: `${S6.url}?ver=2`, transform: 'none — observed' }] }), new RegExp(`catalogued exactly as a different entry \\(${S6.id}\\)`));
+  const shared = GUIDELINES_DATA.find((g) => g.id === 'ankle-fracture')?.versions?.find((v) => /boasts\.html$/.test(v.url ?? ''))?.url ?? '';
+  check('setup: a link shared by more than one entry', shared !== '' && (linkKeyCount.get(normaliseCandidateUrl(shared)) ?? 0) > 1, shared);
+  const qId = await staged('EDITION_TOKEN_CHANGED on a link its entry SHARES with others: exact, not contradictory', cand({ classification: 'EDITION_TOKEN_CHANGED', matchedGuidelineId: 'ankle-fracture', discoveredUrl: `${shared}?ver=2`, tokenChange: tokenChange('ankle-fracture') }), 'exact');
+  const rId = await staged('EDITION_TOKEN_CHANGED matching its entry only up to letter case: uncertain, kept for review', cand({ classification: 'EDITION_TOKEN_CHANGED', matchedGuidelineId: S7.id, discoveredUrl: `${pathUpper(S7.url)}?ver=2`, tokenChange: tokenChange(S7.id) }), 'loose');
+  await refused('a named entry that is not in the catalogue', cand({ classification: 'EDITION_TOKEN_CHANGED', matchedGuidelineId: 'no-such-entry', discoveredUrl: `${S7.url}?ver=3`, tokenChange: tokenChange('no-such-entry') }), /names entry no-such-entry, which is not in the catalogue/);
+  eq('the catalogue relation is stored on each sighting',
+    psql(`select string_agg(catalogue_relation, ',' order by catalogue_relation) from public.staged_discovery_evidence where staged_id in ('${kId}','${lId}','${pId}','${qId}','${rId}')`).out, 'alternative,exact,loose,loose,none');
+  eq('refusals wrote no queue rows (only the 5 staged ones were added)', Number(psql('select count(*) from public.staged_guidelines').out) - Number(rows10), 5);
+  eq('…and no evidence for any refused candidate', psql(`select count(*) from public.staged_discovery_evidence where discovery_run_id='run-10'`).out, '5');
+  // An existing row is not re-judged, but evidence shape is checked on every call.
+  const kAgain = await stage('run-10b', cand({ discoveryId: 'v10-k', classification: 'POSSIBLE_NEW_EDITION', matchedGuidelineId: S2.id, discoveredUrl: 'https://example.org/10/new-edition-2026.pdf', softMatch: softMatch(S2.id) }));
+  eq('re-sighting a staged edition row: existing, evidence appended', [(kAgain.data as { status: string })?.status, (kAgain.data as { evidence: string })?.evidence], ['existing', 'appended']);
+  const kBad = await stage('run-10c', cand({ discoveryId: 'v10-k', classification: 'POSSIBLE_NEW_EDITION', matchedGuidelineId: S2.id, discoveredUrl: 'https://example.org/10/new-edition-2026.pdf' }));
+  eq('…but a re-sighting without its evidence is still refused', kBad.error?.code, '22023');
+
+  // ── 11. Editorial holds are enforced at approval ─────────────────────────
+  console.log('\n[11] Holds at approval: legacy and post-migration rows, and published links');
+  const before11 = catalogueFingerprint();
+  const falconUrl = 'https://www.bofas.org.uk/Portals/0/Research/FALCON-Report-Phase%201%20and%202%20final.pdf?ver=hsYlmJh0ouIwz8sw99_7eA%3d%3d';
+  // As the OLD script filed it: producer NULL, primary_url lowercased.
+  psql(`insert into public.staged_guidelines (candidate_id, pipeline, provider, topic, versions, primary_url, change_reason)
+        values ('held-legacy', 'sync-providers', 'BOFAS', 'UK-FALCON (legacy)', '[]', ${dq(normaliseCandidateUrl(falconUrl))}, 'NEW_GUIDELINE');
+        insert into public.staged_guidelines (candidate_id, pipeline, provider, topic, versions, primary_url, change_reason, producer)
+        values ('held-new', 'sync-providers', 'BOFAS', 'UK-FALCON (filed before the hold existed)', '[]', ${dq(falconUrl.replace('Research/FALCON', 'research/falcon'))}, 'NEW_GUIDELINE', 'sync-providers');`);
+  const idByCid = (cid: string) => psql(`select id from public.staged_guidelines where candidate_id='${cid}'`).out;
+  const publish = (id: string, gid: string, versions: object[] = []) => editor.client.rpc('approve_staged_guideline', {
+    p_candidate_id: id, p_final_guideline_data: { id: gid, section: 'Foot & Ankle', type: 'x', topic: 'x', source: 'BOFAS', status: 'Live', versions }, p_changelog_note: 'try' });
+  const h11a = await publish(idByCid('held-legacy'), 'held-legacy-pub');
+  check('a held row filed BEFORE the migration (lowercased URL): approval refused RQ002, naming the hold', h11a.error?.code === 'RQ002' && /editorial hold list \(pending-editorial-decision\).*UK-FALCON/.test(h11a.error?.message ?? ''), JSON.stringify(h11a.error));
+  const h11b = await publish(idByCid('held-new'), 'held-new-pub');
+  eq('a held row with a producer (path-case variant): refused RQ002', h11b.error?.code, 'RQ002');
+  const free = await stage('run-11', cand({ discoveredUrl: 'https://www.bofas.org.uk/Portals/0/Research/Not-Held.pdf' }));
+  const freeId = (free.data as { stagedId: string }).stagedId;
+  const h11c = await publish(freeId, 'not-held-pub', [{ label: 'PDF', url: falconUrl.replace(/ver=[^&]+/, 'ver=EDITED') }]);
+  check('an unheld row whose PUBLISH FORM links a held document: refused RQ002, naming the link', h11c.error?.code === 'RQ002' && /the link .* is on the editorial hold list/.test(h11c.error?.message ?? ''), JSON.stringify(h11c.error));
+  eq('…none of these published anything or changed the catalogue', catalogueFingerprint(), before11);
+  eq('…rows still pending, nothing logged',
+    psql(`select string_agg(review_status, ',' order by candidate_id) from public.staged_guidelines where candidate_id in ('held-legacy','held-new') or id='${freeId}'`).out.split(','), ['pending', 'pending', 'pending']);
+  eq('…no decision-log entries for refused approvals', psql(`select count(*) from public.staged_discovery_decisions where staged_id in ('${idByCid('held-legacy')}','${idByCid('held-new')}','${freeId}')`).out, '0');
+  const okFree = await publish(freeId, 'not-held-pub', [{ label: 'PDF', url: 'https://www.bofas.org.uk/Portals/0/Research/Not-Held.pdf' }]);
+  eq('the same row with an unheld link publishes (positive control)', okFree.data, 'not-held-pub');
+  const rejHeld = await editor.client.rpc('reject_staged_candidate', { p_candidate_id: idByCid('held-legacy'), p_reason: 'Held: excluded pending editorial decision' });
+  eq('a held row can still be REJECTED (closing is not publishing)', rejHeld.error, null);
+
+  // ── 12. Notes: whitespace-only is blank, at the database ────────────────
+  console.log('\n[12] Whitespace-only notes are refused by the database');
+  for (const [label, note] of [['spaces, tab and newline', ' \t\n'], ['a lone tab', '\t'], ['CR LF', '\r\n']] as const) {
+    eq(`resolve with ${label}: 23514`, (await editor.client.rpc('resolve_discovery_candidate', { p_staged_id: kId, p_action: 'defer', p_note: note })).error?.code, '23514');
+  }
+  const svcNote = await service.from('staged_discovery_decisions').insert({ staged_id: kId, action: 'defer', from_status: 'pending', to_status: 'deferred', note: '\t\n', decided_by: editor.id });
+  eq('a direct insert of a tab/newline note (service role, bypassing RLS) violates the table CHECK', svcNote.error?.code, '23514');
+  const blankFree = await stage('run-12', cand({ discoveredUrl: 'https://www.bofas.org.uk/Portals/0/Research/Blank-Note.pdf' }));
+  const blankId = (blankFree.data as { stagedId: string }).stagedId;
+  const bn = await editor.client.rpc('approve_staged_guideline', { p_candidate_id: blankId, p_final_guideline_data: { id: 'blank-note-pub', section: 'Foot & Ankle', type: 'x', topic: 'x', status: 'Live' }, p_changelog_note: '\n\t ' });
+  eq('approve with a whitespace-only change note: 23514, nothing published', [bn.error?.code, psql(`select count(*) from public.guidelines where id='blank-note-pub'`).out], ['23514', '0']);
+  const trimmed = await editor.client.rpc('resolve_discovery_candidate', { p_staged_id: kId, p_action: 'defer', p_note: '\t Later \n' });
+  eq('a real note is accepted and stored without its surrounding whitespace', [trimmed.error, psql(`select note from public.staged_discovery_decisions where staged_id='${kId}'`).out], [null, 'Later']);
+
+  // ── 13. Approvals are logged atomically ─────────────────────────────────
+  console.log('\n[13] Every approval is logged, in the same transaction as the publication');
+  const genuineId = (genuine.data as { stagedId: string }).stagedId;
+  eq('the approval in [5] has exactly one decision-log entry: approve, pending → accepted, note, actor',
+    psql(`select action||'|'||from_status||'|'||to_status||'|'||note||'|'||(decided_by='${editor.id}') from public.staged_discovery_decisions where staged_id='${genuineId}'`).out,
+    `approve|pending|accepted|Local integration test|true`);
+  eq('…and so does the approval in [11]', psql(`select count(*) from public.staged_discovery_decisions where staged_id='${freeId}' and action='approve'`).out, '1');
+  eq('refused approvals in [5] logged nothing',
+    psql(`select count(*) from public.staged_discovery_decisions d join public.staged_guidelines s on s.id=d.staged_id where s.candidate_id in ('mislabel-held','mislabel-near','mislabel-linked')`).out, '0');
+  // If the log write fails, the publication must not stand. Make it fail for
+  // real (a committed CHECK the approve entry violates), call approve through
+  // the API, then remove the CHECK.
+  const atomicRow = await stage('run-13', cand({ discoveredUrl: 'https://www.bofas.org.uk/Portals/0/Research/Atomic.pdf' }));
+  const atomicId = (atomicRow.data as { stagedId: string }).stagedId;
+  const before13 = catalogueFingerprint();
+  const block = psql(`alter table public.staged_discovery_decisions add constraint test_block_approve check (action <> 'approve') not valid;`);
+  check('(setup) a CHECK that refuses approve entries is in place', block.status === 0, block.err);
+  const atomic = await editor.client.rpc('approve_staged_guideline', { p_candidate_id: atomicId, p_final_guideline_data: { id: 'atomic-pub', section: 'Foot & Ankle', type: 'x', topic: 'x', source: 'BOFAS', status: 'Live' }, p_changelog_note: 'Atomicity test' });
+  const unblock = psql(`alter table public.staged_discovery_decisions drop constraint test_block_approve;`);
+  check('when the log entry cannot be written, approval fails (23514 from the log CHECK)', atomic.error?.code === '23514' && /test_block_approve/.test(atomic.error?.message ?? ''), JSON.stringify(atomic.error));
+  eq('…the guideline and its changelog note were NOT published (rolled back with it)', catalogueFingerprint(), before13);
+  eq('…the queue row is still pending', psql(`select review_status||'|'||coalesce(resulting_guideline_id,'-') from public.staged_guidelines where id='${atomicId}'`).out, 'pending|-');
+  check('(cleanup) the test CHECK was removed', unblock.status === 0, unblock.err);
+  const atomicOk = await editor.client.rpc('approve_staged_guideline', { p_candidate_id: atomicId, p_final_guideline_data: { id: 'atomic-pub', section: 'Foot & Ankle', type: 'x', topic: 'x', source: 'BOFAS', status: 'Live' }, p_changelog_note: 'Atomicity test, retried' });
+  eq('…and once the log can be written, the same approval succeeds and is logged once',
+    [atomicOk.data, psql(`select count(*) from public.staged_discovery_decisions where staged_id='${atomicId}' and action='approve'`).out], ['atomic-pub', '1']);
+  const tamper13 = await service.from('staged_discovery_decisions').update({ note: 'tampered' }).eq('staged_id', atomicId);
+  eq('approve log entries are append-only (service role UPDATE refused)', tamper13.error?.code, '42501');
+
   // ── 9. 20261025: rejecting OPEN rows (pending or deferred) ───────────────
   const has20261025 = psql(`select to_regprocedure('public.reject_staged_candidate(uuid,text,boolean)') is not null`).out === 't';
   if (!has20261025) {
@@ -703,8 +858,10 @@ try {
       client.rpc('reject_staged_candidate', confirm === undefined
         ? { p_candidate_id: id, p_reason: reason }
         : { p_candidate_id: id, p_reason: reason, p_confirm_open_follow_up: confirm });
-    const edRow = async (url: string, cls = 'POSSIBLE_NEW_EDITION') => {
-      const r = await stage(`run-9-${Math.random().toString(36).slice(2, 8)}`, cand({ classification: cls, matchedGuidelineId: 'ankle-fracture', discoveredUrl: url }));
+    const edRow = async (url: string, cls = 'POSSIBLE_NEW_EDITION', entry = 'ankle-fracture') => {
+      const evidence = cls === 'EDITION_TOKEN_CHANGED' ? { tokenChange: tokenChange(entry) } : { softMatch: softMatch(entry) };
+      const r = await stage(`run-9-${Math.random().toString(36).slice(2, 8)}`, cand({ classification: cls, matchedGuidelineId: entry, discoveredUrl: url, ...evidence }));
+      if (!r.data) throw new Error(`edRow ${url}: ${r.error?.message}`);
       return (r.data as { stagedId: string }).stagedId;
     };
     const state9 = (id: string) => psql(`select review_status||'|'||coalesce(review_outcome,'-')||'|'||coalesce(review_note,'-')||'|'||(reviewed_by is not null) from public.staged_guidelines where id='${id}'`).out;
@@ -719,7 +876,7 @@ try {
     eq('…the decision log records actor, time, reason, previous status', lastLog(d1), 'reject|deferred|rejected|-|Out of scope|true|true');
 
     // Open follow-up: confirmation required, nothing written without it.
-    const f1 = await edRow('https://example.org/9/follow-up.pdf', 'EDITION_TOKEN_CHANGED');
+    const f1 = await edRow(`${SINGLE[8].url}?ver=section-9`, 'EDITION_TOKEN_CHANGED', SINGLE[8].id);
     await editor.client.rpc('resolve_discovery_candidate', { p_staged_id: f1, p_action: 'needs-document-check', p_note: 'check it' });
     const f1Before = state9(f1);
     eq('open follow-up, two-argument call: refused RQ001', (await rej(editor.client, f1, 'no')).error?.code, 'RQ001');

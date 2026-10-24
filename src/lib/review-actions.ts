@@ -67,10 +67,16 @@ export function isOpenStatus(status: ReviewStatus | undefined): boolean {
   return status === 'pending' || status === 'deferred';
 }
 
+/**
+ * `held`: the row's document is on the editorial hold list. Publishing is then
+ * withheld (approve_staged_guideline refuses it with RQ002 regardless); reject
+ * and decisions stay available, because closing a held item is not publishing.
+ */
 export function allowedActions(
   changeReason: ChangeReason,
   reviewStatus: ReviewStatus | undefined,
   reviewOutcome?: string | null,
+  held = false,
 ): AllowedActions {
   if (!isOpenStatus(reviewStatus)) return NONE;
   const resolve = (RESOLVE_ACTIONS[changeReason] ?? []).filter((a) => {
@@ -81,7 +87,7 @@ export function allowedActions(
   return {
     // The ONLY route to publishing a new entry. Never for comparison/edition
     // rows, and never for a deferred row (approve requires 'pending').
-    publish: changeReason === 'NEW_GUIDELINE' && reviewStatus === 'pending',
+    publish: changeReason === 'NEW_GUIDELINE' && reviewStatus === 'pending' && !held,
     reject: true,
     rejectNeedsConfirmation: isOpenFollowUp(reviewOutcome),
     resolve: [...resolve],
