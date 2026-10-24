@@ -474,10 +474,13 @@ export default function App() {
     // the publish form opens ONLY for a row the action matrix allows to be
     // published (NEW_GUIDELINE, pending). A comparison or edition row must
     // never reach approve_staged_guideline() as a new entry. The database
-    // refuses that too (42809); this keeps the UI from ever trying.
-    if (candidate.stagedId && !allowedActions(candidate.changeReason, candidate.reviewStatus, candidate.reviewOutcome).publish) {
-      console.warn(`[review] Refused to open the publish form for ${candidate.candidateId} (${candidate.changeReason}, ${candidate.reviewStatus}).`);
-      alert('This item cannot be published as a new entry. Record a decision on it in the review queue instead. Nothing was changed.');
+    // refuses that too (42809); this keeps the UI from ever trying. Likewise a
+    // row on the editorial hold list (the database refuses with RQ002).
+    if (candidate.stagedId && !allowedActions(candidate.changeReason, candidate.reviewStatus, candidate.reviewOutcome, candidate.hold != null).publish) {
+      console.warn(`[review] Refused to open the publish form for ${candidate.candidateId} (${candidate.changeReason}, ${candidate.reviewStatus}${candidate.hold ? ', held' : ''}).`);
+      alert(candidate.hold
+        ? `This item is on the editorial hold list (${candidate.hold.status}) and cannot be published while the hold stands. Nothing was changed.`
+        : 'This item cannot be published as a new entry. Record a decision on it in the review queue instead. Nothing was changed.');
       return;
     }
     // The draft is built HERE, not in the dashboard, because proposing a

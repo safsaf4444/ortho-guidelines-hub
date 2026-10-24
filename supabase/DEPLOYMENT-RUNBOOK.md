@@ -47,7 +47,7 @@ PGOPTIONS='-c default_transaction_read_only=on' psql "$DB_URL" -f supabase/DEPLO
 - If one check errors, every later check prints "current transaction is aborted". Stop and investigate; P4 explains most such errors.
 - Pasting one numbered query into the SQL editor runs it **outside** that wrapper. The query is still a SELECT, but nothing then enforces read-only.
 
-Record P5 and P10 for comparison afterwards.
+Record P1's `at` value (the rejection-gap check in §5 step 3 needs it), and P5 and P10 for comparison afterwards.
 
 | Check | Safe result | If not |
 |---|---|---|
@@ -60,6 +60,7 @@ Record P5 and P10 for comparison afterwards.
 | P8 (possible duplicate open documents) | no rows | An editor inspects them. If two really are one document, reject all but one through the current app, then rerun P8. |
 | P9 | `t` and the expected number of editors | Fix the allowlist first |
 | P10 | (record it) | — |
+| P11 (open candidates for a held document) | no rows, or rows an editor has looked at | Not a blocker. Once 20261024 is applied these rows cannot be published (RQ002); before it, nothing stops them, so an editor should not publish them in the meantime. Rejecting them is always allowed. |
 
 P8 uses a coarser key than the migration, so "no rows" guarantees the migration's duplicate check passes. Even if something is missed, the migration refuses and rolls back completely, as shown in rehearsal R4.
 
@@ -69,12 +70,27 @@ P8 uses a coarser key than the migration, so "no rows" guarantees the migration'
 |---|---|---|---|---|---|
 | 0 | Freeze (§1), backup (§3), preflight (§4) | works | — | must not run | must not run |
 | 1 | Apply `20261024_discovery_review_queue.sql` (one transaction) | works: list, approve, reject pending | not deployed yet | **must not run** (23505 batch failures) | not deployed yet |
-| 2 | Apply `20261025_reject_open_candidate.sql` (requires step 1) | works (2-argument reject is still accepted) | not deployed yet | must not run | not deployed yet |
-| 3 | Verify: the queries at the end of each migration; preflight P3 = `t,t,t`; P10 unchanged from step 0 | works | — | — | — |
+| 2 | Apply `20261025_reject_open_candidate.sql` (requires step 1), **immediately after step 1** (see "History gap" below) | works (2-argument reject is still accepted) | not deployed yet | must not run | not deployed yet |
+| 3 | Verify: the queries at the end of each migration; preflight P3 = `t,t,t`; P10 unchanged from step 0; the rejection-gap check below | works | — | — | — |
 | 4 | Merge the branch to `main` (this deploys the frontend via `deploy.yml`) | replaced | works | — | deployed |
 | 5 | First staging: manual dispatch with `dry_run = true`, then `false` | — | shows results | — | runs |
 
 Expect many `POSSIBLE_SAME_DOCUMENT` rows on the first live run, wherever catalogue links differ only in letter case from the providers' links. That is the intended visibility, not an error.
+
+From step 1, `approve_staged_guideline` refuses a held document (RQ002), whichever app calls it. The old app shows that refusal as a generic save error; the new app names the hold.
+
+**History gap between steps 1 and 2.** Until 20261025 is applied, rejections go through the old function, which writes no decision-log entry. A rejection made in that window is recorded only on the queue row (status, reason, reviewer and time), and nothing back-fills the log: it is append-only, and an entry written later would misstate when it was logged.
+
+- Keep the window short: apply step 2 right after step 1, and ask editors not to reject anything in between.
+- At step 3, list what fell into the gap, and note each row in the deployment record:
+
+  ```sh
+  psql "$DB_URL" -v since='<P1 at from step 0>' -f supabase/POST-UPGRADE-REJECTION-GAP-READONLY.sql
+  ```
+
+  - The file is read-only in the same way as the preflight (G0 must say `on`).
+  - G1 lists every rejection since that time that has no log entry. It over-lists rather than misses: rejections between the preflight and step 1 also appear, and they predate the log anyway.
+  - In the SQL editor, replace `:'since'` with the quoted timestamp.
 
 **Expected temporary "feature unavailable" behaviour (if the order slips):**
 
@@ -96,13 +112,17 @@ Prefer fixing forward. Each migration file ends with its rollback notes.
 
 ## 7. After the upgrade
 
-Re-run `DEPLOY-PREFLIGHT-READONLY.sql`. P3 should be all `t`; P4's `has_reject_2arg` is now `f`, which is expected; P10 should equal the step-0 value.
+Re-run `DEPLOY-PREFLIGHT-READONLY.sql`. P3 should be all `t`; P4's `has_reject_2arg` is now `f`, which is expected; P10 should equal the step-0 value. P11 still lists any held open rows until an editor rejects them; they cannot be published.
 
 Keep #174 paused. Re-enabling the schedule is a separate, explicit decision.
 
 ## 8. Rehearsal evidence (local, synthetic)
 
-The rehearsal ran on 2026-10-24 and passed 48 of 48 checks. It was rerun later that day, after the preflight gained its read-only wrapper, and passed 54 of 54 (the 6 new checks are listed under "Preflight" below). It used a disposable local Supabase and synthetic data only.
+The rehearsal is tracked in `scripts/tests/local-supabase/rehearsal.ts` and runs with `npx tsx scripts/tests/local-supabase/run.ts rehearsal` (see that folder's README). It uses a disposable local Supabase and synthetic data only. The old code comes from `f2b71d9`, main before this branch.
+
+- 2026-10-24, first run: 48 of 48.
+- After the preflight gained its read-only wrapper: 54 of 54.
+- Latest, after editorial holds were enforced at approval and the rejection-gap check was added: 68 of 68.
 
 **Starting state:** the REBUILD-ORDER chain plus both 20261012 migrations, with no upgrade applied.
 
@@ -113,12 +133,14 @@ The rehearsal ran on 2026-10-24 and passed 48 of 48 checks. It was rerun later t
   - an NHFD query-identity URL;
   - two providers finding the same document, which created a duplicate open pair.
 - Decisions through the **old** functions: one approved and published, two rejected, and one deferred by direct SQL.
+- The old script also filed the UK-FALCON report as a pending row. Nothing stopped that before the upgrade; the hold arrives with 20261024.
 
 **What the rehearsal showed:**
 - **Compatibility at every step:** old app, new app, old script and new script, as tabled in §5.
 - **Preflight:**
   - It ran in a session forced read-only, where a test write was refused. P8 found the duplicate pair.
   - Run **without** `PGOPTIONS`, it still ran read-only (P0 = `on`). A write injected into the file before its final `ROLLBACK` was refused by Postgres, and the catalogue and changelog fingerprints were unchanged.
+  - P11 listed the held UK-FALCON row, and only that row.
 - **20261024 with the duplicate present:**
   - It refused and named the duplicate.
   - Schema, queue rows, catalogue and changelog were all byte-identical afterwards, with no partial objects left.
@@ -128,10 +150,18 @@ The rehearsal ran on 2026-10-24 and passed 48 of 48 checks. It was rerun later t
   - both keys were backfilled;
   - every row is marked pre-migration;
   - the accepted row, its guideline and the rejection notes were intact;
-  - the UK-FALCON hold was present.
+  - the UK-FALCON hold was present, and the held legacy row's match key equals the hold key.
+- **Step 1 (20261024 only):**
+  - Approving the held legacy row was refused (RQ002). Nothing was published, the row stayed pending, and nothing was logged.
+  - An old-app rejection left no decision-log entry. This is the history gap.
 - **20261025 then applied:**
   - the old 2-argument reject still works;
-  - the deferred row became rejectable, and the rejection was logged.
+  - the deferred row became rejectable, and the rejection was logged;
+  - the held row is still refused.
+- **Rejection-gap check** (`POST-UPGRADE-REJECTION-GAP-READONLY.sql`, since the step-0 P1 time):
+  - It ran read-only (G0 = `on`).
+  - It listed exactly the two unlogged rejections made since step 0: the duplicate clean-up and the step-1 old-app rejection.
+  - It listed nothing when run from a time after the gap.
 - **Catalogue and changelog fingerprints** were unchanged across the whole upgrade.
 
 **Not covered:**

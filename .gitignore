@@ -51,3 +51,8 @@ scripts/.equivalence-baseline.ts
 # editorial content, and for a provider whose reuse terms forbid storage it must
 # not persist in version control.
 .discovery-cache/
+
+# Local Supabase test stack (scripts/tests/local-supabase): work files and CLI state
+scripts/tests/local-supabase/.work/
+scripts/tests/local-supabase/supabase/.temp/
+scripts/tests/local-supabase/supabase/.branches/

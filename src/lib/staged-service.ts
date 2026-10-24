@@ -47,6 +47,8 @@ export interface DbStagedGuideline {
   notes: string | null;
   versions: CandidateVersionLink[];
   primary_url: string | null;
+  /** document_match_key(primary_url): the key editorial holds are matched on. */
+  match_key: string | null;
   change_reason: ChangeReason;
   review_status: ReviewStatus;
   review_outcome: string | null;
@@ -85,10 +87,12 @@ export type StagedLoad =
 const QUEUE_COLUMNS = [
   'id', 'candidate_id', 'provider', 'provider_name', 'topic', 'source', 'notes', 'versions',
   'primary_url', 'change_reason', 'review_status', 'review_outcome', 'producer', 'changed_url',
-  'identity_key', 'discovered_at', 'matched_guideline_id',
+  'identity_key', 'match_key', 'discovered_at', 'matched_guideline_id',
 ].join(', ');
 
-function toDisplayCandidate(row: DbStagedGuideline): DisplayCandidate {
+type Hold = { status: string; reason: string };
+
+function toDisplayCandidate(row: DbStagedGuideline, hold: Hold | null): DisplayCandidate {
   return {
     // The pipeline's id, kept as the display/React key so a row has the same
     // identity here as it does in candidates.json and the adapter logs.
@@ -111,6 +115,7 @@ function toDisplayCandidate(row: DbStagedGuideline): DisplayCandidate {
     matchedGuidelineId: row.matched_guideline_id,
     notes: row.notes,
     producer: row.producer,
+    hold,
   };
 }
 
@@ -198,6 +203,8 @@ export interface EvidenceRow {
   token_change: Record<string, unknown> | null;
   stated_labels: unknown[];
   row_match_basis: 'identity' | 'legacy-match-key';
+  /** Discovery only: how the link relates to the named entry's links (NULL for sync). */
+  catalogue_relation?: 'exact' | 'loose' | 'alternative' | 'none' | null;
   observed_at: string;
   recorded_at: string;
 }
@@ -262,9 +269,26 @@ export const stagedService = {
       return { ok: false, reason: 'error', message: error.message };
     }
 
+    // The editorial hold list, so a held row can say so before anyone tries to
+    // publish it. Same migration as the columns above, so a failure here is a
+    // real error, reported as one rather than shown as "not held".
+    const holds = await supabase.from('discovery_staging_holds').select('match_key, status, reason');
+    if (holds.error) {
+      console.warn('[staged-service] hold list query error:', holds.error.message);
+      return {
+        ok: false,
+        reason: 'error',
+        message: `The editorial hold list could not be read, so held items cannot be marked: ${holds.error.message}`,
+      };
+    }
+    const holdByKey = new Map<string, Hold>(
+      ((holds.data ?? []) as Array<{ match_key: string } & Hold>).map(h => [h.match_key, { status: h.status, reason: h.reason }]),
+    );
+
     return {
       ok: true,
-      candidates: (data as unknown as DbStagedGuideline[] | null)?.map(toDisplayCandidate) ?? [],
+      candidates: (data as unknown as DbStagedGuideline[] | null)
+        ?.map(row => toDisplayCandidate(row, (row.match_key && holdByKey.get(row.match_key)) || null)) ?? [],
     };
   },
 
@@ -335,6 +359,13 @@ export const stagedService = {
         throw markAlreadyProcessed(new Error(
           `This candidate is no longer pending, so it was NOT processed again. `
           + await describeProcessedState(stagedId),
+        ));
+      }
+      // RQ002: the document, or a link the form would publish, is on the
+      // editorial hold list. Nothing was written.
+      if (error.code === 'RQ002') {
+        throw markRefused(new Error(
+          `Not published: ${error.message}. Nothing was changed.`,
         ));
       }
       // 42809: the database refused to publish a comparison/edition row as a

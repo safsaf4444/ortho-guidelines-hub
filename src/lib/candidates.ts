@@ -136,6 +136,13 @@ export interface DisplayCandidate {
    * migration, whose stored URL was lowercased — its original case is unknown.
    */
   producer?: string | null;
+  /**
+   * Queue rows only: the editorial hold covering this document
+   * (public.discovery_staging_holds, matched on the row's loose key), or null.
+   * A held row cannot be published — the database refuses (RQ002) whatever
+   * the UI shows; this only lets the UI say so up front.
+   */
+  hold?: { status: string; reason: string } | null;
 }
 
 function structuredToDisplay(c: StructuredCandidate): DisplayCandidate {

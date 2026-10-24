@@ -259,25 +259,29 @@ export function makeDiscoveryId(input: {
  * The ONE place a discovery class may become a database-facing ChangeReason.
  *
  * Refuses everything except NEW_GUIDELINE, because that is the only class the
- * LIVE schema and the LIVE approve path can handle correctly today:
+ * PRODUCTION schema and approve path can handle correctly today:
  *
- *   - `staged_guidelines_change_reason_check` admits the six ChangeReason
- *     members and nothing else.
- *   - The live `approve_staged_guideline()` has NO guard rejecting a
- *     non-NEW_GUIDELINE candidate (the 42809 block is on PR #174, not live), so
- *     an edition-shaped row that reached the queue and was approved would be
- *     INSERTED AS A DUPLICATE rather than refused.
+ *   - production's `staged_guidelines_change_reason_check` admits the six
+ *     original ChangeReason members and nothing else;
+ *   - production's `approve_staged_guideline()` has NO guard refusing a
+ *     non-NEW_GUIDELINE candidate, so an edition-shaped row that reached the
+ *     queue and was approved would be INSERTED AS A DUPLICATE, not refused.
  *
- * Nothing in batch 1 calls this — batch 1 writes files only. It exists so the
- * boundary has a single auditable crossing point with the reasoning attached,
- * instead of a cast appearing inside some future writer.
+ * supabase/migrations/20261024_discovery_review_queue.sql (not yet applied to
+ * production) adds both the edition categories and that 42809 guard. Even
+ * then this mapping stays closed: edition classes are staged through
+ * `stage_discovery_candidate()`, which takes the discovery class itself and
+ * validates its evidence, not through a ChangeReason. No adapter calls that
+ * function yet, and nothing calls this one; it exists so the boundary has a
+ * single auditable crossing point with the reasoning attached.
  */
 export function toChangeReason(cls: DiscoveryClass): ChangeReason {
   if (cls === 'NEW_GUIDELINE') return 'NEW_GUIDELINE';
   throw new Error(
     `toChangeReason: refusing to map discovery class ${cls} to a ChangeReason. ` +
-      'The live staging schema cannot represent it and the live approve path would ' +
-      'insert it as a duplicate row rather than refuse it (the 42809 guard is on ' +
-      'PR #174 and is not applied). Review it from the discovery report instead.',
+      'The production staging schema cannot represent it and the production approve path would ' +
+      'insert it as a duplicate row rather than refuse it (the 42809 guard arrives with ' +
+      '20261024, not yet applied). Edition classes are staged via stage_discovery_candidate(), ' +
+      'not as a ChangeReason; until an adapter exists, review it from the discovery report.',
   );
 }

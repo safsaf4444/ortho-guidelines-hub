@@ -109,5 +109,23 @@ select 'P10' as check,
        (select count(*) from public.guideline_changelog) as changelog,
        (select md5(coalesce(string_agg(c::text, '|' order by id), '')) from public.guideline_changelog c) as changelog_md5;
 
+-- P11. Open candidates for a document on the editorial hold list. EXPECT: no
+--      rows, or only rows an editor has looked at. After the upgrade a held
+--      document cannot be approved (RQ002); BEFORE it, nothing stops one, so a
+--      held row filed by the old script is publishable today. Uses the COARSE
+--      key of P8 on both sides, so it over-lists rather than misses. The VALUES
+--      list must equal the hold list 20261024 seeds into discovery_staging_holds
+--      (scripts/tests/preflight.test.ts checks that); it is spelled out here
+--      because the table does not exist until the upgrade.
+select 'P11' as check, s.candidate_id, s.review_status, s.change_reason, s.primary_url, h.hold_key
+  from public.staged_guidelines s
+  join (values
+          ('https://www.bofas.org.uk/portals/0/research/falcon-report-phase%201%20and%202%20final.pdf')
+       ) h(hold_key)
+    on regexp_replace(lower(split_part(split_part(regexp_replace(s.primary_url, '^\s+|\s+$', '', 'g'), '#', 1), '?', 1)), '/+$', '')
+     = regexp_replace(lower(split_part(split_part(h.hold_key, '#', 1), '?', 1)), '/+$', '')
+ where s.primary_url is not null and s.review_status in ('pending', 'deferred')
+ order by s.candidate_id;
+
 -- Nothing was written; end the read-only transaction without committing.
 rollback;

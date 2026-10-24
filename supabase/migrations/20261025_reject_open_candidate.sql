@@ -8,7 +8,17 @@
 --
 -- Why: 20261024 lets an editor DEFER a comparison/edition row, but
 -- reject_staged_candidate() (20261012) accepts only 'pending', so a deferred
--- row could be resolved but never rejected. This replaces that function:
+-- row could be resolved but never rejected. This replaces that function.
+--
+-- HISTORY GAP until this is applied: the 20261012 function writes no
+-- decision-log entry. A rejection made with it AFTER 20261024 and BEFORE this
+-- migration is recorded only on the queue row (status, review_note,
+-- reviewed_by, reviewed_at). Nothing here back-fills it, because the log is
+-- append-only and must not be written after the fact as if it were original.
+-- Apply this immediately after 20261024; DEPLOYMENT-RUNBOOK.md §5 lists the
+-- query that finds any rejection made in the gap.
+--
+-- The new function:
 --
 --   * accepts review_status 'pending' or 'deferred'; anything else is 55000;
 --   * NULL-safe editor check (`is_editor() is not true`), as before;
@@ -32,7 +42,8 @@
 -- WITHOUT this migration gets PGRST202 (function not found) — the new
 -- dashboard reports that as "feature unavailable", never as success.
 --
--- from_outcome is written by reject only. A resolve entry's previous outcome
+-- from_outcome is written by reject only (approve's rows are NEW_GUIDELINE,
+-- which never carry an outcome). A resolve entry's previous outcome
 -- is the outcome produced by the preceding log entry for the same row (NULL
 -- for the first decision); resolve_discovery_candidate() is NOT redefined
 -- here, to keep one definition of it.
@@ -80,10 +91,10 @@ alter table public.staged_discovery_decisions
   add constraint staged_discovery_decisions_action_check
   check (action in (
     'same-document', 'different-document', 'no-action', 'new-edition',
-    'acknowledged', 'needs-document-check', 'defer', 'reject'));
+    'acknowledged', 'needs-document-check', 'defer', 'approve', 'reject'));
 
 comment on table public.staged_discovery_decisions is
-  'Append-only log of editor decisions on queue rows: every resolve_discovery_candidate() action (including those that leave the row open) and every reject_staged_candidate() rejection. Each records decided_by and decided_at even when the queue row''s reviewed_by/reviewed_at stay NULL. Same trigger protection and the same owner/superuser caveat as staged_discovery_evidence.';
+  'Append-only log of editor decisions on queue rows: every resolve_discovery_candidate() action (including those that leave the row open), every approve_staged_guideline() publication and every reject_staged_candidate() rejection, each written in the same transaction as the decision. Each records decided_by and decided_at even when the queue row''s reviewed_by/reviewed_at stay NULL. Same trigger protection and the same owner/superuser caveat as staged_discovery_evidence.';
 
 -- ── 2. reject_staged_candidate(uuid, text, boolean) ─────────────────────────
 

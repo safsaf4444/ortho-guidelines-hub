@@ -15,10 +15,30 @@ The database CHECK accepts nine `change_reason` values. **Four** of them can be 
 | Function (who may call it) | Accepts exactly | Connected producer or caller on this branch |
 |---|---|---|
 | `stage_sync_candidates` (service role) | `NEW_GUIDELINE`, `POSSIBLE_SAME_DOCUMENT`; pipeline `sync-providers` only | **Connected.** `sync-providers.ts` writes `candidates.json`, and `stage-candidates.ts` calls the function. It runs on manual workflow dispatch or locally, against a database with the migration, which today means local only. |
-| `stage_discovery_candidate` (service role) | `NEW_GUIDELINE`, `POSSIBLE_NEW_EDITION`, `EDITION_TOKEN_CHANGED`; producer `discover` only | **Not connected.** Implemented and tested by direct calls. #220's `discover.ts` writes reports only, and no adapter calls this function. |
-| `approve_staged_guideline` (editor) | `NEW_GUIDELINE` rows only, when `pending` and not linked to or matching a catalogue entry exactly or loosely | Connected: dashboard Approve. |
+| `stage_discovery_candidate` (service role) | `NEW_GUIDELINE`, `POSSIBLE_NEW_EDITION`, `EDITION_TOKEN_CHANGED`; producer `discover` only; evidence validated (see "Discovery evidence" below) | **Not connected.** Implemented and tested by direct calls. #220's `discover.ts` writes reports only, and no adapter calls this function. |
+| `approve_staged_guideline` (editor) | `NEW_GUIDELINE` rows only, when `pending`, not linked to or matching a catalogue entry exactly or loosely, and not on the hold list (`RQ002`, checking both the row's document and the links being published). Each approval is logged in `staged_discovery_decisions` in the same transaction | Connected: dashboard Approve. |
 | `reject_staged_candidate` (editor) | Without 20261025: any class, **`pending` only**. With `20261025_reject_open_candidate.sql`: any **open** row (`pending` or `deferred`); a row with an open follow-up needs `p_confirm_open_follow_up = true` (else `RQ001`); every rejection is logged with the previous status and outcome | Connected: dashboard Reject (with a confirmation checkbox for open follow-ups). |
 | `resolve_discovery_candidate` (editor) | `POSSIBLE_NEW_EDITION`, `EDITION_TOKEN_CHANGED`, `POSSIBLE_SAME_DOCUMENT`; `pending` or `deferred` | Connected: dashboard decision buttons, a required note, and per-class actions from `src/lib/review-actions.ts`. |
+
+**Editorial holds** (`discovery_staging_holds`, keyed on the loose match key; 20261024 seeds UK-FALCON):
+- Both staging functions refuse to file a held document (outcome `held`).
+- `approve_staged_guideline` refuses to publish one (`RQ002`), including a row filed before the migration, whose stored URL was lowercased. Its match key still equals the hold key.
+- Rejecting or recording a decision on a held row is allowed; closing it is not publishing.
+- The dashboard marks a held row "On hold", gives the reason, and withholds "Review & publish". The database is the authority; the UI only says so up front.
+- Preflight P11 lists open rows for held documents before the upgrade.
+
+**Discovery evidence** (`stage_discovery_candidate`), checked against the database catalogue. The migration header, "Discovery evidence validation", has the full rules.
+- **Shape, on every call:**
+  - `NEW_GUIDELINE` carries no `softMatch` or `tokenChange`.
+  - `POSSIBLE_NEW_EDITION` carries `softMatch` naming the same entry.
+  - `EDITION_TOKEN_CHANGED` carries `tokenChange` naming the same entry, with two different values.
+- **Relationship, before a new row is filed:**
+  - The named entry must exist.
+  - `NEW_GUIDELINE` is refused if its document (or an observed redirect or canonical-host alternative) is catalogued, exactly or loosely.
+  - `POSSIBLE_NEW_EDITION` may have any URL. It is refused only if it *is* a catalogued link, or loosely matches a different entry and not its own.
+  - `EDITION_TOKEN_CHANGED` needs its URL, or an observed alternative, to match one of the entry's links.
+- **Uncertainty is kept, not refused.** Every discovery sighting records `catalogue_relation` (`exact`, `loose`, `alternative` or `none`), and the dashboard's evidence panel shows it in words.
+- Refusals are `22023` and write nothing.
 
 **Each `change_reason`**
 
@@ -125,9 +145,29 @@ Both keys are pinned in TypeScript and SQL by `scripts/tests/fixtures/url-key-ve
 - [x] Keep reject reasons and decision notes as drafts. They survive Cancel, a failed or refused attempt, and queue refreshes **within the page session, for the same account**. They do **not** survive a full browser reload, closing the tab, switching away from the review view, signing out, or another account signing in (including from another tab). They are not persisted anywhere. The same applies to card notes and an open Edit modal (`src/lib/draft-owner.ts`).
 - [x] `reject_staged_candidate` accepts `deferred` rows. This is `20261025_reject_open_candidate.sql`: local only, not applied to production.
 
-**Local end-to-end tests**
+**Local end-to-end tests** (tracked in `scripts/tests/local-supabase/`; see its README)
 - [x] Run the dashboard against the migrated local stack: load, reject, refused approve, and each resolve action, as an editor and as a non-editor.
 - [ ] Run the real `sync-providers.ts` with its real adapters (network, read-only) into `stage-candidates.ts` against the local stack, and record how many comparison rows the current catalogue produces.
 - [ ] Test the workflow's run sequence locally: dry run, then live, then rerun.
-- [ ] Rehearse the migration against a copy of production-shaped data, including pre-migration rows and the duplicate pre-flight, without touching production.
+- [x] Rehearse the migration on synthetic, production-shaped data, including pre-migration rows, a held legacy row, the duplicate pre-flight and the rejection-gap check, without touching production (`run.ts rehearsal`). A copy of real production data has not been used.
 - [ ] Build a discovery staging adapter for `stage_discovery_candidate` and test it end to end. (#220 is merged into this branch, and the Hide-test failure is gone.)
+
+## 7. Open decisions (deliberately unchanged on this branch)
+
+Both behaviours below are documented here, not changed. Each needs a separate decision by the owner.
+
+**A rejection is remembered per candidate id, not per document.**
+- Candidate ids include the provider and the class:
+  - sync: `makeCandidateId` in `scripts/lib/ingestion.ts`;
+  - discovery: `makeDiscoveryId` in `scripts/lib/discovery-classification.ts`.
+- So a rejected document comes back as a new pending row when:
+  - a second provider lists it (cross-listing);
+  - its class changes, for example `NEW_GUIDELINE` to `POSSIBLE_SAME_DOCUMENT` after a catalogue edit.
+- While it is open, the one-open-row rule still stops duplicates. Main behaves the same way.
+- Options: a per-document rejection memory, or a hold-like list fed by rejections.
+
+**A pre-migration row is matched by the loose key.**
+- Rows filed before 20261024 kept only a lowercased URL, so `_queue_row_for` matches them by match key.
+- A document differing from such a row only in letter case is reported `already_open` against it, with `identityBasis: legacy-match-key`. It gets no row of its own until the old row closes.
+- This is visible, never silent, but it can delay a genuinely distinct document.
+- Options: leave it, since such rows close over time, or have editors re-file affected rows after the upgrade.

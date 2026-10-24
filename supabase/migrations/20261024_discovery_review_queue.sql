@@ -31,12 +31,15 @@
 --     transactional and safe under concurrency.
 --  5. Append-only evidence and decision tables (see "Append-only: threat
 --     model" for exactly what that does and does not resist).
---  6. Staging holds: an exact-document hold list consulted at staging time by
---     BOTH staging functions. UK-FALCON is held pending an editorial decision.
---     Discovery REPORTS are unaffected; only queue staging is held.
+--  6. Staging holds: a document hold list consulted at staging time by BOTH
+--     staging functions AND enforced at approval (RQ002), so a held document
+--     already in the queue (including a row filed before this migration) cannot
+--     be published either. UK-FALCON is held pending an editorial decision.
+--     Discovery REPORTS are unaffected; only staging and publication are held.
 --  7. stage_discovery_candidate(): the discovery entry point (service role
 --     only). Accepts exactly the three discovery classes, so publisher
---     retirement cannot be staged.
+--     retirement cannot be staged, and checks the producer's evidence against
+--     the database catalogue (see "Discovery evidence validation").
 --  8. stage_sync_candidates(): the sync-providers entry point (service role
 --     only), used by scripts/stage-candidates.ts. PARTIAL SUCCESS per
 --     candidate (see "Partial staging and retries"); a duplicate or a bad row
@@ -45,9 +48,12 @@
 --     Writes only queue state and the decision log. Never touches guidelines
 --     or guideline_changelog.
 -- 10. approve_staged_guideline(): main's null-safe definition, plus refusal of
---     (a) any non-NEW_GUIDELINE row (the 42809 guard ported from PR #174) and
+--     (a) any non-NEW_GUIDELINE row (the 42809 guard ported from PR #174),
 --     (b) any row — whatever its classification — that is linked to, or whose
---     URL is already held by, an existing catalogue entry.
+--     URL is already held by, an existing catalogue entry, and
+--     (c) any row whose document, or any link it would publish, is on the
+--     staging hold list (RQ002). Every approval is also appended to the
+--     decision log, in the same transaction as the publication.
 --
 -- Deferred, deliberately: 'superseded', publishing a new edition, re-filing a
 -- "different-document" finding as a NEW_GUIDELINE candidate (until it exists,
@@ -98,6 +104,41 @@
 --  the row must be NEW_GUIDELINE AND have no matched_guideline_id AND its URL
 --  key must not be held by any catalogue entry's versions. A row mislabelled
 --  NEW_GUIDELINE that matches an existing entry is refused (42809).
+--
+-- ── Discovery evidence validation ───────────────────────────────────────────
+--
+--  stage_discovery_candidate() does not take the producer's word for the
+--  relationship it claims. Always (every call):
+--    * NEW_GUIDELINE carries no softMatch and no tokenChange: it claims no
+--      relationship to an existing entry.
+--    * POSSIBLE_NEW_EDITION carries softMatch naming the same entry, and no
+--      tokenChange.
+--    * EDITION_TOKEN_CHANGED carries tokenChange naming the same entry, with a
+--      parameter and two DIFFERENT values, and no softMatch.
+--  When a NEW row would be filed (an existing row is never re-judged), against
+--  the DATABASE catalogue:
+--    * a named entry must exist;
+--    * NEW_GUIDELINE is refused if the document is catalogued exactly, if it
+--      matches a catalogue link loosely (a comparison is needed, and discovery
+--      cannot file one), or if an observed alternative URL of it (redirect
+--      target, canonical host) is catalogued;
+--    * POSSIBLE_NEW_EDITION may have a URL unrelated to the entry's links (a
+--      new edition usually does). It is refused only when the evidence
+--      contradicts it: the discovered document IS a catalogued link (of that
+--      entry or another), or it loosely matches a different entry and not the
+--      named one;
+--    * EDITION_TOKEN_CHANGED needs a URL relationship with the named entry:
+--      its own URL, or an observed alternative of it, must match one of the
+--      entry's links (exactly or loosely). No relationship → refused as
+--      unsupported. A URL catalogued exactly under a different entry, and not
+--      under the named one → refused as contradictory.
+--  What is uncertain but not contradictory is STAGED, never silently upgraded:
+--  every discovery sighting records evidence.catalogue_relation — exact |
+--  loose | alternative | none — how its URL relates to the named entry's links,
+--  so the reviewer sees, e.g., a token change matched only via a redirect or
+--  only up to letter case. Co-publisher alternatives are not observations
+--  (the producer copies them from the catalogue) and never count.
+--  Every refusal is 22023 and writes nothing.
 --
 -- ── Document identity [url-key v3] ──────────────────────────────────────────
 --
@@ -716,6 +757,12 @@ create table if not exists public.staged_discovery_evidence (
   url_alternatives      jsonb       not null default '[]'::jsonb check (jsonb_typeof(url_alternatives) = 'array'),
   soft_match            jsonb       check (soft_match is null or jsonb_typeof(soft_match) = 'object'),
   token_change          jsonb       check (token_change is null or jsonb_typeof(token_change) = 'object'),
+  -- Discovery only: how the discovered URL relates to the NAMED entry's links,
+  -- computed by the database at staging. 'exact' identity, 'loose' (match key
+  -- only — e.g. letter case), 'alternative' (only an observed redirect or
+  -- canonical-host URL matches), 'none'. NULL for sync-providers sightings.
+  catalogue_relation    text        check (catalogue_relation is null
+                                           or catalogue_relation in ('exact', 'loose', 'alternative', 'none')),
   observed_at           timestamptz not null,
   recorded_at           timestamptz not null default now(),
   -- One sighting per (queue row, run, candidate). discovery_id is part of it
@@ -757,16 +804,18 @@ create table if not exists public.staged_discovery_decisions (
   staged_id    uuid        not null references public.staged_guidelines(id) on delete restrict,
   action       text        not null check (action in (
                  'same-document', 'different-document', 'no-action', 'new-edition',
-                 'acknowledged', 'needs-document-check', 'defer')),
+                 'acknowledged', 'needs-document-check', 'defer', 'approve')),
   from_status  text        not null,
   to_status    text        not null,
-  note         text        not null check (length(btrim(note)) > 0),
+  -- At least one non-whitespace character (tabs and newlines count as blank;
+  -- btrim() alone strips only spaces).
+  note         text        not null check (note ~ '\S'),
   decided_by   uuid        not null,
   decided_at   timestamptz not null default now()
 );
 
 comment on table public.staged_discovery_decisions is
-  'Append-only log of every editor decision on a discovery edition row, including decisions that leave the row open: each records decided_by and decided_at even when the queue row''s reviewed_by/reviewed_at stay NULL. Written only by resolve_discovery_candidate(). Same trigger protection and the same owner/superuser caveat as staged_discovery_evidence.';
+  'Append-only log of editor decisions on queue rows: every resolve_discovery_candidate() action (including those that leave the row open) and every approve_staged_guideline() publication, written in the same transaction as the decision. Each records decided_by and decided_at even when the queue row''s reviewed_by/reviewed_at stay NULL. Same trigger protection and the same owner/superuser caveat as staged_discovery_evidence.';
 
 create index if not exists staged_discovery_decisions_staged_idx
   on public.staged_discovery_decisions (staged_id, decided_at desc);
@@ -839,6 +888,56 @@ on conflict (match_key) do nothing;
 --   failed        (stage_sync_candidates only) refused or errored; nothing
 --                 written for this candidate
 -- and evidence: appended | already_recorded | none.
+
+-- How a discovered URL relates to one catalogue entry's links (see
+-- "Discovery evidence validation"). Observed alternatives only: redirect
+-- targets and canonical-host variants, never co-publisher copies of catalogue
+-- links. NULL entry → 'none'.
+create or replace function public._catalogue_relation(
+  p_entry text, p_identity text, p_match text, p_alternatives jsonb)
+returns text
+language sql
+stable
+set search_path = public, pg_temp
+as $$
+  select case
+    when p_entry is null then 'none'
+    when exists (select 1 from public.guidelines g, jsonb_array_elements(coalesce(g.versions, '[]'::jsonb)) v
+                  where g.id = p_entry and v ? 'url' and public.document_identity_key(v->>'url') = p_identity)
+      then 'exact'
+    when exists (select 1 from public.guidelines g, jsonb_array_elements(coalesce(g.versions, '[]'::jsonb)) v
+                  where g.id = p_entry and v ? 'url' and public.document_match_key(v->>'url') = p_match)
+      then 'loose'
+    when exists (select 1 from public.guidelines g, jsonb_array_elements(coalesce(g.versions, '[]'::jsonb)) v,
+                       jsonb_array_elements(coalesce(p_alternatives, '[]'::jsonb)) a
+                  where g.id = p_entry and v ? 'url'
+                    and a->>'scope' = 'document' and a->>'relation' in ('redirect-target', 'canonical-host')
+                    and coalesce(btrim(a->>'url'), '') <> ''
+                    and public.document_match_key(v->>'url') = public.document_match_key(a->>'url'))
+      then 'alternative'
+    else 'none'
+  end;
+$$;
+
+-- The first catalogue entry OTHER than p_entry holding this document, exactly
+-- (p_loose false) or under the loose key (p_loose true). NULL if none.
+create or replace function public._other_catalogue_entry(p_entry text, p_identity text, p_match text, p_loose boolean)
+returns text
+language sql
+stable
+set search_path = public, pg_temp
+as $$
+  select g.id
+    from public.guidelines g, jsonb_array_elements(coalesce(g.versions, '[]'::jsonb)) v
+   where g.id is distinct from p_entry and v ? 'url'
+     and case when p_loose then public.document_match_key(v->>'url') = p_match
+              else public.document_identity_key(v->>'url') = p_identity end
+   order by g.id
+   limit 1;
+$$;
+
+revoke all on function public._catalogue_relation(text, text, text, jsonb) from public, anon, authenticated, service_role;
+revoke all on function public._other_catalogue_entry(text, text, text, boolean) from public, anon, authenticated, service_role;
 
 -- Which queue row a candidate resolves to, before any insert.
 --   * A row with this candidate id that is the SAME document → 'existing'.
@@ -930,6 +1029,11 @@ declare
   v_row       public.staged_guidelines;
   v_hold      public.discovery_staging_holds;
   v_evidence  uuid;
+  v_soft      jsonb := nullif(p_candidate->'softMatch', 'null'::jsonb);
+  v_token     jsonb := nullif(p_candidate->'tokenChange', 'null'::jsonb);
+  v_alts      jsonb := coalesce(nullif(p_candidate->'urlAlternatives', 'null'::jsonb), '[]'::jsonb);
+  v_relation  text;
+  v_other     text;
 begin
   if p_run_id is null or length(btrim(p_run_id)) = 0 then
     raise exception 'stage_discovery_candidate: a run id is required for idempotency' using errcode = '22023';
@@ -957,6 +1061,38 @@ begin
     raise exception 'stage_discovery_candidate: a % candidate must name the entry it concerns', v_class
       using errcode = '22023';
   end if;
+  -- Evidence must fit the class it is offered for (see "Discovery evidence
+  -- validation"). Checked on every call.
+  if jsonb_typeof(v_alts) <> 'array' then
+    raise exception 'stage_discovery_candidate: urlAlternatives must be an array' using errcode = '22023';
+  end if;
+  if v_class = 'NEW_GUIDELINE' and (v_soft is not null or v_token is not null) then
+    raise exception 'stage_discovery_candidate: a NEW_GUIDELINE candidate cannot carry softMatch or tokenChange evidence: it claims no relationship to an existing entry'
+      using errcode = '22023';
+  end if;
+  if v_class = 'POSSIBLE_NEW_EDITION' then
+    if v_token is not null then
+      raise exception 'stage_discovery_candidate: a POSSIBLE_NEW_EDITION candidate cannot carry tokenChange evidence (that is EDITION_TOKEN_CHANGED)'
+        using errcode = '22023';
+    end if;
+    if jsonb_typeof(v_soft) is distinct from 'object' or v_soft->>'guidelineId' is distinct from v_matched then
+      raise exception 'stage_discovery_candidate: a POSSIBLE_NEW_EDITION candidate needs softMatch evidence naming the same entry (%)', v_matched
+        using errcode = '22023';
+    end if;
+  end if;
+  if v_class = 'EDITION_TOKEN_CHANGED' then
+    if v_soft is not null then
+      raise exception 'stage_discovery_candidate: an EDITION_TOKEN_CHANGED candidate cannot carry softMatch evidence'
+        using errcode = '22023';
+    end if;
+    if jsonb_typeof(v_token) is distinct from 'object' or v_token->>'guidelineId' is distinct from v_matched
+       or coalesce(btrim(v_token->>'parameter'), '') = ''
+       or v_token->>'previousValue' is null or v_token->>'observedValue' is null
+       or v_token->>'previousValue' = v_token->>'observedValue' then
+      raise exception 'stage_discovery_candidate: an EDITION_TOKEN_CHANGED candidate needs tokenChange evidence naming the same entry (%), a parameter, and two different values', v_matched
+        using errcode = '22023';
+    end if;
+  end if;
 
   v_identity := public.document_identity_key(v_url);
   v_match    := public.document_match_key(v_url);
@@ -964,6 +1100,7 @@ begin
     raise exception 'stage_discovery_candidate: identity disagreement — producer key % vs database key %',
       coalesce(p_candidate->>'sourceUrlKey', '(none)'), v_identity using errcode = '22023';
   end if;
+  v_relation := public._catalogue_relation(v_matched, v_identity, v_match, v_alts);
 
   select * into v_hold from public.discovery_staging_holds where match_key = v_match;
   if found then
@@ -976,6 +1113,62 @@ begin
     from public._queue_row_for(v_cid, v_identity, v_match) q;
   if v_status = 'none' then
     v_id := null;
+    -- Relationship checks, against the DATABASE catalogue, only when a NEW
+    -- row would be filed: an existing or already-open row is never re-judged.
+    if v_matched is not null and not exists (select 1 from public.guidelines where id = v_matched) then
+      raise exception 'stage_discovery_candidate: % names entry %, which is not in the catalogue', v_cid, v_matched
+        using errcode = '22023';
+    end if;
+    if v_class = 'NEW_GUIDELINE' then
+      v_other := public.catalogue_entry_for_identity_key(v_identity);
+      if v_other is not null then
+        raise exception 'stage_discovery_candidate: % is already catalogued exactly as entry % — not a new guideline', v_cid, v_other
+          using errcode = '22023';
+      end if;
+      v_other := public.catalogue_entry_for_match_key(v_match);
+      if v_other is not null then
+        raise exception 'stage_discovery_candidate: % loosely matches catalogue entry % — it needs a document comparison, which the discovery path cannot file; not staged (it stays in the discovery report for a human)', v_cid, v_other
+          using errcode = '22023';
+      end if;
+      select g.id into v_other
+        from public.guidelines g, jsonb_array_elements(coalesce(g.versions, '[]'::jsonb)) v,
+             jsonb_array_elements(v_alts) a
+       where v ? 'url' and a->>'scope' = 'document' and a->>'relation' in ('redirect-target', 'canonical-host')
+         and coalesce(btrim(a->>'url'), '') <> ''
+         and public.document_match_key(v->>'url') = public.document_match_key(a->>'url')
+       order by g.id limit 1;
+      if v_other is not null then
+        raise exception 'stage_discovery_candidate: an observed alternative URL of % is catalogued as entry % — that contradicts NEW_GUIDELINE', v_cid, v_other
+          using errcode = '22023';
+      end if;
+    elsif v_class = 'POSSIBLE_NEW_EDITION' then
+      if v_relation = 'exact' then
+        raise exception 'stage_discovery_candidate: % is entry %''s own catalogued link, not a new edition of it', v_cid, v_matched
+          using errcode = '22023';
+      end if;
+      v_other := public._other_catalogue_entry(v_matched, v_identity, v_match, false);
+      if v_other is not null then
+        raise exception 'stage_discovery_candidate: % is catalogued exactly as a different entry (%), which contradicts a new edition of %', v_cid, v_other, v_matched
+          using errcode = '22023';
+      end if;
+      v_other := public._other_catalogue_entry(v_matched, v_identity, v_match, true);
+      if v_other is not null and v_relation <> 'loose' then
+        raise exception 'stage_discovery_candidate: % loosely matches a different entry (%) and not %, which contradicts a new edition of %', v_cid, v_other, v_matched, v_matched
+          using errcode = '22023';
+      end if;
+    elsif v_class = 'EDITION_TOKEN_CHANGED' then
+      if v_relation = 'none' then
+        raise exception 'stage_discovery_candidate: % has no URL relationship with entry % (neither its URL nor an observed alternative matches one of the entry''s links); a token change needs one', v_cid, v_matched
+          using errcode = '22023';
+      end if;
+      if v_relation <> 'exact' then
+        v_other := public._other_catalogue_entry(v_matched, v_identity, v_match, false);
+        if v_other is not null then
+          raise exception 'stage_discovery_candidate: % is catalogued exactly as a different entry (%), which contradicts a token change on %', v_cid, v_other, v_matched
+            using errcode = '22023';
+        end if;
+      end if;
+    end if;
     -- DO NOTHING covers both unique rules (candidate_id and the document
     -- slot); a concurrent inserter of the same document makes this statement
     -- wait, then conflict — and the re-resolution below sees its row.
@@ -1011,14 +1204,13 @@ begin
   insert into public.staged_discovery_evidence (
     staged_id, discovery_run_id, producer, discovery_id, report_schema_version,
     discovered_url, surface_url, observed_topic, stated_labels, url_alternatives,
-    soft_match, token_change, observed_at, row_match_basis
+    soft_match, token_change, observed_at, row_match_basis, catalogue_relation
   ) values (
     v_row.id, p_run_id, 'discover', v_cid, coalesce((p_candidate->>'reportSchemaVersion')::integer, 1),
     v_url, p_candidate->>'surfaceUrl', p_candidate->>'topic',
     coalesce(p_candidate->'statedLabels', '[]'::jsonb),
-    coalesce(p_candidate->'urlAlternatives', '[]'::jsonb),
-    p_candidate->'softMatch', p_candidate->'tokenChange',
-    (p_candidate->>'observedAt')::timestamptz, v_basis
+    v_alts, v_soft, v_token,
+    (p_candidate->>'observedAt')::timestamptz, v_basis, v_relation
   )
   on conflict (staged_id, discovery_run_id, discovery_id) do nothing
   returning id into v_evidence;
@@ -1027,7 +1219,7 @@ begin
     'status', v_status,
     'evidence', case when v_evidence is not null then 'appended' else 'already_recorded' end,
     'stagedId', v_row.id, 'identityKey', v_identity, 'reviewStatus', v_row.review_status,
-    'identityBasis', v_basis)
+    'identityBasis', v_basis, 'catalogueRelation', v_relation)
     || case when v_collided then jsonb_build_object('candidateIdCollision',
          jsonb_build_object('requestedId', v_cid, 'filedAs', v_file_cid)) else '{}'::jsonb end
     || case when v_status = 'already_open' then jsonb_build_object(
@@ -1037,7 +1229,7 @@ end;
 $$;
 
 comment on function public.stage_discovery_candidate(text, text, jsonb) is
-  'The discovery staging path. Service role only. Accepts NEW_GUIDELINE, POSSIBLE_NEW_EDITION and EDITION_TOKEN_CHANGED; refuses anything else (publisher retirement is report-only). Honours discovery_staging_holds. Returns status staged | existing | already_open | held; evidence is appended to the row the candidate resolved to. Never changes an existing row. Idempotent per (row, run, candidate). One call is one transaction: an error writes nothing.';
+  'The discovery staging path. Service role only. Accepts NEW_GUIDELINE, POSSIBLE_NEW_EDITION and EDITION_TOKEN_CHANGED; refuses anything else (publisher retirement is report-only). Validates the class''s evidence on every call, and the claimed relationship against the database catalogue before filing a new row (22023 on unsupported or contradictory evidence); records how the URL relates to the named entry as evidence.catalogue_relation. Honours discovery_staging_holds. Returns status staged | existing | already_open | held; evidence is appended to the row the candidate resolved to. Never changes an existing row. Idempotent per (row, run, candidate). One call is one transaction: an error writes nothing.';
 
 revoke all on function public.stage_discovery_candidate(text, text, jsonb) from public, anon, authenticated;
 grant execute on function public.stage_discovery_candidate(text, text, jsonb) to service_role;
@@ -1277,7 +1469,8 @@ begin
   if public.is_editor() is not true then
     raise exception 'resolve_discovery_candidate: not an approved editor' using errcode = '42501';
   end if;
-  if p_note is null or length(btrim(p_note)) = 0 then
+  -- `!~ '\S'`: no non-whitespace character. btrim() alone misses tabs/newlines.
+  if p_note is null or p_note !~ '\S' then
     raise exception 'resolve_discovery_candidate: a note is required' using errcode = '23514';
   end if;
 
@@ -1335,7 +1528,7 @@ begin
    where id = p_staged_id;
 
   insert into public.staged_discovery_decisions (staged_id, action, from_status, to_status, note, decided_by)
-  values (p_staged_id, p_action, v_row.review_status, v_status, btrim(p_note), auth.uid());
+  values (p_staged_id, p_action, v_row.review_status, v_status, btrim(p_note, E' \t\r\n'), auth.uid());
 
   return jsonb_build_object('stagedId', p_staged_id, 'reviewStatus', v_status,
                             'reviewOutcome', v_outcome, 'open', v_status in ('pending', 'deferred'));
@@ -1343,7 +1536,7 @@ end;
 $$;
 
 comment on function public.resolve_discovery_candidate(uuid, text, text) is
-  'Records an editor decision on a POSSIBLE_NEW_EDITION or EDITION_TOKEN_CHANGED row. Closing actions (same-document, no-action, acknowledged) set review_status = resolved and reviewed_by/_at; different-document, new-edition, needs-document-check and defer leave the row open with reviewed_by/_at NULL. Every action is logged with decided_by and decided_at. Never publishes and never touches guidelines or guideline_changelog. SECURITY DEFINER, gated on is_editor() is not true.';
+  'Records an editor decision on a POSSIBLE_NEW_EDITION, EDITION_TOKEN_CHANGED or POSSIBLE_SAME_DOCUMENT row. Closing actions (same-document, no-action, acknowledged) set review_status = resolved and reviewed_by/_at; different-document, new-edition, needs-document-check and defer leave the row open with reviewed_by/_at NULL. Every action is logged with decided_by and decided_at. Never publishes and never touches guidelines or guideline_changelog. SECURITY DEFINER, gated on is_editor() is not true.';
 
 revoke all on function public.resolve_discovery_candidate(uuid, text, text) from public, anon;
 grant execute on function public.resolve_discovery_candidate(uuid, text, text) to authenticated;
@@ -1365,13 +1558,16 @@ declare
   v_new    public.guidelines;
   v_id     text;
   v_holder text;
+  v_hold   public.discovery_staging_holds;
+  v_link   text;
 begin
   if public.is_editor() is not true then
     raise exception 'approve_staged_guideline: not an approved editor'
       using errcode = '42501';
   end if;
 
-  if p_changelog_note is null or length(btrim(p_changelog_note)) = 0 then
+  -- `!~ '\S'`: no non-whitespace character. btrim() alone misses tabs/newlines.
+  if p_changelog_note is null or p_changelog_note !~ '\S' then
     raise exception 'approve_staged_guideline: a change note is required'
       using errcode = '23514';
   end if;
@@ -1390,6 +1586,22 @@ begin
     raise exception 'approve_staged_guideline: candidate % is already %',
       p_candidate_id, v_staged.review_status
       using errcode = '55000';
+  end if;
+
+  -- (c) Editorial holds. Checked here as well as at staging, because a held
+  -- document can already be in the queue: a row filed before this migration
+  -- (its stored URL lowercased; the hold is on the loose key, so it still
+  -- matches), or a row filed before the hold was added.
+  if v_staged.primary_url is not null then
+    select * into v_hold from public.discovery_staging_holds
+     where match_key = public.document_match_key(v_staged.primary_url);
+    if found then
+      raise exception using
+        errcode = 'RQ002',
+        message = format('approve_staged_guideline: candidate %s is on the editorial hold list (%s): %s',
+                         p_candidate_id, v_hold.status, v_hold.reason),
+        hint    = 'Nothing was published. A hold is lifted only by an editorial decision (remove its discovery_staging_holds row).';
+    end if;
   end if;
 
   -- (a) Ported from PR #174: this path publishes a NEW entry and nothing else.
@@ -1440,6 +1652,23 @@ begin
       using errcode = '23502';
   end if;
 
+  -- (c, continued) The links being PUBLISHED are checked too: an editor can
+  -- change the URL in the publish form.
+  if jsonb_typeof(v_new.versions) = 'array' then
+    select v->>'url', h.status, h.reason into v_link, v_hold.status, v_hold.reason
+      from jsonb_array_elements(v_new.versions) v
+      join public.discovery_staging_holds h on h.match_key = public.document_match_key(v->>'url')
+     where v ? 'url' and coalesce(btrim(v->>'url'), '') <> ''
+     limit 1;
+    if v_link is not null then
+      raise exception using
+        errcode = 'RQ002',
+        message = format('approve_staged_guideline: the link %s is on the editorial hold list (%s): %s',
+                         v_link, v_hold.status, v_hold.reason),
+        hint    = 'Nothing was published. A hold is lifted only by an editorial decision (remove its discovery_staging_holds row).';
+    end if;
+  end if;
+
   insert into public.guidelines (
     id, section, type, topic, sub_group, source, summary, notes, status,
     regional_variation, local_overlay_needed, last_checked, cross_listed_in,
@@ -1479,12 +1708,17 @@ begin
          resulting_guideline_id = v_id
    where id = p_candidate_id;
 
+  -- The decision log, in the same transaction: an approval is logged if and
+  -- only if it published.
+  insert into public.staged_discovery_decisions (staged_id, action, from_status, to_status, note, decided_by)
+  values (p_candidate_id, 'approve', v_staged.review_status, 'accepted', btrim(p_changelog_note, E' \t\r\n'), auth.uid());
+
   return v_id;
 end;
 $$;
 
 comment on function public.approve_staged_guideline(uuid, jsonb, text) is
-  'Publishes a pending NEW_GUIDELINE candidate and its change note in one transaction, then marks the row accepted. Refuses (42809) any non-NEW_GUIDELINE row, and any row linked to or whose document key is held by an existing entry [discovery-guards v1]. SECURITY DEFINER, gated on is_editor() is not true.';
+  'Publishes a pending NEW_GUIDELINE candidate and its change note in one transaction, marks the row accepted, and appends an ''approve'' entry to staged_discovery_decisions in that same transaction. Refuses (42809) any non-NEW_GUIDELINE row, and any row linked to or whose document key is held by an existing entry [discovery-guards v1]; refuses (RQ002) a row whose document, or any link it would publish, is on discovery_staging_holds [hold-guard v1]. SECURITY DEFINER, gated on is_editor() is not true.';
 
 -- create or replace preserves the existing grants; restated for a fresh build.
 revoke all on function public.approve_staged_guideline(uuid, jsonb, text) from public, anon;
@@ -1499,7 +1733,9 @@ commit;
 --   select pg_get_functiondef('public.approve_staged_guideline(uuid,jsonb,text)'::regprocedure)
 --          like '%discovery-guards v1%' as has_classification_guard,
 --          pg_get_functiondef('public.approve_staged_guideline(uuid,jsonb,text)'::regprocedure)
---          like '%is_editor() is not true%' as null_safe;               -- t, t
+--          like '%is_editor() is not true%' as null_safe,
+--          obj_description('public.approve_staged_guideline(uuid,jsonb,text)'::regprocedure)
+--          like '%hold-guard v1%' as hold_guard;                          -- t, t, t
 --   select relname, relrowsecurity from pg_class
 --    where relname in ('staged_discovery_evidence','staged_discovery_decisions','discovery_staging_holds');
 --   -- all t
@@ -1521,7 +1757,9 @@ commit;
 --                 public.stage_sync_candidates(text,jsonb),
 --                 public._stage_sync_candidate(text,jsonb),
 --                 public.resolve_discovery_candidate(uuid,text,text),
---                 public._queue_row_for(text,text,text);
+--                 public._queue_row_for(text,text,text),
+--                 public._catalogue_relation(text,text,text,jsonb),
+--                 public._other_catalogue_entry(text,text,text,boolean);
 --   and revert scripts/stage-candidates.ts with it (it calls stage_sync_candidates).
 --   drop table public.staged_discovery_decisions, public.staged_discovery_evidence,
 --              public.discovery_staging_holds;   -- triggers block TRUNCATE, not DROP

@@ -87,6 +87,10 @@ for (const r of ['POSSIBLE_SAME_DOCUMENT', 'POSSIBLE_NEW_EDITION', 'EDITION_TOKE
     STATUSES.every((st) => OUTCOMES.every((o) => !allowedActions(r, st, o).publish)));
 }
 check('deferred NEW_GUIDELINE is not publishable (approve needs pending)', !allowedActions('NEW_GUIDELINE', 'deferred').publish);
+check('a held pending NEW_GUIDELINE is not publishable (approval refuses it, RQ002)', !allowedActions('NEW_GUIDELINE', 'pending', null, true).publish);
+check('…but it can still be rejected', allowedActions('NEW_GUIDELINE', 'pending', null, true).reject);
+eq('a held comparison row keeps its decisions', allowedActions('POSSIBLE_SAME_DOCUMENT', 'pending', null, true).resolve, ['same-document', 'different-document', 'defer']);
+check('not held: unchanged (publishable)', allowedActions('NEW_GUIDELINE', 'pending', null, false).publish);
 eq('POSSIBLE_SAME_DOCUMENT pending: resolve actions', allowedActions('POSSIBLE_SAME_DOCUMENT', 'pending').resolve, ['same-document', 'different-document', 'defer']);
 eq('…with an awaiting-refiling follow-up, different-document is not re-offered', allowedActions('POSSIBLE_SAME_DOCUMENT', 'pending', 'different-document-awaiting-refiling').resolve, ['same-document', 'defer']);
 eq('EDITION_TOKEN_CHANGED deferred: acknowledged + needs-document-check', allowedActions('EDITION_TOKEN_CHANGED', 'deferred').resolve, ['acknowledged', 'needs-document-check']);
@@ -122,11 +126,11 @@ const dash = readFileSync('src/components/ReviewDashboard.tsx', 'utf8');
 const app = readFileSync('src/App.tsx', 'utf8');
 const svc = readFileSync('src/lib/staged-service.ts', 'utf8');
 check('the dashboard renders "Review & publish" only under canPublish', /\{canPublish && \(\s*<button\s*onClick=\{onEdit\}/.test(dash));
-check('canPublish comes from the shared matrix', /canPublish=\{actions\.publish\}/.test(dash) && /allowedActions\(candidate\.changeReason, candidate\.reviewStatus, candidate\.reviewOutcome\)/.test(dash));
+check('canPublish comes from the shared matrix, with the hold', /canPublish=\{actions\.publish\}/.test(dash) && /allowedActions\(candidate\.changeReason, candidate\.reviewStatus, candidate\.reviewOutcome, candidate\.hold != null\)/.test(dash));
 check('the dashboard never calls approve itself', !/stagedService\.approve/.test(dash));
 const reviewHandler = /const handleReviewCandidate = \(candidate: DisplayCandidate\) => \{[^]*?\n  \};/.exec(app)?.[0] ?? '';
-check('App refuses to open the publish form unless the matrix allows publish',
-  /allowedActions\(candidate\.changeReason, candidate\.reviewStatus, candidate\.reviewOutcome\)\.publish/.test(reviewHandler)
+check('App refuses to open the publish form unless the matrix (with the hold) allows publish',
+  /allowedActions\(candidate\.changeReason, candidate\.reviewStatus, candidate\.reviewOutcome, candidate\.hold != null\)\.publish/.test(reviewHandler)
   && reviewHandler.indexOf('.publish') < reviewHandler.indexOf('setEditingGuideline'), reviewHandler.slice(0, 200));
 check('the queue loads pending AND deferred', /\.in\('review_status', \['pending', 'deferred'\]\)/.test(svc));
 check('a missing upgrade column is reported as unavailable, not as an empty queue', /reason: 'unavailable', message: QUEUE_UPGRADE_UNAVAILABLE_MESSAGE/.test(svc));
