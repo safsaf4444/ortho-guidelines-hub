@@ -8,18 +8,30 @@ dashboard has not been changed and has not been run against this schema (see the
 
 ## 1. Change reasons
 
-The database CHECK accepts nine values. Only three can currently be staged through a function.
+The database CHECK accepts nine `change_reason` values. **Four** of them can be staged through an implemented function, and `NEW_GUIDELINE` is accepted by both staging functions. The other five have no staging function on this branch: only a direct SQL insert by the table owner or the service role could create them.
 
-| `change_reason` | Produced by | Staged through | New-entry approval | Editor resolve actions |
+**Functions: what each accepts, and what is actually connected to it**
+
+| Function (who may call it) | Accepts exactly | Connected producer or caller on this branch |
+|---|---|---|
+| `stage_sync_candidates` (service role) | `NEW_GUIDELINE`, `POSSIBLE_SAME_DOCUMENT`; pipeline `sync-providers` only | **Connected.** `sync-providers.ts` writes `candidates.json`, and `stage-candidates.ts` calls the function. It runs on manual workflow dispatch or locally, against a database with the migration, which today means local only. |
+| `stage_discovery_candidate` (service role) | `NEW_GUIDELINE`, `POSSIBLE_NEW_EDITION`, `EDITION_TOKEN_CHANGED`; producer `discover` only | **Not connected.** Implemented and tested by direct calls. #220's `discover.ts` writes reports only, and no adapter calls this function. |
+| `approve_staged_guideline` (editor) | `NEW_GUIDELINE` rows only, when `pending` and not linked to or matching a catalogue entry exactly or loosely | Connected: dashboard Approve. |
+| `reject_staged_candidate` (editor) | Any class, **`pending` only** (`deferred` refused with 55000) | Connected: dashboard Reject. |
+| `resolve_discovery_candidate` (editor) | `POSSIBLE_NEW_EDITION`, `EDITION_TOKEN_CHANGED`, `POSSIBLE_SAME_DOCUMENT`; `pending` or `deferred` | **Not connected.** There is no dashboard UI; it is tested by direct calls. |
+
+**Each `change_reason`**
+
+| `change_reason` | Staged by | Intended producer | New-entry approval | Resolve actions (open ones keep the row in the queue) |
 |---|---|---|---|---|
-| `NEW_GUIDELINE` | `sync-providers`; discovery (#220) | `stage_sync_candidates`, `stage_discovery_candidate` | **Yes**, only if no catalogue link matches it exactly or loosely | — (approve or reject) |
-| `POSSIBLE_SAME_DOCUMENT` | `sync-providers`: a loose-only URL match with a catalogue link | `stage_sync_candidates` | No (42809) | `same-document` closes it; `different-document` keeps it open; `defer` |
-| `POSSIBLE_NEW_EDITION` | discovery (#220): a soft title match | `stage_discovery_candidate` | No (42809) | `same-document`, `no-action`, `different-document` (open), `new-edition` (open), `defer` |
-| `EDITION_TOKEN_CHANGED` | discovery (#220): changed `ver` token | `stage_discovery_candidate` | No (42809) | `acknowledged`, `needs-document-check` (open), `defer` |
-| `CONTENT_DRIFT` | content-hash detector (#174, paused) | none on this branch | No | — |
-| `REVISED`, `WITHDRAWN`, `URL_MOVED`, `UNREACHABLE_LINK` | reserved; no producer yet | none | No | — |
+| `NEW_GUIDELINE` | `stage_sync_candidates`, `stage_discovery_candidate` | `sync-providers` (connected); discovery (not connected) | **Yes**, under the conditions above | — (approve or reject) |
+| `POSSIBLE_SAME_DOCUMENT` | `stage_sync_candidates` | `sync-providers` (connected): a loose-only URL match | No (42809) | `same-document` closes it; `different-document` (open); `defer` (open) |
+| `POSSIBLE_NEW_EDITION` | `stage_discovery_candidate` | discovery, #220 (not connected) | No (42809) | `same-document`, `no-action` close it; `different-document`, `new-edition`, `defer` (open) |
+| `EDITION_TOKEN_CHANGED` | `stage_discovery_candidate` | discovery, #220 (not connected) | No (42809) | `acknowledged` closes it; `needs-document-check`, `defer` (open) |
+| `CONTENT_DRIFT` | none on this branch | content-hash detector, #174 (paused) | No | — |
+| `REVISED`, `WITHDRAWN`, `URL_MOVED`, `UNREACHABLE_LINK` | none | reserved; no producer | No | — |
 
-A row of any class can be rejected with `reject_staged_candidate`, but only while it is `pending`. That function refuses deferred rows with 55000. A deferred comparison or edition row can therefore be resolved but not rejected until a decision is made about that.
+A deferred row cannot be rejected today, because `reject_staged_candidate` accepts only `pending` rows. It can only be resolved, and only if its class has resolve actions. The proposed fix is in the dashboard scope; it is not on this branch.
 
 Two places hold their own copies of the reason list:
 - `ChangeReason` in `scripts/lib/ingestion.ts` has 7 members. It lacks the two discovery classes, which #220's report types carry.
