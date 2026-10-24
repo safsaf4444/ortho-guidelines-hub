@@ -17,9 +17,11 @@
  * Run:   npx tsx scripts/tests/discovery-run.test.ts
  * Exit:  0 = all assertions passed, 1 = at least one failure.
  */
+import { spawnSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { pathToFileURL } from 'url';
 
 let pass = 0;
 let fail = 0;
@@ -65,12 +67,35 @@ const BESS_OK = `
   </div>
 </div>`;
 
+
+/**
+ * Remove a throwaway temp directory. On Windows a just-written file can be held
+ * briefly by antivirus or the search indexer, and rmSync then throws EPERM or
+ * EBUSY even though nothing is wrong with the test. Retry as Node documents for
+ * exactly this case; if it still fails, WARN — never throw. A leftover OS temp
+ * directory is not a test failure, and an exception here would also skip the
+ * pass/fail summary and replace the suite's real result with a crash.
+ */
+function removeTempDir(dir: string): void {
+  try {
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  } catch (err) {
+    console.warn(`  (cleanup) could not remove ${dir}: ${(err as Error).message}`);
+  }
+}
+
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'disc-run-test-'));
 const originalCwd = process.cwd();
 process.chdir(TMP);
 
 try {
   const { runDiscovery } = await import('../discover');
+  // Pacing would otherwise make this suite sleep 5s between same-host runs.
+  // Same module instance as discover.ts uses, so this reaches its fetches.
+  const pacingMod = await import('../lib/discovery-cache');
+  // Virtual clock: a "sleep" advances it instantly, so waits are measured, not skipped.
+  let pacingClock = 1_000_000;
+  pacingMod.configurePacing({ now: () => pacingClock, sleep: async (ms) => { pacingClock += ms; } });
 
   console.log('\n[1] A declared-partial provider that FAILS reports failure, not partial success');
   requestedUrls.length = 0;
@@ -249,6 +274,12 @@ try {
     eq('the run succeeded', r.outcome, 'ok');
     eq('both surfaces were fetched', requestedUrls.length, 2);
     eq('three items parsed across the two surfaces', r.itemsDiscovered, 3);
+    const ebiSecond = r.surfaces.find((s) => s.url.includes('retired-guidance'))!;
+    check(
+      'the second EBI surface (same host, back-to-back) was paced, within the bound',
+      ebiSecond.pacedMs > 0 && ebiSecond.pacedMs <= pacingMod.MIN_HOST_INTERVAL_MS,
+      String(ebiSecond.pacedMs),
+    );
 
     const retired = r.surfaces.find((s) => s.url.includes('retired-guidance'))!;
 
@@ -416,10 +447,242 @@ try {
     eq('no reports produced', reports.length, 0);
     eq('exit code is non-zero', exitCode, 1);
   }
+
+  console.log('\n[10] An unmatched BOFAS item is a POSSIBLE edition, with the stated year verbatim and no date invented');
+  {
+    // The live shape of candidate 1 of the 15 Oct sweep: BOFAS hosts its own
+    // copy of a co-published document the catalogue holds at a BOA address.
+    const BOFAS_PAGE = `
+      <p><a href="/Portals/0/Position Statements/SpecS-Management-of-End-Stage-Ankle-Arthritis.pdf?ver=IfQ%3d%3d">BOFAS / BOA Speciality Standards on Management of End Stage Ankle Arthritis</a> (2025)</p>`;
+    responder = () => new Response(BOFAS_PAGE, { status: 200 });
+
+    const { reports, exitCode } = await runDiscovery('BOFAS');
+    const r = reports[0];
+    eq('the run succeeded', r.outcome, 'ok');
+    eq('exactly one candidate', r.candidates.length, 1);
+    const c = r.candidates[0];
+    eq('it is classed as a POSSIBLE new edition — nothing stronger', c.classification, 'POSSIBLE_NEW_EDITION');
+    eq('it names the catalogue entry it may concern', c.matchedGuidelineId, 'end-stage-ankle-arthritis');
+    eq('the publisher-stated year is carried, verbatim', c.statedLabels[0]?.value, '(2025)');
+    const st = c.softMatch?.statement ?? '';
+    check(
+      'the evidence keeps all three readings open: new edition, same document, different document',
+      /NEW EDITION/.test(st) && /SAME DOCUMENT/.test(st) && /DIFFERENT DOCUMENT/.test(st),
+      st,
+    );
+    check('it says no publication date was established', /no publication date was established/i.test(st), st);
+    check(
+      'the candidate carries no date field of its own — only labels and timestamps',
+      !Object.keys(c).some((k) => /^(published|publication|edition)(Date|At)?$/i.test(k)),
+      JSON.stringify(Object.keys(c)),
+    );
+    check('it does not claim to replace the catalogue link', !/\breplac/i.test(JSON.stringify(c)), c.notes);
+
+    const md = fs.readFileSync(
+      path.join(TMP, 'reports', fs.readdirSync(path.join(TMP, 'reports')).filter((f) => f.endsWith('.md')).sort().pop()!),
+      'utf-8',
+    );
+    check('the report shows the publisher-stated year with its provenance', md.includes('"(2025)" (page-body, from `https://www.bofas.org.uk/'));
+    check(
+      "the report shows the catalogue entry's own label beside it, verbatim",
+      md.includes(`Catalogue entry's own version label(s), verbatim: "April 2025"`),
+    );
+    eq('exit code is zero', exitCode, 0);
+  }
+
+  console.log('\n[12] Retirement is an explicit per-surface opt-in; a scope filter can never imply it');
+  {
+    const { admitItem, surfacePlansFor } = await import('../discover');
+    const { GUIDELINES_DATA } = await import('../../src/data/guidelines-data');
+    const { buildCatalogueIndex } = await import('../lib/edition-match');
+    const { PROVIDER_REGISTRY } = await import('../lib/provider-registry');
+    const { EBI_RETIRED_SURFACE } = await import('../adapters/ebi');
+    const index = buildCatalogueIndex(GUIDELINES_DATA);
+    const ctx = { index, seenEarlier: new Set<string>() };
+    const BOFAS_SURFACE = 'https://www.bofas.org.uk/clinician/research/bofas-publications';
+
+    // A BOFAS document the catalogue already holds (VTE position statement).
+    const held = {
+      topic: 'BOFAS Position Statement on VTE',
+      discoveredUrl: 'https://www.bofas.org.uk/Portals/0/Position%20Statements/BOFAS%20VTE%20Statement%20-%20v1.0%20-%202025-06.pdf?ver=x',
+    };
+    const unknown = { topic: 'Not in catalogue', discoveredUrl: 'https://www.bofas.org.uk/Portals/0/Research/nothing.pdf' };
+
+    // (a) The decision function itself.
+    const admitAll = admitItem({ gate: () => null }, held, ctx, BOFAS_SURFACE);
+    check('a scope filter that ADMITS a catalogue document records no retirement',
+      admitAll.admitted && admitAll.retirementAssertion === null, JSON.stringify(admitAll));
+    const declined = admitItem({ gate: () => 'test: out of scope' }, held, ctx, BOFAS_SURFACE);
+    check('a scope filter that DECLINES it is filtered — with no retirement attached',
+      !declined.admitted && declined.reason === 'test: out of scope' && !('retirementAssertion' in declined),
+      JSON.stringify(declined));
+    const explicitFalse = admitItem({ gate: () => null, assertsRetirement: false }, held, ctx, BOFAS_SURFACE);
+    check('assertsRetirement: false behaves like absent',
+      explicitFalse.admitted && explicitFalse.retirementAssertion === null);
+    const noGate = admitItem({}, held, ctx, BOFAS_SURFACE);
+    check('a surface with no gate and no flag records no retirement',
+      noGate.admitted && noGate.retirementAssertion === null);
+    const optedIn = admitItem({ assertsRetirement: true }, held, ctx, BOFAS_SURFACE);
+    check('an OPTED-IN surface does record the catalogue match as publisher-asserted retirement',
+      optedIn.admitted && optedIn.retirementAssertion?.guidelineId !== undefined, JSON.stringify(optedIn));
+    const optedInUnknown = admitItem({ assertsRetirement: true }, unknown, ctx, BOFAS_SURFACE);
+    check('…but never for an item the catalogue does not hold',
+      optedInUnknown.admitted && optedInUnknown.retirementAssertion === null);
+
+    // (b) Across the whole registry, exactly one shipped surface opts in.
+    const flagged = PROVIDER_REGISTRY.flatMap((e) => surfacePlansFor(e))
+      .filter((p) => p.assertsRetirement === true).map((p) => p.url);
+    eq('the only surface that asserts retirement is EBI’s retired-guidance term',
+      JSON.stringify(flagged), JSON.stringify([EBI_RETIRED_SURFACE]));
+
+    // (c) End to end: BOFAS with a scope filter added, over the five documents
+    // the catalogue already holds plus one item the filter declines.
+    const BOFAS_HELD_PAGE = `
+      <p><a href="/Portals/0/Position Statements/BOFAS VTE Statement - v1.0 - 2025-06.pdf?ver=a">BOFAS Position Statement on VTE</a> (2025)</p>
+      <p><a href="/Portals/0/Position Statements/FAME STUDY POSITION STATEMENT.pdf?ver=b">BOFAS Position Statement on the FAME Study</a> (2019)</p>
+      <p><a href="/Portals/0/Position Statements/BOFAS Statement on TAR .pdf?ver=c">BOFAS Position Statement on Total Ankle Replacement</a> (2019)</p>
+      <p><a href="/Portals/0/Position%20Statements/DiabeticFoot%20FINAL.pdf?ver=d">BOFAS / BOA / Multidisciplinary Diabetic Foot Guidelines</a> (2016)</p>
+      <p><a href="/Portals/0/Position Statements/BOFAS Pathways 2.pdf?ver=e">BOFAS Pathways of Care in Foot and Ankle Surgery</a></p>
+      <p><a href="/Portals/0/Research/Some-Audit-Report.pdf?ver=f">A research report</a> (2022)</p>`;
+    responder = () => new Response(BOFAS_HELD_PAGE, { status: 200 });
+
+    const withScopeFilter = (assertsRetirement?: boolean) => (entry: Parameters<typeof surfacePlansFor>[0]) =>
+      entry.key !== 'BOFAS'
+        ? surfacePlansFor(entry)
+        : surfacePlansFor(entry).map((p) => ({
+            ...p,
+            gate: (item: { discoveredUrl: string }) =>
+              /\/Research\//.test(item.discoveredUrl) ? 'test scope filter: research output' : null,
+            ...(assertsRetirement === undefined ? {} : { assertsRetirement }),
+          }));
+
+    const { reports, exitCode } = await runDiscovery('BOFAS', withScopeFilter());
+    const r = reports[0];
+    eq('the run succeeded', r.outcome, 'ok');
+    eq('all five held BOFAS documents matched the catalogue', r.matchedExisting, 5);
+    eq('the research item was filtered by the scope filter', r.itemsFiltered, 1);
+    eq('coverage balances', r.coverageBalanced, true);
+    eq('ZERO publisher-asserted retirements on the filtered BOFAS surface',
+      r.surfaces.reduce((n, s) => n + s.retirementAssertions.length, 0), 0);
+    const md = fs.readFileSync(
+      path.join(TMP, 'reports', fs.readdirSync(path.join(TMP, 'reports')).filter((f) => f.endsWith('.md')).sort().pop()!),
+      'utf-8',
+    );
+    check('the report contains no PUBLISHER-ASSERTED RETIREMENT line', !/PUBLISHER-ASSERTED RETIREMENT of/.test(md));
+    check('the filtered item is still listed, with its reason', /FILTERED "A research report"/.test(md) && /test scope filter: research output/.test(md));
+    check('the report states that filtering does not mean retirement', /does NOT mean the\s+publisher retired it/.test(md));
+    eq('exit code is zero', exitCode, 0);
+
+    // (d) Sensitivity: the SAME sweep with the flag forced on reports all five
+    // as retired — so (c) would catch a return to "has a gate ⇒ retirement".
+    const forced = (await runDiscovery('BOFAS', withScopeFilter(true))).reports[0];
+    eq('with assertsRetirement forced on, the same five ARE reported (test is sensitive)',
+      forced.surfaces.reduce((n, s) => n + s.retirementAssertions.length, 0), 5);
+  }
+
+  // The ENTRYPOINT, run as a real child process. runDiscovery's return value
+  // is covered above; this covers what the OS actually sees. The Windows
+  // exit-127 crash (forced process.exit() racing a closing TLS socket) could
+  // only be reproduced against a live server, so it cannot be replayed here —
+  // what CAN be pinned is that the entrypoint exits naturally with the real
+  // code, and that process.exit() appears only in the hang watchdog.
+  console.log('\n[9] The entrypoint exits naturally, with the real exit code');
+  {
+    const tsxCli = path.join(originalCwd, 'node_modules', 'tsx', 'dist', 'cli.mjs');
+    const script = path.join(originalCwd, 'scripts', 'discover.ts');
+    const run = (provider: string, cwd: string) =>
+      spawnSync(process.execPath, [tsxCli, script, '--provider', provider], {
+        cwd, encoding: 'utf-8', timeout: 60_000,
+      });
+
+    const childCwd = fs.mkdtempSync(path.join(os.tmpdir(), 'disc-entry-test-'));
+    try {
+      const unknown = run('NOT A PROVIDER', childCwd);
+      eq('unknown provider: the process exit status is 1', unknown.status, 1);
+
+      // ROS is awaiting-approval: skipped, so NO request is made — safe to run
+      // for real. Its cache and reports land in the throwaway cwd.
+      const skipped = run('ROS', childCwd);
+      eq('skipped provider: the process exit status is 0', skipped.status, 0);
+      check('it did not take the watchdog path', !/forcing exit/.test(skipped.stderr ?? ''), skipped.stderr);
+      check('no libuv assertion on the way out', !/Assertion failed/.test(skipped.stderr ?? ''), skipped.stderr);
+    } finally {
+      removeTempDir(childCwd);
+    }
+
+    const src = fs.readFileSync(script, 'utf-8');
+    // Code only: the entrypoint's own comment explains why process.exit() is avoided.
+    const entry = src.slice(src.indexOf('if (isMain)')).split(/\r?\n/).filter((l) => !/^\s*\/\//.test(l)).join('\n');
+    check('the entrypoint sets process.exitCode', /process\.exitCode = exitCode/.test(entry));
+    check('the entrypoint never calls process.exit() itself', !/process\.exit\(/.test(entry), entry);
+    check('the entrypoint arms the watchdog after the sweep settles', /\.finally\(\(\) => \{\s*armExitWatchdog\(\);/.test(entry));
+    const codeOnly = src.split(/\r?\n/).filter((l) => !/^\s*(\/\/|\*|\/\*\*)/.test(l)).join('\n');
+    eq('process.exit( appears exactly once in the whole script — the watchdog default', (codeOnly.match(/process\.exit\(/g) ?? []).length, 1);
+  }
+
+  console.log('\n[11] The exit watchdog: never reports success after forcing termination');
+  {
+    const { watchdogVerdict, WATCHDOG_EXIT_CODE, armExitWatchdog } = await import('../discover');
+
+    const forcedCode: number = WATCHDOG_EXIT_CODE;
+    eq('the forced-exit code is nonzero', forcedCode !== 0, true);
+    eq('…and distinct from an ordinary failed sweep (1)', forcedCode !== 1, true);
+    const ok = watchdogVerdict(0, ['TCPSocketWrap'], 30_000);
+    eq('a sweep that SUCCEEDED but then hung exits nonzero', ok.exitCode, WATCHDOG_EXIT_CODE);
+    check('…and says the sweep itself had succeeded', /sweep's own result was success \(0\)/.test(ok.message), ok.message);
+    check('…and says why it is not reporting that', /never reported as success/.test(ok.message), ok.message);
+    check('…and names what was still open', /Still open: TCPSocketWrap/.test(ok.message), ok.message);
+    const failed = watchdogVerdict(1, [], 30_000);
+    eq('a sweep that FAILED and then hung also exits with the watchdog code', failed.exitCode, WATCHDOG_EXIT_CODE);
+    check('…while reporting the sweep\'s own failure', /failure \(1\)/.test(failed.message), failed.message);
+    eq('no recorded result is still nonzero', watchdogVerdict(undefined, [], 30_000).exitCode, WATCHDOG_EXIT_CODE);
+
+    // In-process, with injected exit: the timer is unref()d and, when it fires,
+    // sets exitCode before exiting, so even an exit() that is swallowed leaves a
+    // nonzero status behind.
+    const saved = process.exitCode;
+    process.exitCode = 0;
+    const exits: number[] = [];
+    const errors: string[] = [];
+    const timer = armExitWatchdog(10, { exit: (c) => exits.push(c), error: (m) => errors.push(m), resources: () => ['Timeout'] });
+    check('the watchdog timer does not hold the process open', !timer.hasRef());
+    await new Promise((r) => setTimeout(r, 40));
+    eq('when it fires it exits with the watchdog code', exits[0], WATCHDOG_EXIT_CODE);
+    eq('process.exitCode is overwritten too — success cannot survive', process.exitCode, WATCHDOG_EXIT_CODE);
+    check('the reason is written to stderr', errors.length === 1 && /FORCED EXIT/.test(errors[0]), errors.join('|'));
+    process.exitCode = saved;
+
+    // For real, in a child process: a sweep that "succeeded" (exitCode 0) and
+    // then left a handle open. The OS must see the watchdog code, not 0.
+    const tsxCli = path.join(originalCwd, 'node_modules', 'tsx', 'dist', 'cli.mjs');
+    const discoverUrl = pathToFileURL(path.join(originalCwd, 'scripts', 'discover.ts')).href;
+    const childDir = fs.mkdtempSync(path.join(os.tmpdir(), 'disc-watchdog-test-'));
+    try {
+      const hung = path.join(childDir, 'hung.ts');
+      fs.writeFileSync(hung,
+        `import { armExitWatchdog } from ${JSON.stringify(discoverUrl)};\n` +
+        `process.exitCode = 0;\nsetInterval(() => {}, 1000);\narmExitWatchdog(300);\n`);
+      const r = spawnSync(process.execPath, [tsxCli, hung], { cwd: childDir, encoding: 'utf-8', timeout: 30_000 });
+      eq('child: a hung "successful" process exits with the watchdog code', r.status, WATCHDOG_EXIT_CODE);
+      check('child: stderr says it was forced, and why', /FORCED EXIT/.test(r.stderr) && /success \(0\)/.test(r.stderr), r.stderr);
+
+      const clean = path.join(childDir, 'clean.ts');
+      fs.writeFileSync(clean,
+        `import { armExitWatchdog } from ${JSON.stringify(discoverUrl)};\n` +
+        `process.exitCode = 0;\narmExitWatchdog(5000);\n`);
+      const t0 = Date.now();
+      const c = spawnSync(process.execPath, [tsxCli, clean], { cwd: childDir, encoding: 'utf-8', timeout: 30_000 });
+      eq('child: with nothing open, the process exits 0 naturally', c.status, 0);
+      check('child: …without waiting for the watchdog', Date.now() - t0 < 5000, `${Date.now() - t0}ms`);
+      check('child: …and without a forced-exit message', !/FORCED EXIT/.test(c.stderr), c.stderr);
+    } finally {
+      removeTempDir(childDir);
+    }
+  }
 } finally {
   globalThis.fetch = realFetch;
   process.chdir(originalCwd);
-  fs.rmSync(TMP, { recursive: true, force: true });
+  removeTempDir(TMP);
 }
 
 console.log(`\n──────── ${pass} passed, ${fail} failed ────────\n`);

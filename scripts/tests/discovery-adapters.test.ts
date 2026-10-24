@@ -31,6 +31,8 @@ import {
   ROS_CANONICAL_HOST,
 } from '../adapters/ros';
 import { canonicalHostAlternative } from '../lib/url-alternatives';
+import { parseBofasStatedLabels } from '../adapters/bofas';
+import { parseBofasPublicationsIndex } from '../sync-providers';
 
 let pass = 0;
 let fail = 0;
@@ -359,6 +361,40 @@ console.log('\n[5] Canonical-host alternative — recorded, unprobed, equivalenc
     'no alternative when the host is already canonical',
     canonicalHostAlternative('https://theros.org.uk/media/x/y.pdf', ROS_CANONICAL_HOST),
     null,
+  );
+}
+
+console.log('\n[6] BOFAS publisher-stated years — verbatim, only when unambiguous, keyed like the parser');
+{
+  // Mirrors the live markup of /clinician/research/bofas-publications
+  // (observed 2026-10-15): one block per link, year in brackets after it.
+  const BOFAS_SURFACE = 'https://www.bofas.org.uk/clinician/research/bofas-publications';
+  const html = `
+    <p><a href="/Portals/0/Position Statements/SpecS-Management-of-End-Stage-Ankle-Arthritis.pdf?ver=IfQ%3d%3d">BOFAS / BOA Speciality Standards on Management of End Stage Ankle Arthritis</a> (2025)</p>
+    <p><a href="/Portals/0/Position Statements/BOFAS Flatfoot Commissioning guidelines  .pdf?ver=7dk%3d%3d">BOFAS Commissioning Guidelines on Flatfoot Deformities</a></p>
+    <p><a href="/Portals/0/Position Statements/BOFAS VTE Statement - v1.0 - 2025-06.pdf?ver=5jg%3d%3d">BOFAS Position Statement on VTE</a></p>
+    <p><a href="/Portals/0/Research/a.pdf">Ambiguous report</a> (2022) and appendix (2023)</p>
+    <p><a href="/Portals/0/Research/b.pdf">Spaced year</a> ( 2019 )</p>`;
+
+  const labels = parseBofasStatedLabels(html, BOFAS_SURFACE);
+  const items = parseBofasPublicationsIndex(html, BOFAS_SURFACE);
+  const urlOf = (t: string) => items.find((i) => i.topic.startsWith(t))!.versions[0].url;
+
+  const arth = labels.get(urlOf('BOFAS / BOA Speciality Standards'));
+  eq('a bracketed year after the anchor is recorded', arth?.length, 1);
+  eq('verbatim, brackets included — never parsed into a date', arth?.[0].value, '(2025)');
+  eq('origin is the page body', arth?.[0].origin, 'page-body');
+  eq('provenance is the surface it was read from', arth?.[0].readFrom, BOFAS_SURFACE);
+  eq('no field label is invented (the page gives none)', arth?.[0].fieldLabel, undefined);
+
+  eq('a link with no year gets no label — absence is not "undated"', labels.has(urlOf('BOFAS Commissioning')), false);
+  eq('a date in the FILENAME is not read', labels.has(urlOf('BOFAS Position Statement on VTE')), false);
+  eq('trailing text beyond a lone year is ambiguous, so nothing is taken', labels.has(urlOf('Ambiguous report')), false);
+  eq('whitespace inside the brackets is tolerated, value kept verbatim', labels.get(urlOf('Spaced year'))?.[0].value, '( 2019 )');
+  check(
+    'every label key is a URL the BOFAS parser itself produced',
+    [...labels.keys()].every((k) => items.some((i) => i.versions[0].url === k)),
+    JSON.stringify([...labels.keys()]),
   );
 }
 

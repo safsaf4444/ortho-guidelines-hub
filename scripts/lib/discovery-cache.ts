@@ -98,6 +98,104 @@ export const DISCOVERY_USER_AGENT =
 /** Per-request ceiling, so one unresponsive host cannot stall a sweep. */
 export const REQUEST_TIMEOUT_MS = 30_000;
 
+// ─── Request pacing ─────────────────────────────────────────────────────────
+// The sweep issues requests one at a time today, but nothing stopped two
+// surfaces on the same host (EBI has two) going out back-to-back, and nothing
+// would stop overlapping requests if a later batch ran providers concurrently.
+// So:
+//
+//   * Requests to one host are SERIALISED through a per-host FIFO queue: a
+//     request is not even considered until the previous request to that host
+//     has been answered or has failed. Concurrent callers therefore cannot both
+//     read "last request was long ago" and go out together.
+//   * Once at the head of the queue, a request then waits until at least
+//     MIN_HOST_INTERVAL_MS has passed since that previous request finished.
+//     That sleep is bounded by construction — never longer than the interval.
+//   * A failure (network error, timeout, abort) counts as having asked the
+//     host, and always releases the queue, so one bad request can neither
+//     un-pace the next nor wedge every later request to that host.
+//   * Hosts are independent: pacing BOFAS never delays EBI.
+//
+// Total time before a request is sent is therefore its own (bounded) sleep
+// plus however long it queued behind earlier requests to the same host, each of
+// which is itself bounded by REQUEST_TIMEOUT_MS.
+
+/** Minimum gap between one request to a host being answered and the next being sent. */
+export const MIN_HOST_INTERVAL_MS = 5_000;
+
+interface PacingConfig {
+  minIntervalMs: number;
+  now: () => number;
+  sleep: (ms: number) => Promise<void>;
+}
+
+const DEFAULT_PACING: PacingConfig = {
+  minIntervalMs: MIN_HOST_INTERVAL_MS,
+  now: () => Date.now(),
+  sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+};
+
+let pacing: PacingConfig = { ...DEFAULT_PACING };
+/** Host → when the last request to it was answered or failed (ms, from pacing.now). */
+const lastFinishedAt = new Map<string, number>();
+/** Host → settles when the most recently queued request to it has finished. Never rejects. */
+const hostQueueTail = new Map<string, Promise<void>>();
+
+/** Test hook: swap the clock/sleep (and optionally the interval). */
+export function configurePacing(overrides: Partial<PacingConfig>): void {
+  pacing = { ...pacing, ...overrides };
+}
+
+/** Test hook: restore defaults and forget every host. */
+export function resetPacing(): void {
+  pacing = { ...DEFAULT_PACING };
+  lastFinishedAt.clear();
+  hostQueueTail.clear();
+}
+
+/**
+ * How long a request to `url` would have to sleep if it were at the head of
+ * its host's queue now. 0 for a host not yet contacted. Excludes queueing.
+ */
+export function pacingDelayFor(url: string): number {
+  const last = lastFinishedAt.get(new URL(url).host);
+  if (last === undefined) return 0;
+  const remaining = last + pacing.minIntervalMs - pacing.now();
+  return Math.min(Math.max(remaining, 0), pacing.minIntervalMs);
+}
+
+/**
+ * Run `send` in `url`'s host slot: after every earlier request to the host has
+ * finished, and after the pacing sleep. Returns how long the caller waited in
+ * total (queue + sleep) alongside `send`'s result.
+ */
+async function inHostSlot<T>(url: string, send: () => Promise<T>): Promise<{ result: T; waitedMs: number }> {
+  const host = new URL(url).host;
+  const calledAt = pacing.now();
+  const previous = hostQueueTail.get(host) ?? Promise.resolve();
+  let release!: () => void;
+  const mine = new Promise<void>((resolve) => { release = resolve; });
+  const tail = previous.then(() => mine);
+  hostQueueTail.set(host, tail);
+
+  await previous;
+  try {
+    const sleepMs = pacingDelayFor(url);
+    if (sleepMs > 0) await pacing.sleep(sleepMs);
+    const waitedMs = Math.max(pacing.now() - calledAt, 0);
+    try {
+      return { result: await send(), waitedMs };
+    } finally {
+      // Recorded on failure too: a host that errored or timed out has still
+      // been asked once, and must not be asked again immediately.
+      lastFinishedAt.set(host, pacing.now());
+    }
+  } finally {
+    release();
+    if (hostQueueTail.get(host) === tail) hostQueueTail.delete(host);
+  }
+}
+
 interface CacheEntry {
   requestedUrl: string;
   finalUrl: string;
@@ -129,6 +227,8 @@ export interface FetchOutcome {
   requestMode: 'conditional' | 'unconditional';
   /** Which validator(s) were sent, for the report. */
   validatorsSent: string[];
+  /** How long this request waited before it was sent: queued behind same-host requests, plus the pacing sleep. */
+  pacedMs: number;
   /**
    * Why no validators were sent, when none were. Null on a conditional
    * request. Keeps the report from implying a revalidation that never
@@ -225,15 +325,17 @@ export async function fetchSurface(url: string): Promise<FetchOutcome> {
     }
   }
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-
-  let res: Response;
-  try {
-    res = await fetch(url, { headers, redirect: 'follow', signal: controller.signal });
-  } finally {
-    clearTimeout(timer);
-  }
+  // The request timeout starts only once this request is actually sent, so
+  // time spent queued or pacing never eats into it.
+  const { result: res, waitedMs: pacedMs } = await inHostSlot(url, async () => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    try {
+      return await fetch(url, { headers, redirect: 'follow', signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+  });
 
   const fetchedAt = new Date().toISOString();
   const contentType = res.headers.get('content-type');
@@ -262,6 +364,7 @@ export async function fetchSurface(url: string): Promise<FetchOutcome> {
       revalidated: true,
       requestMode,
       validatorsSent,
+      pacedMs,
       conditionalSkippedReason,
       previousBodySha256: stored.bodySha256,
       bodyChanged: false,
@@ -301,6 +404,7 @@ export async function fetchSurface(url: string): Promise<FetchOutcome> {
     revalidated: false,
     requestMode,
     validatorsSent,
+    pacedMs,
     conditionalSkippedReason,
     previousBodySha256: stored ? stored.bodySha256 : null,
     bodyChanged: stored ? stored.bodySha256 !== bodySha256 : false,
