@@ -97,13 +97,17 @@ console.log(`Catalogue: ${GUIDELINES_DATA.length} guidelines. Known URL under te
 
 console.log('\n[1] Change-reason vocabulary');
 
-eq('vocabulary is exactly the agreed six, in order', ALL_CHANGE_REASONS, [
+// Seventh member added 2026-10-24, deliberately: POSSIBLE_SAME_DOCUMENT, so a
+// loose-only URL match is shown to a reviewer instead of silently counted as
+// catalogued. See the ChangeReason doc comment.
+eq('vocabulary is exactly the agreed seven, in order', ALL_CHANGE_REASONS, [
   'NEW_GUIDELINE',
   'REVISED',
   'WITHDRAWN',
   'CONTENT_DRIFT',
   'URL_MOVED',
   'UNREACHABLE_LINK',
+  'POSSIBLE_SAME_DOCUMENT',
 ]);
 check('retired LINK_ROT is gone', !(ALL_CHANGE_REASONS as readonly string[]).includes('LINK_ROT'));
 check('retired METADATA_ONLY is gone', !(ALL_CHANGE_REASONS as readonly string[]).includes('METADATA_ONLY'));
@@ -187,6 +191,52 @@ eq(
   normaliseCandidateUrl('  /relative/path/A/  '),
   '/relative/path/a',
 );
+
+// ── Document-key vectors shared with the SQL mirror ─────────────────────────
+// The same file is asserted against public.document_match_key and
+// public.document_identity_key by
+// scripts/tests/integration/discovery-queue.local.test.ts. Expected values are
+// pinned here, not merely "TS equals SQL", so a change to both sides that
+// agrees with itself but moves the key still fails.
+{
+  const { readFileSync } = await import('node:fs');
+  const vectorFile = JSON.parse(
+    readFileSync(new URL('./fixtures/url-key-vectors.json', import.meta.url), 'utf-8'),
+  ) as { vectors: Array<{ why: string; input: string; match: string; identity: string }> };
+  const { documentIdentityKey } = await import('../lib/ingestion');
+  check('url-key vectors file is non-trivial', vectorFile.vectors.length >= 60, String(vectorFile.vectors.length));
+  for (const v of vectorFile.vectors) {
+    eq(`match key: ${v.why}`, normaliseCandidateUrl(v.input), v.match);
+    eq(`identity key: ${v.why}`, documentIdentityKey(v.input), v.identity);
+  }
+  for (const v of vectorFile.vectors) {
+    check(`keys are idempotent: ${v.why}`,
+      normaliseCandidateUrl(v.match) === v.match && documentIdentityKey(v.identity) === v.identity,
+      `${normaliseCandidateUrl(v.match)} | ${documentIdentityKey(v.identity)}`);
+    // Identity is never looser than matching: same identity => same match key.
+    check(`identity refines match: ${v.why}`, normaliseCandidateUrl(v.identity) === v.match,
+      `${normaliseCandidateUrl(v.identity)} vs ${v.match}`);
+  }
+  // The point of the split: distinct documents that the loose key merges.
+  for (const [a, b] of [
+    ['https://example.org/Docs/A.pdf', 'https://example.org/docs/a.pdf'],
+    ['https://www.nature.com/articles/x?sharing_token=ABC123', 'https://www.nature.com/articles/x?sharing_token=abc123'],
+    ['https://example.org/app#/Doc/1', 'https://example.org/app#/doc/1'],
+    ['https://example.org/a?path=/docs/', 'https://example.org/a?path=/docs'],
+  ]) {
+    check(`same match key, DIFFERENT identity: ${a} vs ${b}`,
+      normaliseCandidateUrl(a) === normaliseCandidateUrl(b) && documentIdentityKey(a) !== documentIdentityKey(b));
+  }
+  // And the documented merges, and only those, still merge.
+  for (const [why, a, b] of [
+    ['ver token', 'https://www.bofas.org.uk/Portals/0/A.pdf?ver=ONE', 'https://www.bofas.org.uk/Portals/0/A.pdf?ver=TWO'],
+    ['trailing path slash', 'https://www.boa.ac.uk/asset/X/', 'https://www.boa.ac.uk/asset/X'],
+    ['host case', 'https://WWW.BOFAS.org.uk/Portals/0/A.pdf', 'https://www.bofas.org.uk/Portals/0/A.pdf'],
+    ['percent-escape hex case', 'https://example.org/a%3db', 'https://example.org/a%3Db'],
+  ]) {
+    check(`documented identity merge (${why})`, documentIdentityKey(a) === documentIdentityKey(b));
+  }
+}
 
 const idArgs = {
   pipeline: 'sync-providers',
@@ -334,6 +384,34 @@ check('candidateIds are distinct', a.candidateId !== b.candidateId);
 // hash inputs were edited without realising IDs are meant to survive resweeps.
 eq('pinned: known BOA candidate ID unchanged', b.candidateId, 'boa-new-guideline-c141ecca0b7f');
 
+console.log('\n[5b] Producer matching: identity decides "catalogued"; loose-only needs comparison');
+{
+  const { GUIDELINES_DATA } = await import('../../src/data/guidelines-data');
+  const entryOf = (pred: (u: string) => boolean) => {
+    for (const g of GUIDELINES_DATA) for (const v of g.versions) if (v.url && pred(v.url)) return { id: g.id, url: v.url };
+    throw new Error('fixture URL not found in the catalogue');
+  };
+  const pathCase = entryOf((u) => /^https:\/\/[^?#]*\/[^?#]*[A-Z]/.test(u) && !u.includes('?'));
+  const queryCase = entryOf((u) => /\?[^#]*[A-Z]/.test(u));
+  const hostVariant = pathCase.url.replace(/^https:\/\/([^/]+)/, (_m, h: string) => `HTTPS://${h.toUpperCase()}`) + '/?ver=Z';
+  const items: DiscoveredItem[] = [
+    { topic: 'exact', source: 'BOA', versions: [{ label: 'L', url: pathCase.url }] },
+    { topic: 'host case + slash + ver', source: 'BOA', versions: [{ label: 'L', url: hostVariant }] },
+    { topic: 'path case', source: 'BOA', versions: [{ label: 'L', url: pathCase.url.replace(/\/([^/]*)$/, (_m, last: string) => `/${last.toLowerCase()}`) }] },
+    { topic: 'query case', source: 'BOA', versions: [{ label: 'L', url: queryCase.url.toLowerCase() }] },
+    { topic: 'new', source: 'BOA', versions: [{ label: 'L', url: 'https://www.boa.ac.uk/asset/NOT-IN-CATALOGUE-5B/' }] },
+  ];
+  const [m] = await runDryRun([stubAdapter(items)]);
+  eq('exact and RFC/ver/slash-equivalent links are catalogued, not candidates', m.matchedExisting, 2);
+  eq('two loose-only matches require comparison', m.requiresComparison, 2);
+  eq('classes, in order', m.candidates.map((c) => c.changeReason), ['POSSIBLE_SAME_DOCUMENT', 'POSSIBLE_SAME_DOCUMENT', 'NEW_GUIDELINE']);
+  eq('comparisons name the matched entries', m.candidates.slice(0, 2).map((c) => c.matchedGuidelineId), [pathCase.id, queryCase.id]);
+  check('…with the catalogue link verbatim and a reason', m.candidates.slice(0, 2).every((c) => c.documentComparison?.catalogueUrl
+    && c.documentComparison.basis === 'match-key-only' && /letter case/.test(c.documentComparison.reason)));
+  eq('only the genuinely new item is in the legacy newCandidates list', m.newCandidates.map((c) => c.topic), ['new']);
+  eq('coverage still balances', summariseReport(m).balanced, true);
+}
+
 console.log('\n[6] Determinism across runs');
 const rerun = await runDryRun([stubAdapter(ITEMS)]);
 eq(
@@ -358,7 +436,7 @@ eq('failed adapter yields zero candidates', failReports[0].candidates.length, 0)
 console.log('\n[8] No stray writes');
 const outAfter = existsSync(OUT) ? statSync(OUT).mtimeMs : null;
 eq('candidates.json untouched by import + 3 sweeps', outAfter, outBefore);
-eq('schema version', CANDIDATE_SCHEMA_VERSION, 1);
+eq('schema version (v2: POSSIBLE_SAME_DOCUMENT + documentComparison)', CANDIDATE_SCHEMA_VERSION, 2);
 
 console.log(`\n──────────────\n${pass} passed, ${fail} failed\n`);
 process.exit(fail === 0 ? 0 : 1);

@@ -82,9 +82,13 @@ jobs:
       # only way in. That is what keeps the review queue un-injectable from the
       # public site.
       #
-      # Writes ON CONFLICT DO NOTHING, so a candidate an editor has already
-      # accepted or rejected is NOT reset to pending by the next weekly run —
-      # see the header comment in scripts/stage-candidates.ts.
+      # Files through public.stage_sync_candidates(), which never modifies an
+      # existing queue row, so a candidate an editor has already accepted or
+      # rejected is NOT reset to pending by the next run. PARTIAL SUCCESS: a
+      # failed candidate is rolled back alone (step exits 1) while the others
+      # commit; re-running the same report retries only the failures. Requires
+      # supabase/migrations/20261024_discovery_review_queue.sql to be applied
+      # FIRST — see the header comment in scripts/stage-candidates.ts.
       #
       # Nothing here touches `guidelines`. Publishing stays a human action in
       # the app, through approve_staged_guideline().

@@ -43,11 +43,25 @@
  * so far ONLY producer of that shape; detect-changes.ts and flag-dead-links.ts
  * are untouched and still emit their own formats.
  *
- * Discovery, filtering, and matching behaviour are UNCHANGED — the candidate
- * records are an additional view over exactly the same items that previously
- * landed in `newCandidates`, which is still present for backward compatibility.
- * Everything emitted uses changeReason NEW_GUIDELINE and reviewStatus 'pending';
- * this script has no approval path and still writes nothing but candidates.json.
+ * Everything emitted has reviewStatus 'pending'; this script has no approval
+ * path and still writes nothing but candidates.json.
+ *
+ * ─── MATCHING: CONSERVATIVE IDENTITY DECIDES "ALREADY CATALOGUED" ───────────
+ *
+ * Each discovered link is compared with every catalogue version link under
+ * two keys from scripts/lib/ingestion.ts:
+ *   * IDENTITY key (documentIdentityKey) equal → the same document. Counted in
+ *     matchedExisting; no candidate. This is the ONLY definitive decision.
+ *   * Only the LOOSE match key (normaliseCandidateUrl) equal → the links differ
+ *     in path/query-value case or trailing slashes. Could be the same document
+ *     under a differently-cased link, or a distinct document on a case-
+ *     sensitive server. Emitted as a POSSIBLE_SAME_DOCUMENT candidate naming
+ *     the matched entry and the reason, counted in requiresComparison. Never
+ *     NEW_GUIDELINE, so it can never be approved as a new entry.
+ *   * Neither → NEW_GUIDELINE, as before.
+ * Until 2026-10-24 the loose key alone decided "already catalogued", so the
+ * second case was silently dropped. `newCandidates` (deprecated) still lists
+ * only the NEW_GUIDELINE items, so it keeps its old meaning.
  */
 import fs from 'fs';
 import path from 'path';
@@ -57,11 +71,13 @@ import RssParser from 'rss-parser';
 import { GUIDELINES_DATA, type Guideline } from '../src/data/guidelines-data';
 import {
   CANDIDATE_SCHEMA_VERSION,
+  documentIdentityKey,
   makeCandidateId,
   normaliseCandidateUrl,
   summariseReport,
   type CandidateReport,
   type ChangeReason,
+  type DocumentComparison,
   type IngestionCandidate,
   type PipelineId,
 } from './lib/ingestion';
@@ -96,12 +112,21 @@ export type {
 export interface DiffReport extends CandidateReport {
   /** @deprecated Superseded by `candidates`; retained for output compatibility. */
   newCandidates: DiscoveredGuideline[];
+  /**
+   * Of `candidates`, how many are POSSIBLE_SAME_DOCUMENT: a loose-only match
+   * with a catalogue link that a human must compare. Part of the coverage sum
+   * through `candidates`, never through matchedExisting.
+   */
+  requiresComparison: number;
 }
 
 const PIPELINE: PipelineId = 'sync-providers';
 
-/** Everything this script emits is a not-yet-in-the-catalogue discovery. */
+/** A discovery with no catalogue match under either key. */
 const CHANGE_REASON: ChangeReason = 'NEW_GUIDELINE';
+
+/** A discovery that matches a catalogue link under the loose key only. */
+const COMPARISON_REASON: ChangeReason = 'POSSIBLE_SAME_DOCUMENT';
 
 const OUTPUT_PATH = path.join(process.cwd(), 'candidates.json');
 
@@ -490,11 +515,39 @@ function loadExistingUrlMap(guidelines: Guideline[]): Map<string, Guideline> {
   return urlMap;
 }
 
-// NB: `normaliseCandidateUrl` from the shared contract replaces the two
-// identical inline normalisers this file used to carry (index build + lookup).
-// The implementation is byte-for-byte the same rule — lowercase, trim, strip
-// trailing slashes — so matching behaviour is unchanged. It is imported rather
-// than redeclared so that the match key and the candidate ID cannot drift apart.
+/** One catalogue link, kept verbatim with the entry that holds it. */
+interface CatalogueLink {
+  guidelineId: string;
+  url: string;
+}
+
+/**
+ * Catalogue links indexed under both keys. `byIdentity` answers "is this
+ * exact document catalogued?"; `byMatch` only ever proposes a comparison.
+ */
+export function loadCatalogueIndex(guidelines: Guideline[]): {
+  byIdentity: Map<string, CatalogueLink>;
+  byMatch: Map<string, CatalogueLink[]>;
+} {
+  const byIdentity = new Map<string, CatalogueLink>();
+  const byMatch = new Map<string, CatalogueLink[]>();
+  for (const g of guidelines) {
+    for (const v of g.versions) {
+      if (!v.url || v.url === '#') continue;
+      const link = { guidelineId: g.id, url: v.url };
+      const id = documentIdentityKey(v.url);
+      if (!byIdentity.has(id)) byIdentity.set(id, link);
+      const m = normaliseCandidateUrl(v.url);
+      byMatch.set(m, [...(byMatch.get(m) ?? []), link]);
+    }
+  }
+  return { byIdentity, byMatch };
+}
+
+// NB: `normaliseCandidateUrl` (the LOOSE match key) and `documentIdentityKey`
+// (the CONSERVATIVE identity key) both come from the shared contract, so the
+// match decision, the candidate ID and the database's keys cannot drift apart.
+// loadExistingUrlMap is the loose-only index, kept for the summary count.
 
 // ─── Candidate Mapping ───────────────────────────────────────────────────────
 
@@ -509,14 +562,16 @@ function toIngestionCandidate(
   item: DiscoveredGuideline,
   adapter: ProviderAdapter,
   discoveredAt: string,
+  comparison?: DocumentComparison,
 ): IngestionCandidate {
   const primaryUrl = normaliseCandidateUrl(item.versions[0].url);
+  const changeReason = comparison ? COMPARISON_REASON : CHANGE_REASON;
 
   return {
     candidateId: makeCandidateId({
       pipeline: PIPELINE,
       provider: adapter.sourceTag,
-      changeReason: CHANGE_REASON,
+      changeReason,
       primaryUrl,
     }),
     pipeline: PIPELINE,
@@ -530,15 +585,36 @@ function toIngestionCandidate(
       ...(v.date ? { date: v.date } : {}),
     })),
     primaryUrl,
-    changeReason: CHANGE_REASON,
+    changeReason,
     reviewStatus: 'pending',
     discoveredAt,
-    // NEW_GUIDELINE means nothing in the catalogue matched, by definition.
-    matchedGuidelineId: null,
+    // NEW_GUIDELINE means nothing in the catalogue matched, by definition. A
+    // comparison candidate names the entry it loosely matched.
+    matchedGuidelineId: comparison ? comparison.guidelineId : null,
     // Reserved; deliberately not populated in phase 1. See scripts/lib/ingestion.ts.
     providerRef: null,
-    notes: `Discovered on the ${adapter.name} index. No matching URL in the static catalogue.`,
+    notes: comparison
+      ? `Discovered on the ${adapter.name} index. REQUIRES DOCUMENT COMPARISON with catalogue entry `
+        + `${comparison.guidelineIds.join(', ')}: ${comparison.reason}`
+      : `Discovered on the ${adapter.name} index. No matching URL in the static catalogue.`,
+    ...(comparison ? { documentComparison: comparison } : {}),
   };
+}
+
+/** Plain-words difference between a discovered link and a loosely-matching catalogue link. */
+function describeLooseMatch(discovered: string, catalogue: string): string {
+  const head = (u: string) => u.split(/[?#]/, 1)[0];
+  const tail = (u: string) => u.slice(head(u).length);
+  const parts: string[] = [];
+  const hd = head(documentIdentityKey(discovered));
+  const hc = head(documentIdentityKey(catalogue));
+  if (hd !== hc) parts.push(hd.toLowerCase() === hc.toLowerCase() ? 'letter case in the path' : 'trailing slashes');
+  const td = tail(documentIdentityKey(discovered));
+  const tc = tail(documentIdentityKey(catalogue));
+  if (td !== tc) parts.push(td.toLowerCase() === tc.toLowerCase() ? 'letter case in the query or fragment' : 'trailing slashes in the query or fragment');
+  return `the links are equal only if ${parts.join(' and ') || 'letter case is ignored'} `
+    + `${parts.length > 1 ? 'are' : 'is'} ignored (catalogue: ${catalogue}; discovered: ${discovered}). `
+    + 'Some servers treat these as different documents. Compare the documents before deciding.';
 }
 
 // ─── Diff Engine ─────────────────────────────────────────────────────────────
@@ -546,6 +622,7 @@ function toIngestionCandidate(
 export async function runDryRun(adapters: ProviderAdapter[]): Promise<DiffReport[]> {
   const blocked = getBlockedDomains();
   const existingUrlMap = loadExistingUrlMap(GUIDELINES_DATA);
+  const catalogue = loadCatalogueIndex(GUIDELINES_DATA);
   const reports: DiffReport[] = [];
 
   console.log(`[Sync] Loaded ${GUIDELINES_DATA.length} existing guidelines (${existingUrlMap.size} distinct version URLs).`);
@@ -560,6 +637,7 @@ export async function runDryRun(adapters: ProviderAdapter[]): Promise<DiffReport
       const discovered = await adapter.fetchCandidates();
       let matchedCount = 0;
       let skippedBlocked = 0;
+      let requiresComparison = 0;
       const newCandidates: DiscoveredGuideline[] = [];
       const candidates: IngestionCandidate[] = [];
 
@@ -569,8 +647,23 @@ export async function runDryRun(adapters: ProviderAdapter[]): Promise<DiffReport
           skippedBlocked++;
           continue;
         }
-        if (existingUrlMap.has(normaliseCandidateUrl(url))) {
+        if (catalogue.byIdentity.has(documentIdentityKey(url))) {
+          // Definitive: the exact document is catalogued.
           matchedCount++;
+        } else if (catalogue.byMatch.has(normaliseCandidateUrl(url))) {
+          // Loose-only: visible, never assumed same, never assumed new.
+          const links = [...catalogue.byMatch.get(normaliseCandidateUrl(url))!]
+            .sort((x, y) => x.guidelineId.localeCompare(y.guidelineId) || x.url.localeCompare(y.url));
+          const ids = [...new Set(links.map(l => l.guidelineId))];
+          requiresComparison++;
+          candidates.push(toIngestionCandidate(item, adapter, generatedAt, {
+            basis: 'match-key-only',
+            guidelineId: links[0].guidelineId,
+            guidelineIds: ids,
+            catalogueUrl: links[0].url,
+            discoveredUrl: url,
+            reason: describeLooseMatch(url, links[0].url),
+          }));
         } else {
           newCandidates.push(item);
           candidates.push(toIngestionCandidate(item, adapter, generatedAt));
@@ -587,6 +680,7 @@ export async function runDryRun(adapters: ProviderAdapter[]): Promise<DiffReport
         skippedBlocked,
         candidates,
         newCandidates,
+        requiresComparison,
       };
 
       // Coverage assertion: discovered must equal matched + blocked + candidates.
@@ -606,7 +700,8 @@ export async function runDryRun(adapters: ProviderAdapter[]): Promise<DiffReport
 
       console.log(
         `  ✓ Found ${discovered.length} items ` +
-          `(${matchedCount} matched in catalogue, ${newCandidates.length} new/unmatched` +
+          `(${matchedCount} matched in catalogue, ${newCandidates.length} new/unmatched, ` +
+          `${requiresComparison} require document comparison` +
           `${skippedBlocked ? `, ${skippedBlocked} skipped as blocked-domain` : ''})`,
       );
     } catch (err) {
@@ -624,12 +719,30 @@ export async function runDryRun(adapters: ProviderAdapter[]): Promise<DiffReport
         skippedBlocked: 0,
         candidates: [],
         newCandidates: [],
+        requiresComparison: 0,
         error: err instanceof Error ? err.message : String(err),
       });
     }
   }
 
   return reports;
+}
+
+/**
+ * The candidates.json document exactly as the CLI writes it. Exported so the
+ * local integration test stages the same shape this script produces.
+ */
+export function buildCandidatesFile(reports: DiffReport[], generatedAt = new Date().toISOString()) {
+  return {
+    schemaVersion: CANDIDATE_SCHEMA_VERSION,
+    generatedAt,
+    note:
+      'STAGING ONLY — candidates for human review, all reviewStatus "pending". Nothing here ' +
+      'has been written to Supabase, to src/data/guidelines-data.ts, or to GitHub.',
+    existingGuidelineCount: GUIDELINES_DATA.length,
+    totalCandidates: reports.reduce((n, r) => n + r.candidates.length, 0),
+    reports,
+  };
 }
 
 // ─── Execution Block (Dry-Run Only) ──────────────────────────────────────────
@@ -675,7 +788,8 @@ if (isMain) {
       console.log(`  - Total items discovered: ${r.totalDiscovered}`);
       console.log(`  - Already in catalogue:   ${r.matchedExisting}`);
       console.log(`  - Skipped (blocked host): ${r.skippedBlocked}`);
-      console.log(`  - New / unmatched:        ${r.candidates.length}`);
+      console.log(`  - New / unmatched:        ${r.candidates.length - r.requiresComparison}`);
+      console.log(`  - Require comparison:     ${r.requiresComparison}  (loose-only match with a catalogue link)`);
       if (r.candidates.length > 0) {
         console.log('  - Sample unmatched candidates (first 3):');
         r.candidates.slice(0, 3).forEach(c => {
@@ -684,20 +798,10 @@ if (isMain) {
       }
     }
 
-    const totalCandidates = reports.reduce((n, r) => n + r.candidates.length, 0);
-
     // Staging output for human review. This is the ONLY file the script writes,
     // and it is gitignored. Nothing downstream consumes it automatically.
-    const payload = {
-      schemaVersion: CANDIDATE_SCHEMA_VERSION,
-      generatedAt: new Date().toISOString(),
-      note:
-        'STAGING ONLY — candidates for human review, all reviewStatus "pending". Nothing here ' +
-        'has been written to Supabase, to src/data/guidelines-data.ts, or to GitHub.',
-      existingGuidelineCount: GUIDELINES_DATA.length,
-      totalCandidates,
-      reports,
-    };
+    const payload = buildCandidatesFile(reports);
+    const totalCandidates = payload.totalCandidates;
     fs.writeFileSync(OUTPUT_PATH, JSON.stringify(payload, null, 2), 'utf-8');
     console.log(`\nWrote staging file: ${OUTPUT_PATH} (${totalCandidates} candidate(s), schema v${CANDIDATE_SCHEMA_VERSION})`);
     console.log('Dry run complete. No database writes and no changes to guidelines-data.ts.');
