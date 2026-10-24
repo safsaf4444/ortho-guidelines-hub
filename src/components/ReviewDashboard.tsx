@@ -102,10 +102,13 @@ export default function ReviewDashboard({
    * decision) never loses what the editor typed. Cleared when the database
    * confirms the write that used it.
    *
-   * Lifetime: this page session only. React state, deliberately NOT persisted:
-   * a full browser reload, closing the tab, or switching away from the review
-   * view (which unmounts this component) discards every draft. (The
-   * end-to-end test pins the reload case.)
+   * Lifetime: this page session, for this account only. React state,
+   * deliberately NOT persisted: a full browser reload, closing the tab, or
+   * switching away from the review view (which unmounts this component)
+   * discards every draft. So does signing out or another account signing in:
+   * App remounts this component by draft owner (src/lib/draft-owner.ts), so
+   * the next editor never inherits them. (The end-to-end test pins the reload,
+   * sign-out and account-switch cases.)
    */
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const setDraft = (key: string, value: string) => setDrafts(prev => ({ ...prev, [key]: value }));

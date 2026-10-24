@@ -13,6 +13,7 @@ From the start of §3 until §6 is complete:
   - The NEW script against the old database exits 1 and writes nothing.
   - Rehearsed: R2, R6.
 - No ad-hoc SQL inserts into `staged_guidelines`.
+- **Keep "Detect guideline changes" (`detect-changes.yml`) from running in the window.** It is scheduled on `main` for Mondays at 06:00 UTC. It never touches the queue, but it updates `guidelines.content_hashes` and `last_change_check`, so a run between step 0 and step 3 changes the P10 fingerprint and makes the "P10 unchanged" check fail for a reason unrelated to the upgrade. Avoid that slot, or have the owner disable the workflow for the window.
 - Editors may keep using the deployed app; it keeps working at every step (§4).
 
 ## 2. PR #174 (paused)
@@ -36,16 +37,21 @@ From the start of §3 until §6 is complete:
 
 ## 4. Read-only preflight (production)
 
-Run `supabase/DEPLOY-PREFLIGHT-READONLY.sql`. It contains only SELECT statements; prefer a session forced read-only:
+Run `supabase/DEPLOY-PREFLIGHT-READONLY.sql` as a whole file. Every check is a SELECT, and the file enforces read-only itself: it opens one `READ ONLY` transaction and ends with `ROLLBACK`, so Postgres would refuse any write in it and nothing can be committed. A forced read-only session adds a second layer:
 
 ```sh
 PGOPTIONS='-c default_transaction_read_only=on' psql "$DB_URL" -f supabase/DEPLOY-PREFLIGHT-READONLY.sql
 ```
 
-You can also paste one numbered query at a time into the SQL editor. Record P5 and P10 for comparison afterwards.
+- **P0 must say `on`.** Otherwise stop.
+- If one check errors, every later check prints "current transaction is aborted". Stop and investigate; P4 explains most such errors.
+- Pasting one numbered query into the SQL editor runs it **outside** that wrapper. The query is still a SELECT, but nothing then enforces read-only.
+
+Record P5 and P10 for comparison afterwards.
 
 | Check | Safe result | If not |
 |---|---|---|
+| P0 | `on` | Stop: the checks are not running read-only |
 | P1 | The database you intend | Stop |
 | P2 (#174 objects) | all `f` | **Stop:** reconcile #174 first |
 | P3 (already applied?) | all `f` | Investigate; never re-run blindly |
@@ -96,7 +102,7 @@ Keep #174 paused. Re-enabling the schedule is a separate, explicit decision.
 
 ## 8. Rehearsal evidence (local, synthetic)
 
-The rehearsal ran on 2026-10-25 and passed 48 of 48 checks. It used a disposable local Supabase and synthetic data only.
+The rehearsal ran on 2026-10-24 and passed 48 of 48 checks. It was rerun later that day, after the preflight gained its read-only wrapper, and passed 54 of 54 (the 6 new checks are listed under "Preflight" below). It used a disposable local Supabase and synthetic data only.
 
 **Starting state:** the REBUILD-ORDER chain plus both 20261012 migrations, with no upgrade applied.
 
@@ -110,7 +116,9 @@ The rehearsal ran on 2026-10-25 and passed 48 of 48 checks. It used a disposable
 
 **What the rehearsal showed:**
 - **Compatibility at every step:** old app, new app, old script and new script, as tabled in §5.
-- **Preflight:** it ran in a session forced read-only, where a test write was refused. P8 found the duplicate pair.
+- **Preflight:**
+  - It ran in a session forced read-only, where a test write was refused. P8 found the duplicate pair.
+  - Run **without** `PGOPTIONS`, it still ran read-only (P0 = `on`). A write injected into the file before its final `ROLLBACK` was refused by Postgres, and the catalogue and changelog fingerprints were unchanged.
 - **20261024 with the duplicate present:**
   - It refused and named the duplicate.
   - Schema, queue rows, catalogue and changelog were all byte-identical afterwards, with no partial objects left.

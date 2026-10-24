@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useContext } from 'react'
 import { Search, ChevronDown, ExternalLink, Menu, X, TriangleAlert, Plus, WifiOff, Download, Database, History, ClipboardList, Table2, Pencil, Info } from 'lucide-react'
 import { Guideline, GuidelineVersion, GuidanceStatus } from './data/guidelines-data'
 import { guidelinesService, type GuidelinesSource } from './lib/guidelines-service'
@@ -10,6 +10,7 @@ import { cn } from './lib/utils'
 import ReviewDashboard from './components/ReviewDashboard'
 import EditorAuthControl from './components/EditorAuthControl'
 import { useEditorSession } from './lib/editor-session'
+import { draftOwnerKey, DraftOwnerContext } from './lib/draft-owner'
 import { stagedService } from './lib/staged-service'
 import { canWrite, writeBlockedReason, type WriteGate } from './lib/write-access'
 import { validateGuidelineId, isPlaceholderGuidelineId } from './lib/guideline-id'
@@ -351,6 +352,23 @@ export default function App() {
    */
   const [stagedCandidateId, setStagedCandidateId] = useState<string | null>(null);
   const [dismissedPairs, setDismissedPairs] = useState<Set<string>>(() => loadDismissedPairs());
+
+  /**
+   * An open Edit modal is a draft owned by the account that opened it (see
+   * src/lib/draft-owner.ts). When the owner changes it is closed and discarded,
+   * together with the staging id it would publish against. Done during render,
+   * not in an effect, so the next account never gets even one painted frame of
+   * it. Deeper drafts follow the same key: the review queue is remounted by it
+   * and card notes read it from DraftOwnerContext.
+   */
+  const draftOwner = draftOwnerKey(session);
+  const [modalOwner, setModalOwner] = useState(draftOwner);
+  if (modalOwner !== draftOwner) {
+    setModalOwner(draftOwner);
+    setEditingGuideline(null);
+    setIsNewGuideline(false);
+    setStagedCandidateId(null);
+  }
 
   /**
    * Every guideline id currently in memory, for proposing and validating a new
@@ -874,6 +892,7 @@ Add a note from the entry to restore the audit trail.`
   };
 
   return (
+    <DraftOwnerContext.Provider value={draftOwner}>
     <div className="flex flex-col h-screen overflow-hidden bg-white font-sans text-slate-800">
 
       {/* Header */}
@@ -1262,6 +1281,9 @@ Add a note from the entry to restore the audit trail.`
               <ChangelogPanel guidelines={guidelines} />
             ) : currentSection === REVIEW_QUEUE_VIEW ? (
               <ReviewDashboard
+                // Remounted when the draft owner changes, which discards every
+                // reject reason, decision note and open panel it holds.
+                key={draftOwner}
                 signedIn={session.signedIn}
                 onEditCandidate={handleReviewCandidate}
                 lookupEntry={id => {
@@ -1395,6 +1417,7 @@ Add a note from the entry to restore the audit trail.`
         </div>
       )}
     </div>
+    </DraftOwnerContext.Provider>
   );
 }
 
@@ -2147,6 +2170,14 @@ function CardChangelog({ guidelineId, canEdit }: { guidelineId: string; canEdit:
   const [text, setText] = useState('');
   const [saving, setSaving] = useState(false);
   const MAX_INLINE = 3;
+  // The unsent note belongs to whoever typed it. The input is only hidden while
+  // signed out, so without this the next account would find it filled in.
+  const draftOwner = useContext(DraftOwnerContext);
+  const [textOwner, setTextOwner] = useState(draftOwner);
+  if (textOwner !== draftOwner) {
+    setTextOwner(draftOwner);
+    setText('');
+  }
 
   useEffect(() => {
     let active = true;

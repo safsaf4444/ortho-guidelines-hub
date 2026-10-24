@@ -3,14 +3,30 @@
 -- Read-only checks to run BEFORE applying 20261024_discovery_review_queue.sql
 -- and 20261025_reject_open_candidate.sql. See DEPLOYMENT-RUNBOOK.md.
 --
--- Every statement is a plain SELECT. Nothing here writes, creates or alters.
--- Run it in a read-only session, e.g.
+-- Every check is a plain SELECT. Nothing here writes, creates or alters.
+-- The file ENFORCES that itself: all checks run inside one
+-- `BEGIN TRANSACTION ... READ ONLY` and the file ends with ROLLBACK, so any
+-- write that found its way in would be refused by Postgres (25006) and nothing
+-- could be committed. P0 shows the read-only flag; it must say `on`. The
+-- transaction also gives every check the same snapshot, so P5 and P10 agree.
+-- (A session-level SET is deliberately not used: through a transaction-mode
+-- pooler it could leak onto other clients' connections.)
+--
+-- Run the whole file, optionally with a read-only session as a second layer:
 --   PGOPTIONS='-c default_transaction_read_only=on' psql "$DB_URL" -f supabase/DEPLOY-PREFLIGHT-READONLY.sql
--- or paste one numbered query at a time into the SQL editor. The rehearsal
--- (local, synthetic data) ran this exact file with default_transaction_read_only=on.
+-- If any check errors, the checks after it print "current transaction is
+-- aborted": stop and investigate (P4 explains most such errors).
+--
+-- Pasting ONE numbered query into the SQL editor runs it outside this
+-- wrapper. Each query is still a SELECT, but nothing then enforces read-only.
 --
 -- Each row starts with its check id. "EXPECT" says what a safe result is.
 -- ============================================================================
+
+begin transaction isolation level repeatable read, read only;
+
+-- P0. Read-only enforcement. EXPECT: read_only = on. Anything else → STOP.
+select 'P0' as check, current_setting('transaction_read_only') as read_only;
 
 -- P1. Which database is this? (Confirm it is the one you mean to change.)
 select 'P1' as check, current_database() as db, current_user as role, now() as at,
@@ -81,9 +97,9 @@ select 'P8' as check, coarse_key, count(*) as open_rows,
 -- P9. Editor allowlist size (the migration's editor-only functions use it).
 --     EXPECT: the number of named editors you intend.
 select 'P9' as check,
-       regexp_match(pg_get_functiondef('public.is_editor()'::regprocedure), 'array\[([^\]]*)\]') is not null as allowlist_found,
-       (length(pg_get_functiondef('public.is_editor()'::regprocedure))
-        - length(replace(pg_get_functiondef('public.is_editor()'::regprocedure), '::uuid', ''))) / 6 as editor_uuid_count;
+       regexp_match(pg_get_functiondef(to_regprocedure('public.is_editor()')), 'array\[([^\]]*)\]') is not null as allowlist_found,
+       (length(pg_get_functiondef(to_regprocedure('public.is_editor()')))
+        - length(replace(pg_get_functiondef(to_regprocedure('public.is_editor()')), '::uuid', ''))) / 6 as editor_uuid_count;
 
 -- P10. Catalogue fingerprint (compare before and after: the upgrade must not
 --      change it).
@@ -92,3 +108,6 @@ select 'P10' as check,
        (select md5(coalesce(string_agg(g::text, '|' order by id), '')) from public.guidelines g) as guidelines_md5,
        (select count(*) from public.guideline_changelog) as changelog,
        (select md5(coalesce(string_agg(c::text, '|' order by id), '')) from public.guideline_changelog c) as changelog_md5;
+
+-- Nothing was written; end the read-only transaction without committing.
+rollback;
