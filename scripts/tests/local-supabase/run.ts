@@ -12,6 +12,9 @@
  *   rehearsal        the upgrade rehearsal (./rehearsal.ts); prepares its own schema states
  *   adapter          the discovery staging adapter, run for real (./discovery-adapter.ts), on 20261024 + 20261025
  *   all              all five, in that order
+ *   backup           Windows only, not in `all`: scripts/backup end to end (./backup-rehearsal.ts):
+ *                    a concurrent-write snapshot backup of a production-shaped local source,
+ *                    restore-verify into the disposable stack, and negative controls
  *   stop             stop the stack and delete its data (also: --stop after the suites)
  *
  * Each suite runs as a child process with ONLY the loopback URL and the local
@@ -25,15 +28,17 @@ import { chromium } from 'playwright';
 import { dockerAvailable, HERE, localEnv, prepareSchema, REPO, stopStack, testEnv, WORK } from './stack';
 
 const SUITES = ['integration', 'integration-25', 'e2e', 'rehearsal', 'adapter'] as const;
-type Suite = typeof SUITES[number];
+const EXTRA = ['backup'] as const;
+type Suite = typeof SUITES[number] | typeof EXTRA[number];
+const KNOWN: readonly string[] = [...SUITES, ...EXTRA];
 
 const args = process.argv.slice(2);
 const wantStop = args.includes('stop') || args.includes('--stop');
 const requested = args.filter((a) => a !== 'stop' && a !== '--stop');
-const suites: Suite[] = requested.includes('all') ? [...SUITES] : requested.filter((a): a is Suite => (SUITES as readonly string[]).includes(a));
-const unknown = requested.filter((a) => a !== 'all' && !(SUITES as readonly string[]).includes(a));
+const suites: Suite[] = requested.includes('all') ? [...SUITES] : requested.filter((a): a is Suite => KNOWN.includes(a));
+const unknown = requested.filter((a) => a !== 'all' && !KNOWN.includes(a));
 if (unknown.length > 0 || (suites.length === 0 && !wantStop)) {
-  console.error(`Usage: npx tsx scripts/tests/local-supabase/run.ts <${[...SUITES, 'all', 'stop'].join('|')}> [--stop]`);
+  console.error(`Usage: npx tsx scripts/tests/local-supabase/run.ts <${[...KNOWN, 'all', 'stop'].join('|')}> [--stop]`);
   process.exit(2);
 }
 
@@ -44,6 +49,7 @@ const SCRIPT: Record<Suite, string> = {
   e2e: path.join(HERE, 'e2e.ts'),
   rehearsal: path.join(HERE, 'rehearsal.ts'),
   adapter: path.join(HERE, 'discovery-adapter.ts'),
+  backup: path.join(HERE, 'backup-rehearsal.ts'),
 };
 
 function runChild(suite: Suite, env: Record<string, string>): Promise<{ code: number; summary: string }> {
@@ -52,7 +58,8 @@ function runChild(suite: Suite, env: Record<string, string>): Promise<{ code: nu
   return new Promise((resolve) => {
     // A minimal environment: no inherited SUPABASE_* or VITE_* variables.
     const keep = ['PATH', 'Path', 'SYSTEMROOT', 'SystemRoot', 'TEMP', 'TMP', 'HOME', 'USERPROFILE', 'LOCALAPPDATA', 'APPDATA',
-      'PLAYWRIGHT_BROWSERS_PATH', 'ComSpec', 'PATHEXT', 'WINDIR', 'ProgramData', 'ProgramFiles', 'ProgramFiles(x86)', 'DOCKER_HOST'];
+      'PLAYWRIGHT_BROWSERS_PATH', 'ComSpec', 'PATHEXT', 'WINDIR', 'ProgramData', 'ProgramFiles', 'ProgramFiles(x86)', 'DOCKER_HOST',
+      'USERNAME', 'OneDrive', 'OneDriveConsumer', 'OneDriveCommercial', 'PSModulePath'];
     const base = Object.fromEntries(keep.filter((k) => process.env[k] !== undefined).map((k) => [k, process.env[k] as string]));
     const child = spawn(process.execPath, [TSX, SCRIPT[suite]], { cwd: REPO, env: { ...base, ...env } });
     let tail = '';
@@ -83,7 +90,7 @@ if (suites.length > 0) {
         prepareSchema({ with24: true, with25: suite !== 'integration' });
       }
       // e2e and rehearsal prepare their own schema states; the stack must be up for localEnv().
-      if (suite === 'e2e' || suite === 'rehearsal') prepareSchema({ with24: false, with25: false });
+      if (suite === 'e2e' || suite === 'rehearsal' || suite === 'backup') prepareSchema({ with24: false, with25: false });
       const env = testEnv(localEnv());
       results.push({ suite, ...(await runChild(suite, env)) });
     } catch (err) {
