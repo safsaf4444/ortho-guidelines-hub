@@ -216,6 +216,37 @@ SUPABASE_SERVICE_ROLE_KEY=… npx tsx scripts/stage-discovery.ts reports/discove
 
 These come from `npx tsx scripts/tests/local-supabase/run.ts adapter` (83/83), which runs the actual script.
 
+The rows above are **synthetic candidate-staging coverage**: hand-built reports with candidates of every class, staged by the actual script. Except for the BOFAS dry-run row, none of them comes from a real discovery run.
+
+**Real reports (2026-10-25): empty-report verification only**
+
+Fresh reports were generated with the existing read-only, paced `scripts/discover.ts`, one provider per run. They were fed through the actual adapter **unchanged**.
+
+| Real report (gitignored `reports/`) | Provider and pages read | Discovery result | Adapter |
+|---|---|---|---|
+| `discovery-2026-10-25T01-19-29-771Z.json` (sha256 `00944f61…`) | NHS EBI: musculoskeletal/spine and retired-guidance pages, both HTTP 200 | 18 found, 17 already catalogued, 1 filtered (out of scope), **0 candidates**, no retirement assertions | dry run: 0 items, **0 database requests** (decoy as `--target` and `SUPABASE_URL`) |
+| `discovery-2026-10-25T01-19-43-831Z.json` (sha256 `a7255ffe…`) | BESS: patient care pathways and guidelines page, HTTP 200 | 9 found, 9 already catalogued, **0 candidates** | dry run: 0 items, 0 database requests |
+
+- Both reports were then written twice to a disposable local Supabase, loopback only, with a synthetic catalogue of three fake entries. **17 of 17 checks passed:**
+  - each write exited 0 and staged nothing;
+  - queue, evidence and decision log were unchanged after each write;
+  - catalogue and changelog were unchanged;
+  - the decoy `SUPABASE_URL` was never contacted;
+  - the report files were byte-identical before and after.
+- **What this proves:** real reports parse, validate and run through the adapter safely, with no writes and no requests in a dry run.
+- **What it does NOT prove:**
+  - staging a real candidate;
+  - preserving real evidence (there was none);
+  - real hold, conflict or catalogue-relation behaviour.
+
+  Those are covered only by the synthetic suite above.
+- **Observation:** a report that submits nothing always gets the same run id (`discover:f34e1613…`), because the run id covers only submitted payloads. It is harmless: nothing is written under it, and `--out` records the report path.
+
+**Limitations (unchanged)**
+
+- **Partial publisher coverage.** NHS EBI and BESS each have three publisher sections the adapter does not read (`scripts/lib/provider-registry.ts`, `uncoveredSurfaces`). An empty report means "nothing new on the pages read", not "nothing new from the publisher". BOFAS stays with sync-providers.
+- **Interrupted output.** `--out` is written only when a run finishes. If the process is killed mid-run, that per-item record is lost. Re-running the same report is still safe: committed items return `existing` / `already_recorded`. The database is the record of what was written.
+
 **Provider ownership: script-enforced, with limits**
 
 `scripts/lib/staging-ownership.ts` gives each provider exactly one staging producer. Both `stage-candidates.ts` and `stage-discovery.ts` consult it.

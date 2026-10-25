@@ -196,6 +196,7 @@ Both keys are pinned in TypeScript and SQL by `scripts/tests/fixtures/url-key-ve
 - [ ] Test the workflow's run sequence locally: dry run, then live, then rerun.
 - [x] Rehearse the migration on synthetic, production-shaped data, including pre-migration rows, a held legacy row, the duplicate pre-flight and the rejection-gap check, without touching production (`run.ts rehearsal`). A copy of real production data has not been used.
 - [x] Build a discovery staging adapter for `stage_discovery_candidate` and test it end to end (`run.ts adapter`: the actual script against a local stack).
+- [x] Run fresh real NHS EBI and BESS reports through it (2026-10-25). Both had **0 candidates**. That verifies empty-report handling only (17/17 local checks); staging real candidates is still untested. See `DEPLOYMENT-RUNBOOK.md` §9.
 
 ## 7. Open decisions (deliberately unchanged on this branch)
 
