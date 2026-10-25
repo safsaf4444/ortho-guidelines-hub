@@ -181,16 +181,25 @@ The rehearsal is tracked in `scripts/tests/local-supabase/rehearsal.ts` and runs
 npx tsx scripts/stage-discovery.ts reports/discovery-<stamp>.json
 npx tsx scripts/stage-discovery.ts reports/discovery-<stamp>.json --compare-sync candidates.json   # BOFAS comparison
 # Write: all of these are required; nothing falls back to SUPABASE_URL, VITE_* or .env files.
-SUPABASE_SERVICE_ROLE_KEY=… npx tsx scripts/stage-discovery.ts reports/discovery-<stamp>.json   --write --target <supabase-url> --allow-remote-target --out stage-discovery-result.json
+SUPABASE_SERVICE_ROLE_KEY=… npx tsx scripts/stage-discovery.ts reports/discovery-<stamp>.json   --write --target <supabase-url> --allow-remote-target --out stage-discovery-result.json [--timeout-ms 30000]
 ```
 
 - `--allow-remote-target` is required for any non-loopback target.
 - Without `--write`, `--target` is ignored, and the run makes no database requests. Verified with a decoy server passed as both `--target` and `SUPABASE_URL`: 0 requests.
-- Exit codes:
-  - **0:** every item ended `staged`, `existing`, `already_open`, `held`, `not-owner` or `provider-not-ok`.
-  - **1:** at least one item was `failed`, `unsupported` or `unowned`, or the report was invalid.
-  - **2:** a missing flag or key. Nothing is submitted.
-- Retrying the same report is safe: it retries only what failed and records nothing twice.
+- **Validated before any database contact.** Every entry is checked first: non-object entries, timestamps, URLs, arrays and each class's evidence shape. A bad entry is `invalid`; nothing about it is sent.
+- **Repeated `discoveryId`s:**
+  - An identical repeat is listed as `duplicate` and submitted once.
+  - The same id with different content is a `conflict`: none of those copies is submitted.
+- **Every write request is bounded** by `--timeout-ms`, covering headers and body (default 30000; 1000 to 300000).
+  - **`unconfirmed`:** a timeout, a lost connection, or a gateway 5xx without a database error code. The database **may have committed** the item.
+  - The adapter never retries automatically. It stops there, and every later item is `not-attempted`.
+  - To reconcile, re-run the same report: same run id. An item that was committed comes back `existing` / `already_recorded`, and nothing is filed twice.
+  - `--out` records each item's report position, identity key, and whether it is retryable.
+- **Exit codes:**
+  - **0:** every item ended `staged`, `existing`, `already_open`, `held`, `duplicate`, `not-owner` or `provider-not-ok`.
+  - **1:** at least one item was `invalid`, `conflict`, `unsupported`, `failed`, `unconfirmed`, `not-attempted` or `unowned`, or the report could not be read.
+  - **2:** a missing flag or key, or a refused target. Nothing is submitted, and no WRITE banner is printed.
+- **Retrying the same report is safe.** Retryable outcomes are `failed`, `unconfirmed` and `not-attempted`. `invalid`, `conflict`, `unsupported` and `unowned` need the report or the configuration changed.
 
 **Outcome counts observed (2026-10-24/25)**
 
@@ -201,9 +210,11 @@ SUPABASE_SERVICE_ROLE_KEY=… npx tsx scripts/stage-discovery.ts reports/discove
 | Same report again, and with only `generatedAt` changed | 3 `existing`, evidence `already_recorded`, same run id, nothing added |
 | New sweep (new `discoveredAt` on the candidates) | new run id; 3 `existing` with evidence appended; editor decisions unchanged; no new rows |
 | Partial failure, then retry | 2 `staged` + 1 `failed` (exit 1, no row left behind); retry: 1 `staged` + 2 `existing` (exit 0) |
-| Contradictory or unowned report | 2 `unsupported` (database 22023), 1 `unsupported` (retirement-type class), 1 `unowned`; exit 1; nothing written |
+| Contradictory or unowned report | 1 `unsupported` (database 22023: already catalogued), 1 `invalid` (edition without evidence, caught before the database), 1 `unsupported` (retirement-type class), 1 `unowned`; exit 1; nothing written |
+| Malformed report | a null entry and a bad timestamp: 2 `invalid`; an identical repeat: 1 `duplicate`, submitted once; the same id with different content: 2 `conflict`, neither written; 2 valid items `staged`; exit 1 |
+| Response lost after the server committed (proxy drops the reply; `--timeout-ms 2000`) | 1 `staged`, 1 `unconfirmed` (the row and sighting WERE committed), 1 `not-attempted`; sent once, not retried; exit 1. Retry of the same report: 2 `existing` / `already_recorded` + 1 `staged`; exactly one row and one sighting per item; exit 0 |
 
-These come from `npx tsx scripts/tests/local-supabase/run.ts adapter` (66/66), which runs the actual script.
+These come from `npx tsx scripts/tests/local-supabase/run.ts adapter` (83/83), which runs the actual script.
 
 **Provider ownership: script-enforced, with limits**
 

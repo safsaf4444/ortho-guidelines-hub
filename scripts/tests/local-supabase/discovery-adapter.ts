@@ -49,7 +49,7 @@ function run(script: string, args: string[], env: Record<string, string>): Promi
 }
 const ADAPTER = path.join(REPO, 'scripts/stage-discovery.ts');
 const STAGER = path.join(REPO, 'scripts/stage-candidates.ts');
-type AdapterOut = { mode: string; runId: string; counts: Record<string, number>; items: Array<{ discoveryId: string; outcome: string; evidence?: string; catalogueRelation?: string; detail?: string; stagedId?: string }>; reportOnly: unknown[] };
+type AdapterOut = { mode: string; runId: string; counts: Record<string, number>; items: Array<{ position: string; discoveryId: string; outcome: string; evidence?: string; catalogueRelation?: string; detail?: string; stagedId?: string; identityKey?: string; retryable?: boolean }>; reportOnly: unknown[] };
 let outN = 0;
 async function adapter(reportFile: string, extra: string[], env: Record<string, string> = {}) {
   const outFile = path.join(DIR, `out-${++outN}.json`);
@@ -157,9 +157,9 @@ try {
   const w0 = await run(ADAPTER, [A, '--write'], { SUPABASE_URL: SB_URL, SUPABASE_SERVICE_ROLE_KEY: SERVICE });
   check('--write without --target is refused even with SUPABASE_URL set', w0.status === 2 && /needs --target/.test(w0.out), w0.out);
   const w0b = await run(ADAPTER, [A, '--write', '--target', 'https://example.invalid'], { SUPABASE_SERVICE_ROLE_KEY: SERVICE });
-  check('a non-loopback target without --allow-remote-target is refused', w0b.status === 2 && /not a loopback address/.test(w0b.out), w0b.out);
+  check('a non-loopback target without --allow-remote-target is refused, before any WRITE banner', w0b.status === 2 && /not a loopback address/.test(w0b.out) && !/MODE: WRITE/.test(w0b.out), w0b.out);
   const w0c = await run(ADAPTER, [A, '--write', '--target', SB_URL], {});
-  check('no service key in the environment: refused (no .env is read)', w0c.status === 2 && /SUPABASE_SERVICE_ROLE_KEY is not set/.test(w0c.out), w0c.out);
+  check('no service key in the environment: refused (no .env is read), before any WRITE banner', w0c.status === 2 && /SUPABASE_SERVICE_ROLE_KEY is not set/.test(w0c.out) && !/MODE: WRITE/.test(w0c.out), w0c.out);
   eq('…none of these wrote anything', snapshot(), snap0);
 
   console.log('\n[3] Write a valid report: every supported class staged, with its evidence');
@@ -294,10 +294,90 @@ try {
   const b1 = await write(Bd);
   eq('exit 1', b1.status, 1);
   eq('already-catalogued NEW_GUIDELINE: unsupported (refused by the database)', [outcomeOf(b1.json, 'nhsebi-new-guideline-b0000001'), /already catalogued exactly/.test(b1.json?.items.find((i) => i.discoveryId === 'nhsebi-new-guideline-b0000001')?.detail ?? '')], ['unsupported', true]);
-  eq('edition without its evidence: unsupported (refused by the database)', outcomeOf(b1.json, 'nhsebi-possible-new-edition-b0000002'), 'unsupported');
+  eq('edition without its evidence: invalid, caught BEFORE any database contact', outcomeOf(b1.json, 'nhsebi-possible-new-edition-b0000002'), 'invalid');
   eq('a retirement-type class: unsupported, never submitted', outcomeOf(b1.json, 'nhsebi-retired-b0000003'), 'unsupported');
   eq('an unowned provider: unowned', outcomeOf(b1.json, 'ros-new-guideline-b0000004'), 'unowned');
   eq('…and nothing was written for any of them', snapshot(), snap9);
+
+  console.log('\n[11] Invalid entries, duplicates and conflicts: itemised, never written');
+  const snap11 = snapshot();
+  const dupOk = c({ discoveryId: 'nhsebi-new-guideline-d0000001', discoveredUrl: 'https://ebi.aomrc.org.uk/interventions/dup-ok/' });
+  const plain = c({ discoveryId: 'nhsebi-new-guideline-d0000002', discoveredUrl: 'https://ebi.aomrc.org.uk/interventions/plain/' });
+  const conflictA = c({ discoveryId: 'nhsebi-new-guideline-d0000003', discoveredUrl: 'https://ebi.aomrc.org.uk/interventions/conflict/' });
+  const badTime = c({ discoveryId: 'nhsebi-new-guideline-d0000004', discoveredUrl: 'https://ebi.aomrc.org.uk/interventions/bad-time/', discoveredAt: 'yesterday' });
+  const Vrep = reportFile('report-v.json', [{ provider: 'NHS EBI', outcome: 'ok', surfaces: [], candidates: [
+    null, badTime, dupOk, { ...dupOk }, conflictA, { ...conflictA, topic: 'Same id, different title' }, plain,
+  ] }]);
+  const v1 = await write(Vrep);
+  eq('exit 1', v1.status, 1);
+  const byPos = Object.fromEntries((v1.json?.items ?? []).map((i) => [i.position, [i.outcome, i.retryable]]));
+  eq('a null entry and a bad timestamp: invalid, not retryable, itemised by position',
+    [byPos['NHS EBI#0'], byPos['NHS EBI#1']], [['invalid', false], ['invalid', false]]);
+  eq('an identical repeat: listed as duplicate; the first copy staged', [byPos['NHS EBI#2']?.[0], byPos['NHS EBI#3']?.[0]], ['staged', 'duplicate']);
+  eq('the same id with different content: both copies a conflict, not retryable', [byPos['NHS EBI#4'], byPos['NHS EBI#5']], [['conflict', false], ['conflict', false]]);
+  eq('the unrelated valid entry still staged', byPos['NHS EBI#6']?.[0], 'staged');
+  eq('rows written: only the two staged items (duplicate once, conflict and invalid never)',
+    [dupOk, plain, conflictA, badTime].map((x) => q(`select count(*) from public.staged_guidelines where candidate_id=${dq(x.discoveryId)}`)), ['1', '1', '0', '0']);
+  eq('…two rows and two sightings added in total', snapshot().split('|').map(Number).slice(0, 2).map((n, i) => n - Number(snap11.split('|')[i])), [2, 2]);
+
+  console.log('\n[12] A response lost AFTER the server committed: unconfirmed, no automatic retry, safe reconciliation');
+  // A loopback proxy in front of the local API. For the marked item it forwards
+  // the request, waits for the database's complete answer (so the commit has
+  // happened), and then never replies.
+  const LOST = 'nhsebi-new-guideline-l0000002';
+  const upstream = new URL(SB_URL);
+  let dropMarked = true;
+  let markedRequests = 0;
+  let droppedAfterCommit = 0;
+  const proxy = http.createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (d: Buffer) => chunks.push(d));
+    req.on('end', () => {
+      const body = Buffer.concat(chunks);
+      const marked = body.includes(LOST);
+      if (marked) markedRequests++;
+      const up = http.request({ host: upstream.hostname, port: upstream.port, method: req.method, path: req.url,
+        headers: { ...req.headers, host: upstream.host } }, (ur) => {
+        const out: Buffer[] = [];
+        ur.on('data', (d: Buffer) => out.push(d));
+        ur.on('end', () => {
+          if (marked && dropMarked) { droppedAfterCommit++; return; }   // committed; the answer is never sent
+          res.writeHead(ur.statusCode ?? 502, ur.headers);
+          res.end(Buffer.concat(out));
+        });
+      });
+      up.on('error', () => { res.statusCode = 502; res.end(); });
+      up.end(body);
+    });
+  });
+  await new Promise<void>((r) => proxy.listen(0, '127.0.0.1', () => r()));
+  const PROXY = `http://127.0.0.1:${(proxy.address() as { port: number }).port}`;
+  const L = [1, 2, 3].map((i) => c({ discoveryId: `nhsebi-new-guideline-l000000${i}`, discoveredUrl: `https://ebi.aomrc.org.uk/interventions/lost-${i}/` }));
+  const Lf = reportFile('report-lost.json', [{ provider: 'NHS EBI', outcome: 'ok', surfaces: [], candidates: L }]);
+  const lostOut = path.join(DIR, 'out-lost.json');
+  const l1run = await run(ADAPTER, [Lf, '--write', '--target', PROXY, '--timeout-ms', '2000', '--out', lostOut], { SUPABASE_SERVICE_ROLE_KEY: SERVICE });
+  const l1 = JSON.parse(fs.readFileSync(lostOut, 'utf-8')) as AdapterOut;
+  const lo = (id: string) => l1.items.find((i) => i.discoveryId === id);
+  eq('exit 1', l1run.status, 1);
+  eq('first item staged; the lost one UNCONFIRMED; the rest NOT ATTEMPTED',
+    L.map((x) => lo(x.discoveryId)?.outcome), ['staged', 'unconfirmed', 'not-attempted']);
+  check('unconfirmed says the database may have committed, and how to reconcile (run id)',
+    /may or may not have committed/.test(lo(LOST)?.detail ?? '') && (lo(LOST)?.detail ?? '').includes(l1.runId), lo(LOST)?.detail);
+  eq('…both are retryable and carry their identity key for reconciliation',
+    [lo(LOST)?.retryable, lo(L[2].discoveryId)?.retryable, typeof lo(LOST)?.identityKey], [true, true, 'string']);
+  eq('the server DID commit the lost item (row and sighting exist)', q(`select count(*)||'/'||(select count(*) from public.staged_discovery_evidence where discovery_id=${dq(LOST)}) from public.staged_guidelines where candidate_id=${dq(LOST)}`), '1/1');
+  eq('the proxy received the lost request exactly once (no automatic retry), and dropped it after commit', [markedRequests, droppedAfterCommit], [1, 1]);
+  eq('the not-attempted item was never sent', q(`select count(*) from public.staged_guidelines where candidate_id=${dq(L[2].discoveryId)}`), '0');
+  dropMarked = false;
+  const l2 = await write(Lf);
+  eq('retry of the same report: same run id, exit 0', [l2.json?.runId, l2.status], [l1.runId, 0]);
+  eq('…the committed items come back existing / already_recorded; the not-attempted one is staged',
+    L.map((x) => [outcomeOf(l2.json, x.discoveryId), l2.json?.items.find((i) => i.discoveryId === x.discoveryId)?.evidence]),
+    [['existing', 'already_recorded'], ['existing', 'already_recorded'], ['staged', 'appended']]);
+  eq('…exactly one row and one sighting per item: nothing duplicated',
+    L.map((x) => q(`select count(*)||'/'||(select count(*) from public.staged_discovery_evidence where discovery_id=${dq(x.discoveryId)}) from public.staged_guidelines where candidate_id=${dq(x.discoveryId)}`)), ['1/1', '1/1', '1/1']);
+  proxy.closeAllConnections();
+  proxy.close();
 
   console.log('\n[10] Over the whole run');
   eq('the adapter never published: the only catalogue change is the editor\'s one approval', Number(fingerprint().split('\n')[0].split(':')[0]) - Number(cat0.split('\n')[0].split(':')[0]), 1);
