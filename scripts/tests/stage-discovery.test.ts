@@ -9,9 +9,11 @@
  * Run:   npx tsx scripts/tests/stage-discovery.test.ts   (or: npm run test:offline)
  * Exit:  0 = all assertions passed, 1 = at least one failure.
  */
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
-  canonicalJson, classifyResponse, parseArgs, parseReport, planReport, runIdentity, toPayload,
+  canonicalJson, classifyResponse, DEFAULT_TIMEOUT_MS, main, parseArgs, parseReport, planReport, runIdentity, toPayload, validateCandidate,
   type DiscoveryReportFile,
 } from '../stage-discovery';
 import { checkOwnership, STAGING_OWNERSHIP } from '../lib/staging-ownership';
@@ -92,16 +94,59 @@ const plan = planReport(report([
   ] },
 ]));
 eq('submitted: the two discovery-owned candidates', plan.submit.map((s) => s.payload.discoveryId), ['ebi-new', 'ebi-ed']);
-eq('a repeated discoveryId is collapsed', plan.duplicates, 1);
+eq('an identical repeat of a discoveryId is listed as duplicate, submitted once', plan.notSubmitted.filter((r) => r.outcome === 'duplicate').map((r) => [r.discoveryId, r.position]), [['ebi-new', 'NHS EBI#2']]);
 const why = Object.fromEntries(plan.notSubmitted.map((r) => [r.discoveryId, r.outcome]));
 eq('BOFAS: not-owner', why['bofas-1'], 'not-owner');
 eq('…and offered as a dry-run transition preview', plan.transitionPreview.map((p) => p.provider), ['BOFAS']);
 eq('ROS (no owner): unowned', why['ros-1'], 'unowned');
 eq('a failed provider run: provider-not-ok', why['bask-1'], 'provider-not-ok');
 eq('a class outside the three: unsupported, never submitted', why['bess-ret'], 'unsupported');
-eq('a malformed candidate: unsupported', why['bess-bad'], 'unsupported');
+eq('a malformed candidate: invalid (not unsupported)', why['bess-bad'], 'invalid');
 eq('retirement assertions are collected as report-only', plan.retirements.map((r) => r.guidelineId), ['g1']);
-eq('every input is accounted for (submitted + not submitted + collapsed = 8)', plan.submit.length + plan.notSubmitted.length + plan.duplicates, 8);
+eq('every input is accounted for, each listed once (8)', plan.submit.length + plan.notSubmitted.length, 8);
+
+console.log('\nvalidation before any database contact');
+const bad = (label: string, raw: unknown, expect: RegExp) => {
+  const errs = validateCandidate(raw);
+  check(`${label}: invalid`, errs.some((e) => expect.test(e)), JSON.stringify(errs));
+};
+eq('a well-formed NEW_GUIDELINE is valid', validateCandidate(ebiNew), []);
+eq('a well-formed POSSIBLE_NEW_EDITION is valid', validateCandidate(ebiEd), []);
+for (const raw of [null, 42, 'text', [1, 2]]) bad(`a non-object entry (${JSON.stringify(raw)})`, raw, /not an object/);
+bad('discoveredAt not a timestamp', { ...ebiNew, discoveredAt: 'last Tuesday' }, /discoveredAt/);
+bad('discoveredAt without a time zone', { ...ebiNew, discoveredAt: '2026-10-24T00:45:41' }, /discoveredAt/);
+bad('discoveredAt an impossible date', { ...ebiNew, discoveredAt: '2026-13-45T99:00:00Z' }, /discoveredAt/);
+bad('statedLabels not an array', { ...ebiNew, statedLabels: { value: 'x' } }, /statedLabels must be an array/);
+bad('a stated label of the wrong shape', { ...ebiNew, statedLabels: [{ origin: 'guess', value: 'x', readFrom: 'https://a.b/' }] }, /statedLabels\[0\]/);
+bad('urlAlternatives missing', { ...ebiNew, urlAlternatives: undefined }, /urlAlternatives must be an array/);
+bad('an alternative without a URL', { ...ebiNew, urlAlternatives: [{ relation: 'redirect-target', scope: 'document' }] }, /urlAlternatives\[0\]/);
+bad('discoveredUrl not a URL', { ...ebiNew, discoveredUrl: 'not a url' }, /discoveredUrl/);
+bad('a missing topic', { ...ebiNew, topic: '' }, /topic/);
+bad('NEW_GUIDELINE naming an entry', { ...ebiNew, matchedGuidelineId: 'x' }, /must not name/);
+bad('NEW_GUIDELINE carrying softMatch', { ...ebiNew, softMatch: ebiEd.softMatch }, /carries no softMatch/);
+bad('edition without softMatch', { ...ebiEd, softMatch: undefined }, /needs softMatch/);
+bad('edition softMatch naming another entry', { ...ebiEd, softMatch: { ...ebiEd.softMatch!, guidelineId: 'other' } }, /needs softMatch/);
+bad('edition titleSimilarity out of range', { ...ebiEd, softMatch: { ...ebiEd.softMatch!, titleSimilarity: 7 } }, /needs softMatch/);
+const tokOk = cand({ discoveryId: 't', classification: 'EDITION_TOKEN_CHANGED', matchedGuidelineId: 'x', discoveredUrl: 'https://a.b/doc?ver=2',
+  tokenChange: { parameter: 'ver', previousValue: '1', observedValue: '2', previousObservedAt: 'p', guidelineId: 'x', statement: 's' } });
+eq('a well-formed EDITION_TOKEN_CHANGED is valid', validateCandidate(tokOk), []);
+bad('token change with equal values', { ...tokOk, tokenChange: { ...tokOk.tokenChange!, observedValue: '1' } }, /needs tokenChange/);
+bad('token change without its evidence', { ...tokOk, tokenChange: undefined }, /needs tokenChange/);
+const vplan = planReport(report([{ provider: 'NHS EBI', outcome: 'ok', candidates: [null, { ...ebiNew, discoveryId: 'v2', discoveredAt: 'soon' }, ebiNew] }]));
+eq('planning: invalid entries itemised with position, nothing about them submitted',
+  vplan.notSubmitted.map((r) => [r.position, r.outcome, r.discoveryId]), [['NHS EBI#0', 'invalid', '(none)'], ['NHS EBI#1', 'invalid', 'v2']]);
+eq('…the valid entry beside them is still planned', vplan.submit.map((x) => x.payload.discoveryId), ['ebi-new']);
+
+console.log('\nduplicate ids: identical collapse, different content is a conflict');
+const cplan = planReport(report([
+  { provider: 'NHS EBI', outcome: 'ok', candidates: [ebiNew, { ...ebiNew, topic: 'Different title' }, ebiEd, { ...ebiEd }, { ...ebiEd }] },
+]));
+eq('different content under one id: every copy is a conflict, none submitted',
+  cplan.notSubmitted.filter((r) => r.outcome === 'conflict').map((r) => r.position), ['NHS EBI#0', 'NHS EBI#1']);
+check('…the conflict names every position', /NHS EBI#0, NHS EBI#1/.test(cplan.notSubmitted.find((r) => r.outcome === 'conflict')?.detail ?? ''));
+eq('identical copies: the first submitted, each repeat listed', [cplan.submit.map((x) => x.result.position), cplan.notSubmitted.filter((r) => r.outcome === 'duplicate').map((r) => r.position)],
+  [['NHS EBI#2'], ['NHS EBI#3', 'NHS EBI#4']]);
+check('the run id covers only what IS submitted', cplan.runId === planReport(report([{ provider: 'NHS EBI', outcome: 'ok', candidates: [ebiEd] }])).runId);
 
 console.log('\npayload: the producer\'s data, verbatim');
 const tok = cand({ discoveryId: 'ebi-tok', classification: 'EDITION_TOKEN_CHANGED', matchedGuidelineId: 'x',
@@ -137,6 +182,39 @@ eq('22023 → unsupported', classifyResponse(null, { code: '22023', message: 'co
 eq('other errors → failed', classifyResponse(null, { code: 'XX000', message: 'boom' }).outcome, 'failed');
 for (const st of ['staged', 'existing', 'already_open', 'held']) eq(`${st} passes through`, classifyResponse({ status: st }, null).outcome, st);
 eq('an unknown status → failed, never silently counted', classifyResponse({ status: 'weird' }, null).outcome, 'failed');
+eq('a 5xx with no database code (a gateway) → unconfirmed', classifyResponse(null, { code: '', message: 'Bad gateway' }, 502).outcome, 'unconfirmed');
+eq('a database error on a 5xx → failed (it rolled back)', classifyResponse(null, { code: 'XX000', message: 'x' }, 500).outcome, 'failed');
+
+console.log('\ntimeouts');
+eq('default timeout', parseArgs(['r.json']).timeoutMs, DEFAULT_TIMEOUT_MS);
+eq('a valid --timeout-ms', parseArgs(['r.json', '--timeout-ms', '5000']).timeoutMs, 5000);
+for (const v of ['0', '999', '300001', 'abc', '1.5']) check(`--timeout-ms ${v} refused`, /--timeout-ms must be/.test(parseArgs(['r.json', '--timeout-ms', v]).error ?? ''));
+check('every write request goes through the bounded fetch', /global: \{ fetch: boundedFetch \}/.test(adapterSrc));
+check('…which bounds the body too (reads it under the timer)', /await res\.text\(\)[\s\S]*finally \{\s*clearTimeout\(timer\)/.test(adapterSrc));
+
+console.log('\nthe WRITE banner only after target and key checks');
+{
+  const dir = mkdtempSync(join(tmpdir(), 'stage-discovery-'));
+  const f = join(dir, 'r.json');
+  writeFileSync(f, JSON.stringify(report([{ provider: 'NHS EBI', outcome: 'ok', candidates: [ebiNew] }])));
+  const saved = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const capture = async (args: string[]) => {
+    const lines: string[] = [];
+    const [log, err] = [console.log, console.error];
+    console.log = (...a: unknown[]) => { lines.push(a.join(' ')); };
+    console.error = (...a: unknown[]) => { lines.push(a.join(' ')); };
+    try { return { code: await main(args), out: lines.join('\n') }; } finally { console.log = log; console.error = err; }
+  };
+  const remote = await capture([f, '--write', '--target', 'https://example.invalid']);
+  check('remote target refused (2) with no WRITE banner', remote.code === 2 && !/MODE: WRITE/.test(remote.out), remote.out);
+  const nokey = await capture([f, '--write', '--target', 'http://127.0.0.1:9']);
+  check('no key refused (2) with no WRITE banner', nokey.code === 2 && !/MODE: WRITE/.test(nokey.out), nokey.out);
+  const dry = await capture([f]);
+  check('a dry run still prints its banner', dry.code === 0 && /MODE: DRY RUN/.test(dry.out));
+  if (saved !== undefined) process.env.SUPABASE_SERVICE_ROLE_KEY = saved;
+  rmSync(dir, { recursive: true, force: true });
+}
 
 console.log('\nlocal test tooling (scripts/tests/local-supabase drives this adapter)');
 const pkg = JSON.parse(readFileSync('package.json', 'utf8')) as { devDependencies?: Record<string, string>; dependencies?: Record<string, string> };

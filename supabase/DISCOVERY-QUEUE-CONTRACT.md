@@ -88,8 +88,20 @@ Discovery reports from #220 have their own `schemaVersion` (v1). `scripts/stage-
   - any other class;
   - providers whose discovery run failed or was skipped;
   - providers it does not own.
-- **Outcomes:** `staged`, `existing`, `already_open`, `held`, `unsupported` (refused by the database as unsupported or contradictory, or not a stageable class), `failed`, `not-owner`, `unowned`, `provider-not-ok`.
-  - It exits 1 on `failed`, `unsupported` or `unowned`.
+- **Before any database contact:** every entry is validated (object, fields, timestamps, URLs, arrays, the class's evidence shape).
+- **Outcomes:**
+  - Decided by the database: `staged`, `existing`, `already_open`, `held`.
+  - Not retryable, the report must change:
+    - `invalid` (failed validation);
+    - `conflict` (one `discoveryId` with different content; none submitted);
+    - `unsupported` (refused by the database as unsupported or contradictory, or not a stageable class).
+  - `duplicate`: an identical repeat, submitted once.
+  - Retryable:
+    - `failed` (a database error; that call rolled back);
+    - `unconfirmed` (a timeout or lost connection: it may have committed; never retried automatically; the run stops);
+    - `not-attempted` (after a stop).
+  - `not-owner`, `unowned`, `provider-not-ok`.
+  - It exits 1 on any non-retryable outcome, any retryable outcome, or `unowned`. See `DEPLOYMENT-RUNBOOK.md` §9.
 - **Run identity:** `discover:` + sha256 over the canonical JSON (keys sorted, candidates sorted by `discoveryId`) of the schema version and the exact payloads submitted.
   - The payloads include each candidate's own `discoveredAt`, the sweep time.
   - The report's `generatedAt`, `note`, coverage and fetch metadata, formatting and key order are excluded. So re-stamping or re-saving a report keeps the run id, and a retry adds no evidence.
