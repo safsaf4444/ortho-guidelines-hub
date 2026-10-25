@@ -353,6 +353,16 @@
 
 begin;
 
+-- Transaction-local limits (SET LOCAL ends with this transaction, so nothing
+-- persists on a pooled server connection). lock_timeout: if a lock this
+-- migration needs (e.g. ACCESS EXCLUSIVE on staged_guidelines) is not granted
+-- within 5 s, fail and roll back rather than queue, because a queued
+-- exclusive lock blocks every later reader of that table. statement_timeout:
+-- no single statement here should take more than a second or two; 60 s
+-- bounds a stall without cutting off a slow but healthy run.
+set local lock_timeout = '5s';
+set local statement_timeout = '60s';
+
 -- ── 0. Refuse to run over PR #174's objects ─────────────────────────────────
 -- See the box at the top. A silent half-merge of the two designs is the
 -- failure this prevents: whichever is applied second must be rebased first.
