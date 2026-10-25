@@ -169,3 +169,65 @@ The rehearsal is tracked in `scripts/tests/local-supabase/rehearsal.ts` and runs
 - Supabase-hosted platform differences;
 - the deployed old app's UI (its exact data calls were exercised, not its screens);
 - `pg_dump` and restore themselves.
+
+## 9. Discovery staging (after the upgrade; the owner's decision)
+
+`scripts/stage-discovery.ts` stages one discovery report (written by `scripts/discover.ts`) into the review queue. **No workflow runs it, and no weekly or other schedule is activated by this branch.** The "Guideline & Provider Sync" workflow stays manual-dispatch only. Running the adapter, and enabling any schedule, are separate decisions.
+
+**Commands**
+
+```sh
+# Dry run (default): no database contact, no .env read. Always safe.
+npx tsx scripts/stage-discovery.ts reports/discovery-<stamp>.json
+npx tsx scripts/stage-discovery.ts reports/discovery-<stamp>.json --compare-sync candidates.json   # BOFAS comparison
+# Write: all of these are required; nothing falls back to SUPABASE_URL, VITE_* or .env files.
+SUPABASE_SERVICE_ROLE_KEY=… npx tsx scripts/stage-discovery.ts reports/discovery-<stamp>.json   --write --target <supabase-url> --allow-remote-target --out stage-discovery-result.json
+```
+
+- `--allow-remote-target` is required for any non-loopback target.
+- Without `--write`, `--target` is ignored, and the run makes no database requests. Verified with a decoy server passed as both `--target` and `SUPABASE_URL`: 0 requests.
+- Exit codes:
+  - **0:** every item ended `staged`, `existing`, `already_open`, `held`, `not-owner` or `provider-not-ok`.
+  - **1:** at least one item was `failed`, `unsupported` or `unowned`, or the report was invalid.
+  - **2:** a missing flag or key. Nothing is submitted.
+- Retrying the same report is safe: it retries only what failed and records nothing twice.
+
+**Outcome counts observed (2026-10-24/25)**
+
+| Run | Result |
+|---|---|
+| Dry run, the real report `discovery-2026-10-24T00-45-41-732Z.json` (BOFAS only) | 5 `not-owner` (4 `POSSIBLE_NEW_EDITION`, 1 `NEW_GUIDELINE`, the UK-FALCON report); 0 submitted; comparison: 5 discovery-only, 0 shared with the current `candidates.json` |
+| Local stack, synthetic report A, first write | 3 `staged` (one of each class), 1 `held` (UK-FALCON), 1 `not-owner` (BOFAS), 1 `provider-not-ok`, 1 retirement report-only; exit 0 |
+| Same report again, and with only `generatedAt` changed | 3 `existing`, evidence `already_recorded`, same run id, nothing added |
+| New sweep (new `discoveredAt` on the candidates) | new run id; 3 `existing` with evidence appended; editor decisions unchanged; no new rows |
+| Partial failure, then retry | 2 `staged` + 1 `failed` (exit 1, no row left behind); retry: 1 `staged` + 2 `existing` (exit 0) |
+| Contradictory or unowned report | 2 `unsupported` (database 22023), 1 `unsupported` (retirement-type class), 1 `unowned`; exit 1; nothing written |
+
+These come from `npx tsx scripts/tests/local-supabase/run.ts adapter` (66/66), which runs the actual script.
+
+**Provider ownership: script-enforced, with limits**
+
+`scripts/lib/staging-ownership.ts` gives each provider exactly one staging producer. Both `stage-candidates.ts` and `stage-discovery.ts` consult it.
+
+| Provider | Staged by |
+|---|---|
+| BOA, BSG, BSSH | `sync-providers` |
+| **BOFAS** | **`sync-providers`.** The move to discovery is *awaiting approval* and is not active; discovery shows BOFAS only as `not-owner`, plus the dry-run comparison. |
+| NHS EBI, BESS | `discover` |
+
+- A provider owned by the other producer is reported `not-owner`.
+- A provider with no owner is reported `unowned` and fails the run.
+- **Limits:**
+  - It is enforced by the two scripts, not by the database. A direct service-role call to `stage_sync_candidates` or `stage_discovery_candidate` bypasses it.
+  - It does not change what was filed before: rows already staged by either producer stay as they are.
+  - Even across producers, the database's one-open-row-per-document rule still prevents duplicate *open* rows.
+
+**Run identity: discovery and sync differ**
+
+| | `stage-discovery.ts` | `stage-candidates.ts` |
+|---|---|---|
+| Run id | `discover:` + sha256 of the canonical submitted payloads (keys sorted, candidates sorted by `discoveryId`). Each payload carries its candidate's `discoveredAt`. | `sync-providers:<generatedAt>:` + sha256 of the raw `candidates.json` bytes |
+| Change only `generatedAt`, or reformat the file | **Same** run id: nothing re-recorded | **New** run id: one extra sighting per item, never a new row |
+| New sweep | New run id: sightings appended to existing rows | New run id: the same |
+
+The sync rule is unchanged on this branch. In both paths, queue rows are idempotent by candidate id and document; the run id only decides whether a sighting is recorded again.
