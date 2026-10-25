@@ -1,0 +1,3 @@
+
+# Backup procedure: run by bash inside a Linux container; must stay LF.
+scripts/backup/*.sh text eol=lf

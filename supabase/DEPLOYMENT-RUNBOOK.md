@@ -25,15 +25,19 @@ From the start of §3 until §6 is complete:
 
 ## 3. Backups (and what they cannot do)
 
-1. Take a logical backup immediately before step 1, stored outside the repo (`backups/` is gitignored):
-   - data: `pg_dump --data-only -t public.guidelines -t public.guideline_changelog -t public.staged_guidelines`;
-   - schema: `pg_dump --schema-only -n public`.
-2. Separately, check which platform backups the project's plan actually provides (daily backups or point-in-time recovery). Don't assume either exists, and don't treat an untested restore as a rollback plan.
-3. **Restore limitations:**
+1. Take ONE consistent logical backup of schema `public` (definitions and data) immediately before step 1, with `scripts/backup/Backup-Public.ps1`. See `scripts/backup/README.md`.
+   - **One snapshot:** an exported snapshot is shared by `pg_dump` and the fingerprint the restore is compared against. Separate schema and data dumps, or separate "before" queries, would each see a different moment.
+   - **Destination:** outside the repo and outside OneDrive. The drive's encryption must be verified (elevated `manage-bde -status`), or its lack explicitly accepted.
+   - **Password:** typed at a no-echo prompt; never in a file, an argument or chat.
+2. **Verify it restores**, before relying on it: `npx tsx scripts/backup/restore-verify.ts <backup folder>`. It restores into the disposable local Supabase, not plain postgres, and must report **MATCH** against the backup's own snapshot fingerprint.
+   - Rehearsed locally under concurrent writes: `run.ts backup`, 16/16.
+3. **The plan is free:** there are no platform backups or point-in-time recovery to fall back on (checked 2026-10-25). Don't treat an untested restore as a rollback plan.
+4. **Not covered:** `auth.users` and `auth.identities`. After a disaster the editor's account must be re-created, with a new UUID, and the `is_editor()` allowlist updated through a reviewed change. See the README's "Limitations".
+5. **Restore limitations:**
    - Restoring the pre-upgrade dump discards every queue decision made after it.
    - The new evidence and decision tables refuse UPDATE, DELETE and TRUNCATE by trigger. Removing or rewriting their contents needs the table owner to disable or drop those triggers, so export them first (`DISCOVERY-QUEUE-CONTRACT.md` §5; migration header "Append-only: threat model").
    - Once any row is `resolved` or uses a new category, the old CHECK constraints cannot be restored.
-   - The production project is currently paused. Restoring it is its own decision and is out of scope here.
+   - The project was paused and has been restored (verified read-only on 2026-10-25).
 
 ## 4. Read-only preflight (production)
 
