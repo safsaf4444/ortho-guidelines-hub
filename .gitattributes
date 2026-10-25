@@ -1,3 +1,11 @@
 
 # Backup procedure: run by bash inside a Linux container; must stay LF.
 scripts/backup/*.sh text eol=lf
+
+# Deploy sequencer: run by bash inside a Linux container; must stay LF.
+scripts/deploy/*.sh text eol=lf
+
+# Migrations and read-only gates are applied as exact bytes against recorded
+# SHA-256 values; a CRLF checkout would change those bytes.
+supabase/migrations/*.sql text eol=lf
+supabase/*-READONLY.sql text eol=lf

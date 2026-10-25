@@ -6,6 +6,12 @@
  * API endpoint POST /v1/projects/{ref}/database/migrations, which also records
  * each one in the project's migration history (supabase_migrations).
  *
+ * ON HOLD, do not use for production: how this endpoint handles an SQL error
+ * inside a file's own BEGIN … COMMIT is undocumented (OpenAPI spec and docs
+ * checked 2026-10-25), and the only gate before 20261025 is a history entry.
+ * The reviewed route is scripts/deploy/Apply-Migrations-Psql.ps1 (psql's
+ * documented ON_ERROR_STOP behaviour, read-only schema gates between steps).
+ *
  *   Dry run (DEFAULT; no network request of any kind):
  *     npx tsx scripts/deploy/apply-migrations.ts
  *
