@@ -107,6 +107,8 @@ Discovery reports from #220 have their own `schemaVersion` (v1). `scripts/stage-
 - A provider owned by the other producer is listed as `not-owner`.
 - A provider in no row is listed as `unowned` and fails the run. Adding a provider is a decision, not a default.
 - **Enforced by the scripts, not the database.** A direct service-role RPC call bypasses it.
+- BOFAS remains owned by `sync-providers`. Switching it is the owner's decision; this branch does not.
+- No workflow runs `stage-discovery.ts`, and no schedule is activated. Commands, observed outcome counts and the run-identity comparison with the sync path are in `DEPLOYMENT-RUNBOOK.md` §9.
 
 ## 3. Dependencies between migration, scripts and dashboard
 
