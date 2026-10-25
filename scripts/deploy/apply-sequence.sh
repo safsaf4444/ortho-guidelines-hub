@@ -12,17 +12,23 @@
 #   M2      20261025 (psql -f, ON_ERROR_STOP=1)
 #   gate 2  final state
 #
-# Error handling is psql's documented behaviour, not an API's: with
-# ON_ERROR_STOP=1 psql stops at the first failing statement and exits 3
-# (2 = connection lost, 1 = other fatal error). Each migration's statements sit
-# between its own BEGIN and COMMIT, so stopping before COMMIT and closing the
-# connection leaves nothing committed. That is not taken on trust: after any
-# non-zero exit the state is CLASSIFIED read-only with the gates:
-#   the "before" gate passes → the step verifiably committed nothing;
-#   the "after"  gate passes → the step committed despite the error
-#                               (e.g. the connection dropped after COMMIT);
+# What psql's documented behaviour does and does not tell us:
+#   * With ON_ERROR_STOP=1 psql stops at the first failing statement and exits
+#     3. A statement that FAILS before COMMIT aborts the transaction; the
+#     server never commits it.
+#   * Exit 2 (connection lost), a cancel/Ctrl+C, or a killed container do NOT
+#     say whether COMMIT already ran: the server may have committed and the
+#     answer been lost. No exit code proves a rollback in those cases.
+# So the outcome is never inferred from the exit code. After any non-zero exit
+# the ACTUAL state is established read-only with the gates:
+#   the "before" gate passes → nothing of that step is in the database;
+#   the "after"  gate passes → the step IS committed despite the error;
 #   neither                  → state unknown: stop and inspect.
-# There is no retry and no repair: every failure stops the sequence.
+# Each migration bounds itself with SET LOCAL lock_timeout / statement_timeout
+# (transaction-local, so nothing persists on a pooled connection).
+# There is no retry and no repair: every failure stops the sequence. If this
+# script itself is interrupted, run the host script with -Inspect (MODE=inspect
+# here): gates 0, 1 and 2, read-only, report which state the database is in.
 #
 # Migration history (supabase_migrations.schema_migrations) is NOT written.
 #
@@ -43,6 +49,9 @@
 #   22  M2 committed (exit 0) but gate 2 FAILED
 #   23  M2 errored but gate 2 passes: M2 IS committed
 #   29  M2 errored; neither gate passes: state UNKNOWN
+#   MODE=inspect (read-only, sends no migration):
+#   40/41/42  gate 0 / 1 / 2 passes: pre-upgrade / after 20261024 only / final
+#   49  no gate passes: state UNKNOWN
 # ============================================================================
 set -uo pipefail
 
@@ -81,6 +90,14 @@ gate() {
 migrate() {
   psql -X -v ON_ERROR_STOP=1 --echo-errors -f "$1"
 }
+
+if [ "${MODE:-apply}" = "inspect" ]; then
+  step "MODE" "inspect: read-only gates only; no migration is sent"
+  gate 0 && stop 40 "gate 0 passes: PRE-upgrade state (neither migration present)"
+  gate 1 && stop 41 "gate 1 passes: 20261024 committed, 20261025 not"
+  gate 2 && stop 42 "gate 2 passes: both committed (final state)"
+  stop 49 "no gate passes: state UNKNOWN; compare the FAIL lines above"
+fi
 
 gate 0; g=$?
 [ $g -eq 0 ] || stop 10 "gate 0 (expected pre-upgrade state) did not pass (psql exit $g); NOTHING was sent"

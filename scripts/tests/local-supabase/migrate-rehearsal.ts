@@ -12,7 +12,7 @@
  * LAST GRANT before COMMIT: everything else in the file has already run, so
  * "nothing committed" is the strongest claim the rollback has to meet.
  */
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -64,13 +64,13 @@ function expectations() {
   return { guidelines: dataFp(), changelog: changelogFp(), staged: q('select count(*) from public.staged_guidelines'), editors: '1' };
 }
 interface Run { status: number | null; out: string; folder?: string; record?: Record<string, unknown>; transcript: string }
-function run(opts: { apply?: boolean; exp?: ReturnType<typeof expectations>; extra?: string; host?: string; credential?: boolean; sourceRoot?: string; user?: string; ssl?: string; port?: number } = {}): Run {
+function run(opts: { apply?: boolean; inspect?: boolean; exp?: ReturnType<typeof expectations>; extra?: string; host?: string; credential?: boolean; sourceRoot?: string; user?: string; ssl?: string; port?: number } = {}): Run {
   const exp = opts.exp ?? expectations();
   const before = new Set(fs.readdirSync(DEST));
   const cred = opts.credential === false ? '' : `-Credential (New-Object System.Management.Automation.PSCredential('postgres', (ConvertTo-SecureString 'postgres' -AsPlainText -Force)))`;
   const ps = `& { & '${SCRIPT}' -PoolerHost '${opts.host ?? 'host.docker.internal'}' -Port ${opts.port ?? 54322} -DbUser '${opts.user ?? 'postgres'}' -SslMode ${opts.ssl ?? 'disable'} -RecordDir '${DEST}' ` +
     `-ExpectGuidelines '${exp.guidelines}' -ExpectChangelog '${exp.changelog}' -ExpectStaged ${exp.staged} -ExpectEditors ${exp.editors} ` +
-    `${opts.apply === false ? '' : '-Apply'} ${cred} ${opts.sourceRoot ? `-SourceRoot '${opts.sourceRoot}'` : ''} ${opts.extra ?? ''}; exit $LASTEXITCODE }`;
+    `${opts.inspect ? '-Inspect' : opts.apply === false ? '' : '-Apply'} ${cred} ${opts.sourceRoot ? `-SourceRoot '${opts.sourceRoot}'` : ''} ${opts.extra ?? ''}; exit $LASTEXITCODE }`;
   const r = spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', ps], { encoding: 'utf-8' });
   const out = `${r.stdout ?? ''}${r.stderr ?? ''}`;
   const made = fs.readdirSync(DEST).filter((d) => !before.has(d));
@@ -110,7 +110,7 @@ try {
     const r = run({ apply: false });
     eq('dry run exits 0', r.status, 0);
     check('dry run says nothing was sent, and shows the three full hashes', /DRY RUN: nothing was sent/.test(r.out)
-      && ['41e009ba4416c1f87ed0a1578da4675c4055b7c4683819423252087c0cc72105', 'ab456853549fe488ca7c01ff85dd69342723e55d5141d7d09459d7b5120ca04b'].every((h) => r.out.includes(h)));
+      && ['61ca5eab301a037a024bab5ae85084dcb46c9b00e38eefa00f2b84c4e20f3be1', 'a21ae5561ce588da64daf2b7df9eea52021185aec4302419024dabd23030e030'].every((h) => r.out.includes(h)));
     check('dry run creates no record folder', r.folder === undefined);
   }
   {
@@ -157,6 +157,34 @@ try {
     eq('record.json carries the outcome', r.record?.outcome, 'M1 failed; verified nothing of it committed; M2 not sent');
   }
 
+  console.log('\n[3b] A lock M1 needs is held elsewhere: lock_timeout (5 s, transaction-local) fails M1; nothing committed');
+  {
+    const exp = expectations();
+    // Another session holds ACCESS SHARE on staged_guidelines; M1's ALTER TABLE needs ACCESS EXCLUSIVE.
+    const holder = spawn('docker', ['exec', '-i', 'supabase_db_ortho-disc-test', 'psql', '-U', 'postgres', '-d', 'postgres', '-q']);
+    holder.stdin.end('begin; lock table public.staged_guidelines in access share mode; select pg_sleep(60); commit;\n');
+    await new Promise((r) => setTimeout(r, 1500));
+    const t0 = Date.now();
+    const r = run({ exp });
+    const secs = (Date.now() - t0) / 1000;
+    holder.kill();
+    q(`select pg_terminate_backend(pid) from pg_stat_activity where query like '%pg_sleep(60)%' and pid <> pg_backend_pid()`);
+    show(r);
+    eq('exit 11 (M1 failed; gate 0 verifies nothing committed)', r.status, 11);
+    check('the failure is the lock timeout, not a hang', /lock timeout/i.test(r.transcript), r.transcript.slice(-400));
+    check(`the whole run ended promptly (${secs.toFixed(1)} s < 60 s)`, secs < 60);
+    eq('schema byte-for-byte as before', schemaFp(), base);
+    eq('the timeouts did not outlive the transaction (new session: lock_timeout, statement_timeout)', q('show lock_timeout; show statement_timeout').split('\n'), ['0', '0']);
+  }
+
+  console.log('\n[3c] -Inspect on the pre-upgrade database: read-only, reports state 40');
+  {
+    const r = run({ inspect: true });
+    eq('exit 40 (gate 0 passes)', r.status, 40);
+    check('inspect sent no migration', !/sending 2026102/.test(r.transcript));
+    eq('schema unchanged', schemaFp(), base);
+  }
+
   console.log('\n[4] M2 fails at its LAST GRANT: M1 committed, nothing of M2, verified by gate 1');
   let afterM1 = '';
   {
@@ -172,6 +200,8 @@ try {
     // Compare with a clean M24-only database: the M2 attempt left no trace.
     await fresh(true);
     eq('schema equals a clean 20261024-only database', schemaFp(), afterM1);
+    const i = run({ inspect: true });
+    eq('-Inspect reports 41 (20261024 committed, 20261025 not)', i.status, 41);
   }
 
   console.log('\n[5] Already-upgraded database: gate 0 refuses, nothing sent');
@@ -193,6 +223,7 @@ try {
     eq('steps in order', (r.record?.steps as string[] | undefined)?.map((s) => s.split('\t')[1]),
       ['sha256', 'sha256', 'sha256', 'gate0', 'M1', 'M1', 'gate1', 'M2', 'M2', 'gate2', 'RESULT']);
     check('three gates passed', (r.transcript.match(/GATE PASSED/g) ?? []).length === 3);
+    eq('-Inspect reports 42 (final state)', run({ inspect: true, exp }).status, 42);
     eq('data unchanged', [dataFp(), changelogFp()], [exp.guidelines, exp.changelog]);
     check('record.json and the transcript hold no password', !JSON.stringify(r.record).includes('PGPASSWORD=') && !/password\s*[:=]\s*postgres/i.test(r.transcript));
     check('migration history not written (recorded as such)', r.record?.migrationHistory === 'NOT written by this route');

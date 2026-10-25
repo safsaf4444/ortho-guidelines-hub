@@ -61,9 +61,9 @@ export interface MigrationSpec { file: string; name: string; sha256: string }
 /** Recorded in C:\Users\safad\OrthoBackups\deployment-record-2026-10-25.md. */
 export const MIGRATIONS: MigrationSpec[] = [
   { file: 'supabase/migrations/20261024_discovery_review_queue.sql', name: '20261024_discovery_review_queue',
-    sha256: '41e009ba4416c1f87ed0a1578da4675c4055b7c4683819423252087c0cc72105' },
+    sha256: '61ca5eab301a037a024bab5ae85084dcb46c9b00e38eefa00f2b84c4e20f3be1' },
   { file: 'supabase/migrations/20261025_reject_open_candidate.sql', name: '20261025_reject_open_candidate',
-    sha256: 'ab456853549fe488ca7c01ff85dd69342723e55d5141d7d09459d7b5120ca04b' },
+    sha256: 'a21ae5561ce588da64daf2b7df9eea52021185aec4302419024dabd23030e030' },
 ];
 const POST_TIMEOUT_MS = 180_000;
 const GET_TIMEOUT_MS = 30_000;

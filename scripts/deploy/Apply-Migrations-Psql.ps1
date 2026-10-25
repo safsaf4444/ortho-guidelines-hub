@@ -7,10 +7,18 @@
 .DESCRIPTION
   Why psql and not the Management API: the API's handling of SQL errors inside
   an explicit BEGIN ... COMMIT is undocumented. psql's is documented:
-  ON_ERROR_STOP=1 stops at the first error and exits 3, and the open
-  transaction is never committed. Every outcome is then verified read-only by
-  supabase/POST-MIGRATION-GATE-READONLY.sql (see scripts/deploy/apply-sequence.sh
-  for the sequence and its exit codes).
+  ON_ERROR_STOP=1 stops at the first error and exits 3, and a statement that
+  fails before COMMIT aborts the transaction. A lost connection, a cancel or
+  an interrupted run does NOT prove a rollback, because COMMIT may already have
+  run. So the outcome is never inferred from an exit code: it is established
+  read-only by supabase/POST-MIGRATION-GATE-READONLY.sql (see
+  scripts/deploy/apply-sequence.sh for the sequence and its exit codes), and
+  nothing is retried. Each migration sets its own transaction-local
+  lock_timeout (5 s) and statement_timeout (60 s).
+
+  -Inspect runs only the three gates, read-only, and reports which state the
+  database is in (exit 40/41/42; 49 = none). Use it after any interrupted or
+  uncertain run, before deciding anything else.
 
   Exact bytes: the three files' SHA-256 values are recorded below. They are
   checked in the repo, copied into a fresh run folder outside the repo and
@@ -46,6 +54,8 @@ param(
   [Parameter(Mandatory = $true)] [int] $ExpectStaged,
   [Parameter(Mandatory = $true)] [int] $ExpectEditors,
   [switch] $Apply,
+  # Read-only: run gates 0, 1 and 2 and report the state. Sends no migration.
+  [switch] $Inspect,
   [string] $ConfirmProject = '',
   [int] $Port = 5432,
   [string] $Database = 'postgres',
@@ -60,8 +70,8 @@ $ErrorActionPreference = 'Stop'
 
 $PROJECT_REF = 'xutjahmbyrvifcltpxxu'
 $FILES = [ordered]@{
-  'supabase/migrations/20261024_discovery_review_queue.sql' = '41e009ba4416c1f87ed0a1578da4675c4055b7c4683819423252087c0cc72105'
-  'supabase/migrations/20261025_reject_open_candidate.sql'  = 'ab456853549fe488ca7c01ff85dd69342723e55d5141d7d09459d7b5120ca04b'
+  'supabase/migrations/20261024_discovery_review_queue.sql' = '61ca5eab301a037a024bab5ae85084dcb46c9b00e38eefa00f2b84c4e20f3be1'
+  'supabase/migrations/20261025_reject_open_candidate.sql'  = 'a21ae5561ce588da64daf2b7df9eea52021185aec4302419024dabd23030e030'
   'supabase/POST-MIGRATION-GATE-READONLY.sql'               = 'b56ee2ab76b18f2d83c638b0bcba9cdc232865616dbd9899420dae62baafb2f6'
 }
 
@@ -102,11 +112,13 @@ Write-Host "[migrate] Expected : guidelines $ExpectGuidelines; changelog $Expect
 foreach ($f in $plan) { Write-Host ("[migrate]   {0}  {1,7} bytes  sha256 {2}" -f $f.file, $f.bytes, $f.sha256) }
 Write-Host '[migrate] Migration history: NOT written by this route.'
 
-if (-not $Apply) {
+if ($Apply -and $Inspect) { Fail 'use -Apply or -Inspect, not both.' }
+if (-not $Apply -and -not $Inspect) {
   Write-Host '[migrate] DRY RUN: nothing was sent. No Docker container, no network, no password.' -ForegroundColor Cyan
   exit 0
 }
-if (-not $isLocalHost -and $ConfirmProject -ne $PROJECT_REF) { Fail "-Apply needs -ConfirmProject $PROJECT_REF." }
+if (-not $isLocalHost -and $ConfirmProject -ne $PROJECT_REF) { Fail "-Apply and -Inspect need -ConfirmProject $PROJECT_REF." }
+$mode = if ($Inspect) { 'inspect' } else { 'apply' }
 
 # -- Record folder: outside the repo and OneDrive ---------------------------
 $dest = [System.IO.Path]::GetFullPath($RecordDir).TrimEnd('\')
@@ -123,7 +135,7 @@ if ($LASTEXITCODE -ne 0) { Fail 'Docker is not running.' }
 if ($LASTEXITCODE -ne 0) { Fail "image $Image is not present locally. Nothing was installed." }
 
 $stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ')
-$run = Join-Path $dest "migrate-$stamp"
+$run = Join-Path $dest "$(if ($Inspect) { 'inspect' } else { 'migrate' })-$stamp"
 if (Test-Path $run) { Fail "$run already exists" }
 $sqlDir = Join-Path $run 'sql'
 $logDir = Join-Path $run 'log'
@@ -150,7 +162,7 @@ try {
   & docker run --rm --name "ortho-migrate-$stamp" `
       --entrypoint bash `
       -e PGHOST=$PoolerHost -e PGPORT=$Port -e PGUSER=$DbUser -e PGDATABASE=$Database `
-      -e PGSSLMODE=$SslMode -e PGAPPNAME=ortho-migrate -e PGPASSWORD `
+      -e PGSSLMODE=$SslMode -e PGAPPNAME=ortho-migrate -e PGPASSWORD -e "MODE=$mode" `
       -e "SHA_M1=$($FILES[$keys[0]])" -e "SHA_M2=$($FILES[$keys[1]])" -e "SHA_GATE=$($FILES[$keys[2]])" `
       -e "EXPECT_GUIDELINES=$ExpectGuidelines" -e "EXPECT_CHANGELOG=$ExpectChangelog" `
       -e "EXPECT_STAGED=$ExpectStaged" -e "EXPECT_EDITORS=$ExpectEditors" `
@@ -173,9 +185,14 @@ $meaning = @{
   22 = 'M2 committed but gate 2 failed'
   23 = 'M2 errored but IS committed (gate 2 passes)'
   29 = 'M2 errored; state UNKNOWN'
+  40 = 'inspect: PRE-upgrade state (neither migration present)'
+  41 = 'inspect: 20261024 committed, 20261025 not'
+  42 = 'inspect: both committed (final state)'
+  49 = 'inspect: state UNKNOWN (no gate passes)'
 }
 $record = [ordered]@{
   kind = 'ortho-guidelines-hub review-queue migration (psql, exact files)'
+  mode = $mode
   startedUtc = $stamp
   target = [ordered]@{ host = $PoolerHost; port = $Port; user = $DbUser; database = $Database; sslmode = $SslMode; project = $(if ($isLocalHost) { 'local rehearsal' } else { $PROJECT_REF }) }
   tool = [ordered]@{ image = $Image; psql = (& docker run --rm --entrypoint psql $Image --version) }
@@ -188,7 +205,7 @@ $record = [ordered]@{
 }
 $record | ConvertTo-Json -Depth 5 | Set-Content -Path (Join-Path $run 'record.json') -Encoding utf8
 Get-ChildItem $run -File -Recurse | ForEach-Object { $_.IsReadOnly = $true }
-$color = if ($exit -eq 0) { 'Green' } else { 'Red' }
+$color = if ($exit -eq 0 -or ($Inspect -and $exit -in 40, 41, 42)) { 'Green' } else { 'Red' }
 Write-Host "[migrate] exit $exit : $($record.outcome)" -ForegroundColor $color
 Write-Host "[migrate] Record: $run (record.json, log\transcript.log, log\steps.tsv). No credentials are stored."
 exit $exit
