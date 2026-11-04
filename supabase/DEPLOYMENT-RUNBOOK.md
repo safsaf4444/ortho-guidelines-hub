@@ -79,6 +79,8 @@ P8 uses a coarser key than the migration, so "no rows" guarantees the migration'
 | 4 | Merge the branch to `main` (this deploys the frontend via `deploy.yml`) | replaced | works | — | deployed |
 | 5 | First staging: manual dispatch with `dry_run = true`, then `false`. Discovery reports are staged separately, only when the owner chooses: `stage-discovery.ts` dry run first, then `--write --target <url> --allow-remote-target`. | — | shows results | — | runs |
 
+**Later migration, url-key v4 (`20261104_url_key_unreserved_decoding.sql`, PR #322):** applied by its own route, `scripts/deploy/Apply-UrlKeyV4-Psql.ps1`. See `scripts/deploy/URL-KEY-V4.md`. After it, `POST-MIGRATION-GATE-READONLY.sql`'s G19 fails by design; use `URL-KEY-V4-GATE-READONLY.sql`.
+
 Steps 1 and 2 are applied together by `scripts/deploy/Apply-Migrations-Psql.ps1`: exact files through psql, with read-only gates before, between and after (see `scripts/deploy/README.md`). It does **not** write the migration history (`supabase_migrations.schema_migrations`).
 
 Expect many `POSSIBLE_SAME_DOCUMENT` rows on the first live run, wherever catalogue links differ only in letter case from the providers' links. That is the intended visibility, not an error.

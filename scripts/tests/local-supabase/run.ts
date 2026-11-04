@@ -18,6 +18,9 @@
  *   migrate          Windows only, not in `all`: scripts/deploy/Apply-Migrations-Psql.ps1 end to
  *                    end (./migrate-rehearsal.ts): success, failures injected at the last GRANT
  *                    inside each migration's transaction, wrong pre-state, refusals, gate drift
+ *   urlkey-v4        Windows only, not in `all`: scripts/deploy/Apply-UrlKeyV4-Psql.ps1 end to end
+ *                    (./urlkey-v4-rehearsal.ts): refusals, success, repeat, rollback, and a
+ *                    backup + restore-verify of the upgraded database
  *   stop             stop the stack and delete its data (also: --stop after the suites)
  *
  * Each suite runs as a child process with ONLY the loopback URL and the local
@@ -31,7 +34,7 @@ import { chromium } from 'playwright';
 import { dockerAvailable, HERE, localEnv, prepareSchema, REPO, stopStack, testEnv, WORK } from './stack';
 
 const SUITES = ['integration', 'integration-25', 'e2e', 'rehearsal', 'adapter'] as const;
-const EXTRA = ['backup', 'migrate'] as const;
+const EXTRA = ['backup', 'migrate', 'urlkey-v4'] as const;
 type Suite = typeof SUITES[number] | typeof EXTRA[number];
 const KNOWN: readonly string[] = [...SUITES, ...EXTRA];
 
@@ -54,6 +57,7 @@ const SCRIPT: Record<Suite, string> = {
   adapter: path.join(HERE, 'discovery-adapter.ts'),
   backup: path.join(HERE, 'backup-rehearsal.ts'),
   migrate: path.join(HERE, 'migrate-rehearsal.ts'),
+  'urlkey-v4': path.join(HERE, 'urlkey-v4-rehearsal.ts'),
 };
 
 function runChild(suite: Suite, env: Record<string, string>): Promise<{ code: number; summary: string }> {
@@ -94,7 +98,7 @@ if (suites.length > 0) {
         prepareSchema({ with24: true, with25: suite !== 'integration', with26: true });
       }
       // e2e and rehearsal prepare their own schema states; the stack must be up for localEnv().
-      if (suite === 'e2e' || suite === 'rehearsal' || suite === 'backup' || suite === 'migrate') prepareSchema({ with24: false, with25: false });
+      if (suite === 'e2e' || suite === 'rehearsal' || suite === 'backup' || suite === 'migrate' || suite === 'urlkey-v4') prepareSchema({ with24: false, with25: false });
       const env = testEnv(localEnv());
       results.push({ suite, ...(await runChild(suite, env)) });
     } catch (err) {
