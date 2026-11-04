@@ -233,9 +233,43 @@ eq(
     ['trailing path slash', 'https://www.boa.ac.uk/asset/X/', 'https://www.boa.ac.uk/asset/X'],
     ['host case', 'https://WWW.BOFAS.org.uk/Portals/0/A.pdf', 'https://www.bofas.org.uk/Portals/0/A.pdf'],
     ['percent-escape hex case', 'https://example.org/a%3db', 'https://example.org/a%3Db'],
+    // url-key v4: RFC 3986 §6.2.2.2, escapes of unreserved characters.
+    ['unreserved escape %2d', 'https://www.boa.ac.uk/asset/a811fc01%2defc3', 'https://www.boa.ac.uk/asset/a811fc01-efc3'],
+    ['unreserved escape %2D', 'https://example.org/a%2Db', 'https://example.org/a-b'],
+    ['unreserved escapes ~ _ . ALPHA DIGIT', 'https://example.org/%7Eu/%5F%2E%41%31', 'https://example.org/~u/_.A1'],
   ]) {
     check(`documented identity merge (${why})`, documentIdentityKey(a) === documentIdentityKey(b));
   }
+  // …and decoding never merges what RFC 3986 keeps apart: reserved characters,
+  // '%' itself, non-ASCII bytes, and escapes a stray '%' would re-assemble.
+  for (const [why, a, b] of [
+    ['%2F is not /', 'https://example.org/a%2Fb', 'https://example.org/a/b'],
+    ['%3F is not ?', 'https://example.org/a%3Fb=1', 'https://example.org/a?b=1'],
+    ['%23 is not #', 'https://example.org/a%23b', 'https://example.org/a#b'],
+    ['%26 is not &', 'https://example.org/a?x=1%26y=2', 'https://example.org/a?x=1&y=2'],
+    ['%3D is not =', 'https://example.org/a?x%3D1', 'https://example.org/a?x=1'],
+    ['%20 is not a space', 'https://example.org/a%20b', 'https://example.org/a b'],
+    ['%25 is not %', 'https://example.org/a%252Db', 'https://example.org/a%2Db'],
+    ['%C3%A9 is not é', 'https://example.org/caf%C3%A9', 'https://example.org/café'],
+    ['%%341 is not %41', 'https://example.org/a%%341', 'https://example.org/a%41'],
+    ['%2%46 is not %2F', 'https://example.org/a%2%46', 'https://example.org/a%2F'],
+    ['a trailing %2F is not a trailing slash', 'https://example.org/a%2F', 'https://example.org/a'],
+  ]) {
+    check(`decoding keeps distinct (identity): ${why}`, documentIdentityKey(a) !== documentIdentityKey(b),
+      `${documentIdentityKey(a)} | ${documentIdentityKey(b)}`);
+    check(`decoding keeps distinct (match): ${why}`, normaliseCandidateUrl(a) !== normaliseCandidateUrl(b),
+      `${normaliseCandidateUrl(a)} | ${normaliseCandidateUrl(b)}`);
+  }
+  // Exhaustive: every byte's escape decodes exactly when it is unreserved.
+  for (let b = 0; b < 256; b++) {
+    const hex = b.toString(16).padStart(2, '0');
+    const ch = String.fromCharCode(b);
+    const unreserved = /^[A-Za-z0-9\-._~]$/.test(ch);
+    const key = documentIdentityKey(`https://example.org/x${'%' + hex}y`);
+    const decoded = key === `https://example.org/x${ch}y`;
+    if (decoded !== unreserved) check(`byte 0x${hex} decodes iff unreserved`, false, key);
+  }
+  check('all 256 byte escapes decode iff unreserved (66 do)', true);
 }
 
 const idArgs = {

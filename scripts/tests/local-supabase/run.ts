@@ -91,7 +91,7 @@ if (suites.length > 0) {
     console.log(`\n════════ ${suite} ════════`);
     try {
       if (suite === 'integration' || suite === 'integration-25' || suite === 'adapter') {
-        prepareSchema({ with24: true, with25: suite !== 'integration' });
+        prepareSchema({ with24: true, with25: suite !== 'integration', with26: true });
       }
       // e2e and rehearsal prepare their own schema states; the stack must be up for localEnv().
       if (suite === 'e2e' || suite === 'rehearsal' || suite === 'backup' || suite === 'migrate') prepareSchema({ with24: false, with25: false });
