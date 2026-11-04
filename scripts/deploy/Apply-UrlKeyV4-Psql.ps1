@@ -87,13 +87,25 @@ $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path.TrimEnd('\')
 $src = if ($SourceRoot) { (Resolve-Path $SourceRoot).Path.TrimEnd('\') } else { $repoRoot }
 
 # -- Target: the intended project only, or the local rehearsal --------------
-$isLocalHost = $PoolerHost -match '^(localhost|127\.|host\.docker\.internal$)'
+# LOCAL means exactly `localhost`, exactly `host.docker.internal` (both
+# case-insensitive, as host names are), or a dotted-quad IPv4 address in
+# 127.0.0.0/8 with every octet 0-255 and no leading zeros. Anything else,
+# including names that merely START with one of these (`localhost.prod.example`,
+# `127.attacker.example`, `127.0.0.1.attacker.example`), takes the REMOTE path
+# with all its checks. `\z` (true end of string), not `$`, which in .NET also
+# matches before a trailing newline.
+function Test-LocalHost([string] $h) {
+  if ($h -ieq 'localhost' -or $h -ieq 'host.docker.internal') { return $true }
+  $octet = '(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9][0-9]|[0-9])'
+  return [regex]::IsMatch($h, "\A127\.$octet\.$octet\.$octet\z")
+}
+$isLocalHost = Test-LocalHost $PoolerHost
 if ($isLocalHost) {
   if (-not $Credential) { Fail 'a local host is for the rehearsal only; pass -Credential for it.' }
 } else {
   if ($Credential) { Fail '-Credential is for the local rehearsal only; for a real database the password is prompted for (not echoed).' }
   if ($SslMode -ne 'require') { Fail 'a remote host needs -SslMode require.' }
-  if ($PoolerHost -notmatch '^aws-\d+-eu-central-1\.pooler\.supabase\.com$') { Fail "host $PoolerHost is not the eu-central-1 session pooler." }
+  if (-not [regex]::IsMatch($PoolerHost, '\Aaws-[0-9]+-eu-central-1\.pooler\.supabase\.com\z')) { Fail "host $PoolerHost is not the eu-central-1 session pooler." }
   if ($Port -ne 5432) { Fail 'use the SESSION pooler (port 5432); the transaction pooler (6543) cannot hold a migration session.' }
   if ($DbUser -ne "postgres.$PROJECT_REF") { Fail "user $DbUser is not postgres.$PROJECT_REF." }
 }

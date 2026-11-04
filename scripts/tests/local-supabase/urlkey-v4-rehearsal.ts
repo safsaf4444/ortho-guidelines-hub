@@ -119,6 +119,47 @@ try {
   }
   eq('schema unchanged by the dry run and refusals', schemaFp(), base);
 
+  console.log('\n[1b] Local-host classification is exact (Codex P2 on #323): prefixes and malformed IPv4 take the REMOTE path');
+  {
+    const PROD = 'aws-0-eu-central-1.pooler.supabase.com';
+    // LOCAL: -Credential is accepted and the dry run completes (exit 0).
+    for (const h of ['localhost', 'LOCALHOST', 'host.docker.internal', 'Host.Docker.Internal', '127.0.0.1', '127.1.2.3', '127.255.255.254', '127.0.0.0']) {
+      const r = run({ mode: 'dry', host: h });
+      check(`local: ${JSON.stringify(h)} is local (dry run exit 0 with -Credential)`, r.status === 0 && /DRY RUN: nothing was sent/.test(r.out) && r.folder === undefined, r.out.slice(-200));
+    }
+    // NOT LOCAL: name prefixes, suffixes, malformed or non-loopback IPv4, other loopback spellings, trailing newline.
+    const notLocal = [
+      'localhost.prod.example', '127.attacker.example', 'localhost.example.com', '127.0.0.1.attacker.example',
+      'host.docker.internal.evil', 'xlocalhost', 'localhost.', 'local-host',
+      '127.0.0', '127.0.0.256', '127.0.0.1.', '127.00.0.1', '127.0.0.01', '0127.0.0.1', '127.0.0.-1', '128.0.0.1', '127..0.1', '::1',
+      'localhost\n', '127.0.0.1\n', ' 127.0.0.1',
+    ];
+    for (const h of notLocal) {
+      // With -Credential: refused as remote, before any connection, no record folder.
+      const withCred = run({ mode: 'dry', host: h });
+      check(`not local: ${JSON.stringify(h)} with -Credential is refused as remote (exit 2)`,
+        withCred.status === 2 && /-Credential is for the local rehearsal only/.test(withCred.out) && withCred.folder === undefined, withCred.out.slice(-200));
+      // Without -Credential and with every other remote input valid: refused by the pooler-host check.
+      const noCred = run({ mode: 'dry', host: h, credential: false, ssl: 'require', port: 5432, user: 'postgres.xutjahmbyrvifcltpxxu' });
+      check(`not local: ${JSON.stringify(h)} without -Credential is refused by the remote host check (exit 2)`,
+        noCred.status === 2 && /is not the eu-central-1 session pooler/.test(noCred.out) && noCred.folder === undefined, noCred.out.slice(-200));
+    }
+    // -Apply against a prefixed host with a credential: refused before Docker, SQL, password use or a record folder.
+    const ap = run({ host: 'localhost.prod.example' });
+    check('-Apply to localhost.prod.example with -Credential: exit 2 before anything ran (no record folder, no SQL)',
+      ap.status === 2 && /-Credential is for the local rehearsal only/.test(ap.out) && ap.folder === undefined && !/sending|psql:|GATE/.test(ap.out));
+    check('…and the credential is never echoed', !/ConvertTo-SecureString|PGPASSWORD=/.test(ap.out));
+    // The documented production host still takes the remote path and passes it (dry run).
+    const prod = run({ mode: 'dry', host: PROD, credential: false, ssl: 'require', port: 5432, user: 'postgres.xutjahmbyrvifcltpxxu' });
+    check('documented production host: remote path, dry run exit 0, project named', prod.status === 0 && /project xutjahmbyrvifcltpxxu/.test(prod.out) && prod.folder === undefined, prod.out.slice(-300));
+    check('…and with -Credential it is refused (exit 2)', run({ mode: 'dry', host: PROD, ssl: 'require', port: 5432, user: 'postgres.xutjahmbyrvifcltpxxu' }).status === 2);
+    check('…and a trailing newline after it is refused', run({ mode: 'dry', host: `${PROD}\n`, credential: false, ssl: 'require', port: 5432, user: 'postgres.xutjahmbyrvifcltpxxu' }).status === 2);
+    check('…remote safeguards intact: sslmode disable refused', /needs -SslMode require/.test(run({ mode: 'dry', host: PROD, credential: false, ssl: 'disable', port: 5432, user: 'postgres.xutjahmbyrvifcltpxxu' }).out));
+    check('…remote safeguards intact: port 6543 refused', /SESSION pooler \(port 5432\)/.test(run({ mode: 'dry', host: PROD, credential: false, ssl: 'require', port: 6543, user: 'postgres.xutjahmbyrvifcltpxxu' }).out));
+    check('…remote safeguards intact: -Apply without -ConfirmProject refused', /needs -ConfirmProject xutjahmbyrvifcltpxxu/.test(run({ host: PROD, credential: false, ssl: 'require', port: 5432, user: 'postgres.xutjahmbyrvifcltpxxu' }).out));
+  }
+  eq('schema unchanged by the host-classification checks', schemaFp(), base);
+
   console.log('\n[2] The gate\'s "unreserved escape" pattern matches exactly the 66 bytes v4 decodes');
   {
     const gateSql = fs.readFileSync(path.join(REPO, GATE), 'utf-8');
