@@ -1,5 +1,5 @@
 {
-  "description": "Document-key vectors shared by TypeScript (scripts/lib/ingestion.ts) and SQL (supabase/migrations/20261024_discovery_review_queue.sql). `match` = normaliseCandidateUrl / document_match_key (loose heuristic: candidate ids, catalogue matching, holds, approval near-match). `identity` = documentIdentityKey / document_identity_key (conservative: the queue's one-open-row-per-document slot and exact catalogue matches). Each expected value is asserted against BOTH implementations: offline in scripts/tests/ingestion.test.ts, against a local database in scripts/tests/integration/discovery-queue.local.test.ts. Change a vector only together with both implementations.",
+  "description": "Document-key vectors shared by TypeScript (scripts/lib/ingestion.ts) and SQL (supabase/migrations/20261024_discovery_review_queue.sql, redefined by 20261104_url_key_unreserved_decoding.sql as url-key v4). `match` = normaliseCandidateUrl / document_match_key (loose heuristic: candidate ids, catalogue matching, holds, approval near-match). `identity` = documentIdentityKey / document_identity_key (conservative: the queue's one-open-row-per-document slot and exact catalogue matches). Each expected value is asserted against BOTH implementations: offline in scripts/tests/ingestion.test.ts, against a local database in scripts/tests/integration/discovery-queue.local.test.ts. Change a vector only together with both implementations.",
   "vectors": [
     {
       "why": "BOFAS ver token with %3d padding, ver only",
@@ -152,10 +152,10 @@
       "identity": "https://example.org/a?ver_id=1"
     },
     {
-      "why": "percent-encoded name is not decoded, so %76er is not ver",
+      "why": "v4: an encoded ver name is ver: unreserved escapes decode BEFORE the ver strip (in v3 %76er was kept)",
       "input": "https://example.org/a?%76er=1",
-      "match": "https://example.org/a?%76er=1",
-      "identity": "https://example.org/a?%76er=1"
+      "match": "https://example.org/a",
+      "identity": "https://example.org/a"
     },
     {
       "why": "a value equal to ver is not a ver parameter",
@@ -372,6 +372,108 @@
       "input": "https://www.bofas.org.uk/Portals/0/A.pdf?ver=TWO",
       "match": "https://www.bofas.org.uk/portals/0/a.pdf",
       "identity": "https://www.bofas.org.uk/Portals/0/A.pdf"
+    },
+    {
+      "why": "v4: BOA asset link with %2d hyphens (2026-11-04 dry run) decodes to the hyphens the catalogue uses",
+      "input": "https://www.boa.ac.uk/asset/a811fc01%2defc3%2d44b7%2dbf6c4b0d4d4c2c85",
+      "match": "https://www.boa.ac.uk/asset/a811fc01-efc3-44b7-bf6c4b0d4d4c2c85",
+      "identity": "https://www.boa.ac.uk/asset/a811fc01-efc3-44b7-bf6c4b0d4d4c2c85"
+    },
+    {
+      "why": "v4: the catalogue's form of the same BOA asset: same MATCH key; identity keeps path case, so it differs from the lower-case link",
+      "input": "https://www.boa.ac.uk/asset/A811FC01-EFC3-44B7-BF6C4B0D4D4C2C85/",
+      "match": "https://www.boa.ac.uk/asset/a811fc01-efc3-44b7-bf6c4b0d4d4c2c85",
+      "identity": "https://www.boa.ac.uk/asset/A811FC01-EFC3-44B7-BF6C4B0D4D4C2C85"
+    },
+    {
+      "why": "v4: upper-case %2D decodes to '-' like %2d",
+      "input": "https://example.org/a%2Db",
+      "match": "https://example.org/a-b",
+      "identity": "https://example.org/a-b"
+    },
+    {
+      "why": "v4: escapes of other unreserved characters (~ _ . ALPHA DIGIT) decode; path case kept by identity",
+      "input": "https://example.org/%7Euser/%5Fx%2E%41%62%30",
+      "match": "https://example.org/~user/_x.ab0",
+      "identity": "https://example.org/~user/_x.Ab0"
+    },
+    {
+      "why": "v4: escapes of reserved characters (/ ? # = & space) are NOT decoded",
+      "input": "https://example.org/a%2Fb%3Fc%23d%3De%26f%20g",
+      "match": "https://example.org/a%2fb%3fc%23d%3de%26f%20g",
+      "identity": "https://example.org/a%2Fb%3Fc%23d%3De%26f%20g"
+    },
+    {
+      "why": "v4: %25 is not decoded, so %252D stays literal text, never a second decode",
+      "input": "https://example.org/a%252Db",
+      "match": "https://example.org/a%252db",
+      "identity": "https://example.org/a%252Db"
+    },
+    {
+      "why": "v4: malformed escapes (%2-, %zz, trailing %) are left exactly as they are",
+      "input": "https://example.org/a%2-b%zz%",
+      "match": "https://example.org/a%2-b%zz%",
+      "identity": "https://example.org/a%2-b%zz%"
+    },
+    {
+      "why": "v4: a hex-digit escape after a stray % is kept, so no new escape is assembled (%%341 never becomes %41)",
+      "input": "https://example.org/a%%341",
+      "match": "https://example.org/a%%341",
+      "identity": "https://example.org/a%%341"
+    },
+    {
+      "why": "v4: a hex-digit escape after %X is kept, so %2%46 never becomes the reserved %2F",
+      "input": "https://example.org/a%2%46",
+      "match": "https://example.org/a%2%46",
+      "identity": "https://example.org/a%2%46"
+    },
+    {
+      "why": "v4: after a stray %, a non-hex unreserved escape still decodes",
+      "input": "https://example.org/a%%2Db",
+      "match": "https://example.org/a%-b",
+      "identity": "https://example.org/a%-b"
+    },
+    {
+      "why": "v4: unreserved escapes in the host decode, then the host is lower-cased",
+      "input": "https://WWW.%42OA.ac.uk/x",
+      "match": "https://www.boa.ac.uk/x",
+      "identity": "https://www.boa.ac.uk/x"
+    },
+    {
+      "why": "v4: unreserved escapes in the query and the fragment decode too",
+      "input": "https://example.org/a?q=%41%2D1#%7Esec",
+      "match": "https://example.org/a?q=a-1#~sec",
+      "identity": "https://example.org/a?q=A-1#~sec"
+    },
+    {
+      "why": "v4: an encoded ver name in mixed case is ver; other parameters kept",
+      "input": "https://example.org/a?%76%45R=x&k=1",
+      "match": "https://example.org/a?k=1",
+      "identity": "https://example.org/a?k=1"
+    },
+    {
+      "why": "v4: a trailing %2F is an encoded slash, not a trailing slash, and is kept",
+      "input": "https://example.org/a%2F",
+      "match": "https://example.org/a%2f",
+      "identity": "https://example.org/a%2F"
+    },
+    {
+      "why": "v4: a decoded '.' before a trailing slash; the slash is stripped as before",
+      "input": "https://example.org/a%2E/",
+      "match": "https://example.org/a.",
+      "identity": "https://example.org/a."
+    },
+    {
+      "why": "v4: escapes of non-ASCII UTF-8 bytes are not decoded",
+      "input": "https://example.org/caf%C3%A9",
+      "match": "https://example.org/caf%c3%a9",
+      "identity": "https://example.org/caf%C3%A9"
+    },
+    {
+      "why": "v4: mixed scheme/host/path case with a lower-case %2d",
+      "input": "HTTPS://Example.ORG/A%2db",
+      "match": "https://example.org/a-b",
+      "identity": "https://example.org/A-b"
     }
   ]
 }
