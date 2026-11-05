@@ -173,20 +173,50 @@ function isBlocked(url: string, blocked: Set<string>): boolean {
 
 // ─── Adapters ────────────────────────────────────────────────────────────────
 
+/** A BOASt index whose section structure cannot be trusted. Fails the BOA run. */
+export class BoaIndexStructureError extends Error {
+  constructor(message: string) {
+    super(`BOA index structure: ${message}`);
+    this.name = 'BoaIndexStructureError';
+  }
+}
+
 /**
  * Pure DOM parse of a BOASt index page.
  *
  * Split out of `BOAAdapter.fetchCandidates` so the parsing rules can be tested
- * offline against fixture HTML — previously they were only reachable by making
- * a live request to boa.ac.uk. Behaviour is unchanged: same selector, same
- * noise filter, same dedupe, same whitespace handling, same URL resolution,
- * same result order. `baseUrl` receives exactly the URL that was fetched, which
- * is what the inline version used to resolve relative hrefs against.
+ * offline against fixture HTML. Unchanged from before: the asset selector, the
+ * noise filter, the dedupe (first occurrence wins), the whitespace handling,
+ * the URL resolution and the result order. `baseUrl` receives exactly the URL
+ * that was fetched.
+ *
+ * SECTIONS (SAF-21). The index groups its standards as an `<h4>` heading
+ * immediately followed by the list that belongs to it (`<h4>Clinical BOASts</h4>
+ * <ul>…</ul>`). Each candidate carries publisher evidence, verbatim
+ * (whitespace collapsed), in the existing version-link fields:
+ *   versions[0].label  the text of the heading that OWNS the link's list;
+ *   versions[0].date   the `<em>` text in the link's own `<li>`
+ *                      ("June 2026", "Updated July 2025", "Archived June 2026"),
+ *                      absent when the page states none.
+ * No heading names are hard-coded, and nothing is classified from them: an
+ * archived standard is an observation for editorial review, never "withdrawn".
+ *
+ * FAIL-CLOSED. The structure is checked, not guessed. The parse throws
+ * {@link BoaIndexStructureError}, and the adapter run is recorded as failed
+ * rather than returning a partial or mislabelled set, when:
+ *   - a (non-noise) asset link is not inside a list that directly follows an
+ *     `<h4>` (a stray link, a list whose heading is missing or was moved, or
+ *     changed section markup);
+ *   - a heading that owns a list has no text;
+ *   - the same document URL appears under two different sections;
+ *   - no asset link is found inside any section list at all (wrong page, or
+ *     the markup changed wholesale).
  */
 export function parseBoaIndex(html: string, baseUrl: string): DiscoveredItem[] {
   const $ = cheerio.load(html);
   const results: DiscoveredItem[] = [];
-  const seen = new Set<string>();
+  const sectionOf = new Map<string, string>();
+  const clean = (value: string) => value.replace(/\s+/g, ' ').trim();
 
   // Nav/chrome link text that is not a guideline title. The BOASt index carries
   // an aggregate "Download and read the full guidelines for BOA Standards
@@ -195,31 +225,61 @@ export function parseBoaIndex(html: string, baseUrl: string): DiscoveredItem[] {
   // without silently reintroducing the noise.
   const NOISE_TOPIC_PHRASES = ['download and read the full guidelines'];
 
+  // The lists that belong to a section: the element immediately after an <h4>.
+  const owner = new Map<unknown, string>();
+  $('h4').each((_, h) => {
+    const list = $(h).next();
+    if (!list.is('ul, ol')) return;
+    const heading = clean($(h).text());
+    if (!heading) throw new BoaIndexStructureError('a section list follows an <h4> with no text.');
+    owner.set(list.get(0), heading);
+  });
+
   $("a[href*='asset']").each((_, el) => {
     const link = $(el);
     const rawHref = link.attr('href')?.trim();
     // Verbatim link text, whitespace-collapsed only. No rewriting.
-    const topic = link.text().replace(/\s+/g, ' ').trim();
+    const topic = clean(link.text());
 
     if (!rawHref || !topic) return;
 
     const topicLower = topic.toLowerCase();
     if (NOISE_TOPIC_PHRASES.some(p => topicLower.includes(p))) return;
 
+    const list = link.parents('ul, ol').filter((_, l) => owner.has(l)).first();
+    if (!list.length) {
+      throw new BoaIndexStructureError(
+        `asset link "${topic}" (${rawHref}) is not inside a list that directly follows an <h4> section heading. `
+        + 'Refusing to guess its section.',
+      );
+    }
+    const section = owner.get(list.get(0))!;
+
     const fullUrl = rawHref.startsWith('http')
       ? rawHref
       : new URL(rawHref, baseUrl).href;
 
-    if (seen.has(fullUrl)) return;
-    seen.add(fullUrl);
+    const earlier = sectionOf.get(fullUrl);
+    if (earlier !== undefined) {
+      if (earlier !== section) {
+        throw new BoaIndexStructureError(`${fullUrl} is listed under both "${earlier}" and "${section}".`);
+      }
+      return;
+    }
+    sectionOf.set(fullUrl, section);
 
+    const item = link.closest('li');
+    const date = item.length ? clean(item.children('em').text()) : '';
     results.push({
       topic,
       source: 'BOA',
-      versions: [{ label: 'BOASt PDF', url: fullUrl }],
+      versions: [{ label: section, url: fullUrl, ...(date ? { date } : {}) }],
     });
   });
 
+  if (results.length === 0) {
+    throw new BoaIndexStructureError('no asset links were found inside any section list.');
+  }
   return results;
 }
 

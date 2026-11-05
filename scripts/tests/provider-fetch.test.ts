@@ -43,6 +43,9 @@ try {
 
   // Exercise every adapter through a fake fetch, verifying that their actual
   // request carries a signal and preserves the established publisher identity.
+  // The body is one minimal section (an <h4> and its list): the BOA parser is
+  // fail-closed and rightly refuses a page with no section structure (SAF-21).
+  const MINIMAL_INDEX = '<html><body><h4>Section</h4><ul><li><a href="/asset/TEST-0001/">Test standard</a></li></ul></body></html>';
   const originalFetch = globalThis.fetch;
   try {
     for (const adapter of [BOAAdapter, BSGAdapter, BOFASAdapter, BSSHAdapter]) {
@@ -51,7 +54,7 @@ try {
         calls++;
         assert(init?.signal instanceof AbortSignal);
         assert.match(new Headers(init?.headers).get('User-Agent') ?? '', /OrthoGuidelinesHub/);
-        return new Response('<html></html>');
+        return new Response(MINIMAL_INDEX);
       };
       await adapter.fetchCandidates();
       assert.equal(calls, 1);
