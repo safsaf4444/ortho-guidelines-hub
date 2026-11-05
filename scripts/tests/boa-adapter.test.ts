@@ -289,5 +289,21 @@ eq('legitimate sibling section lists are unaffected',
   [['One', 'Clinical', 'June 2026'], ['Two', 'Archived', 'Archived May 2019']]);
 eq('section fixture [6] still parses identically', parseBoaIndex(SECTIONS, BASE), sect);
 
+console.log('\n[9] Review follow-up: emphasis inside any secondary anchor is not a date');
+eq('secondary anchor with direct <em> (Codex example): date is only the publisher <em>',
+  dateOf('<li><a href="/asset/A/">Standard</a> <span><a href="/notes"><em>Notes</em></a></span> <em>June 2026</em></li>'), 'June 2026');
+eq('secondary anchor with <em> inside a wrapper inside the anchor',
+  dateOf('<li><p><a href="/asset/A/">Standard</a> <a href="/notes"><span><em>Notes</em></span></a> <span><em>Archived June 2026</em></span></p></li>'),
+  'Archived June 2026');
+check('secondary anchor <em> only, no publisher <em>: date absent',
+  !('date' in one('<li><a href="/asset/A/">Standard</a> <a href="/notes"><em>Notes</em></a></li>')[0].versions[0]));
+eq('normal wrapped publisher date still read', dateOf('<li><div><a href="/asset/A/">Standard</a> <p><em>May 2024</em></p></div></li>'), 'May 2024');
+eq('emphasis in the document anchor still ignored, publisher <em> kept',
+  dateOf('<li><a href="/asset/A/"><em>Standard</em></a> <em>June 2026</em></li>'), 'June 2026');
+eq('emphasis in a nested list still ignored, publisher <em> kept',
+  dateOf('<li><a href="/asset/A/">Standard</a> <em>June 2026</em><ul><li><a href="/notes"><em>Notes</em></a> <em>2019</em></li></ul></li>'), 'June 2026');
+check('item without a publisher date: date absent',
+  !('date' in one('<li><span><a href="/asset/A/">Standard</a></span></li>')[0].versions[0]));
+
 console.log(`\n──────────────\n${pass} passed, ${fail} failed\n`);
 process.exit(fail === 0 ? 0 : 1);

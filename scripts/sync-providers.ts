@@ -197,8 +197,8 @@ export class BoaIndexStructureError extends Error {
  *   versions[0].label  the text of the heading that OWNS the link's list;
  *   versions[0].date   the `<em>` text in the link's own `<li>`, also through
  *                      wrapper markup (`<li><p>… <em>…</em></p></li>`), but
- *                      never from a list nested inside it or from the link
- *                      text ("June 2026", "Updated July 2025", "Archived June
+ *                      never from a list nested inside it or from the text
+ *                      of any link in it ("June 2026", "Updated July 2025", "Archived June
  *                      2026"), absent when the page states none.
  * No heading names are hard-coded, and nothing is classified from them: an
  * archived standard is an observation for editorial review, never "withdrawn".
@@ -287,13 +287,16 @@ export function parseBoaIndex(html: string, baseUrl: string): DiscoveredItem[] {
 
     // Publisher date: the <em> text belonging to the link's own <li> (a child
     // of the owning list), found through wrapper markup such as <p> or <span>.
-    // Emphasis inside the link itself, or inside any list nested in the <li>,
-    // belongs to something else and is ignored.
+    // Emphasis inside ANY anchor in the <li> (the document link or a secondary
+    // link such as "Notes"), or inside any list nested in the <li>, belongs to
+    // something else and is ignored.
     const item = link.closest('li');
     const dateEms = item.length && item.parent().get(0) === list.get(0)
       ? item.find('em').filter((_, em) => {
         const e = $(em);
-        return e.closest('ul, ol').get(0) === list.get(0) && !e.closest('a').is(link);
+        const anchor = e.closest('a');
+        return e.closest('ul, ol').get(0) === list.get(0)
+          && !(anchor.length && $.contains(item.get(0)!, anchor.get(0)!));
       })
       : $();
     const date = clean(dateEms.text());
