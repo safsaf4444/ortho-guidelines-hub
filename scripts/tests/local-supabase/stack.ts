@@ -46,6 +46,8 @@ export const BASE_CHAIN = [
 ];
 export const M24 = 'supabase/migrations/20261024_discovery_review_queue.sql';
 export const M25 = 'supabase/migrations/20261025_reject_open_candidate.sql';
+/** url-key v4 (unreserved percent-escape decoding). Requires M24 only; applied after M24/M25. */
+export const M26 = 'supabase/migrations/20261104_url_key_unreserved_decoding.sql';
 
 /**
  * Runs the pinned Supabase CLI with this directory as its project. Through a
@@ -95,11 +97,13 @@ export function applyFile(rel: string, opts: { readOnly?: boolean; vars?: Record
 
 /**
  * An empty database with production's pre-upgrade schema, then optionally
- * 20261024 and 20261025. Throws on the first file that fails to apply.
+ * 20261024 and 20261025, and 20261104 (url-key v4, needs 20261024). Throws on
+ * the first file that fails to apply.
  */
-export function prepareSchema(opts: { with24: boolean; with25: boolean }): void {
+export function prepareSchema(opts: { with24: boolean; with25: boolean; with26?: boolean }): void {
+  if (opts.with26 && !opts.with24) throw new Error('20261104 requires 20261024');
   freshDatabase();
-  const files = [...BASE_CHAIN, ...(opts.with24 ? [M24] : []), ...(opts.with25 ? [M25] : [])];
+  const files = [...BASE_CHAIN, ...(opts.with24 ? [M24] : []), ...(opts.with25 ? [M25] : []), ...(opts.with26 ? [M26] : [])];
   for (const f of files) {
     const r = applyFile(f);
     if (r.status !== 0) throw new Error(`applying ${f} failed:\n${r.err.slice(-1200)}`);

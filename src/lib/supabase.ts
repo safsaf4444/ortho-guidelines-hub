@@ -1,10 +1,16 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-const DEFAULT_URL = 'https://xutjahmbyrvifcltpxxu.supabase.co';
-const DEFAULT_ANON_KEY = 'sb_publishable_MdOTKiEJr1RMUuMEY2lJNQ_Lhggiv3M';
+import { resolveBrowserDatabase } from './supabase-config';
 
-const url = (import.meta.env.VITE_SUPABASE_URL as string | undefined) || DEFAULT_URL;
-const anonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined) || DEFAULT_ANON_KEY;
+export const supabaseConfiguration = resolveBrowserDatabase({
+  url: import.meta.env.VITE_SUPABASE_URL,
+  anonKey: import.meta.env.VITE_SUPABASE_ANON_KEY,
+  allowRemoteInLocal: import.meta.env.VITE_ALLOW_REMOTE_SUPABASE_IN_LOCAL,
+}, {
+  productionBuild: import.meta.env.PROD,
+  mode: import.meta.env.MODE,
+  origin: typeof window === 'undefined' ? undefined : window.location.origin,
+});
 
 /**
  * The one and only Supabase client, built from the PUBLIC anon key.
@@ -12,7 +18,8 @@ const anonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined) |
  * There is no second, privileged client and no build-time key injection: the
  * former local-editor mode (a service-role key injected for `vite dev` only)
  * has been removed. Reads AND writes both go through this same anon client
- * everywhere — local dev, preview, and the deployed site alike.
+ * when the explicit configuration and browser-origin policy permit it.
+ * Missing or invalid local inputs leave the app in static mode.
  *
  * WHAT THE KEY DOES AND DOES NOT GRANT. The anon key is a routing credential,
  * not a permission. Unauthenticated, it can only SELECT: as of
@@ -28,13 +35,12 @@ const anonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined) |
  * session lives in localStorage, holds only the editor's own JWT, and is
  * created solely by src/components/EditorAuthControl.tsx.
  *
- * Because local and production use the identical client and the identical
- * permissions, anything verified locally is genuinely representative of the
- * deployed site.
+ * Local tests require explicit loopback configuration. Remote local access is
+ * an opt-in workflow, never inferred from missing variables or a preview build.
  */
 export const supabase: SupabaseClient | null =
-  url && anonKey
-    ? createClient(url, anonKey, {
+  supabaseConfiguration.enabled
+    ? createClient(supabaseConfiguration.url, supabaseConfiguration.anonKey, {
         auth: {
           // Required for editor writes to survive a reload — see above.
           persistSession: true,

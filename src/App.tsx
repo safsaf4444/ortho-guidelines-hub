@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useContext } from 'react'
+import { useState, useEffect, useMemo, useContext, useId, useRef } from 'react'
 import { Search, ChevronDown, ExternalLink, Menu, X, TriangleAlert, Plus, WifiOff, Download, Database, History, ClipboardList, Table2, Pencil, Info } from 'lucide-react'
 import { Guideline, GuidelineVersion, GuidanceStatus } from './data/guidelines-data'
 import { guidelinesService, type GuidelinesSource } from './lib/guidelines-service'
@@ -26,6 +26,7 @@ import { allowedActions } from './lib/review-actions'
 import { splitPublishers, canonicalProvider, providerUrl } from './lib/providers'
 import { findGapNote } from './lib/gap-detection'
 import { buildCatalogue, catalogueRowCount } from './lib/catalogue'
+import { filterGuidelines, hasActiveFilters, resultCountText, emptyResultText, NEW_TAB_REL } from './lib/guideline-filter'
 import { usePwaUpdate } from './lib/pwa-update'
 import { prepareChangeNote, isValidChangeNote, archiveNote, linkStatusNote, mergeNote, MAX_NOTE_LENGTH } from './lib/change-note'
 
@@ -146,7 +147,10 @@ function guidanceStatusBadgeClass(s: GuidanceStatus): string {
     case 'current': return 'border-emerald-200 bg-emerald-50 text-emerald-700';
     case 'superseded':
     case 'needs-review': return 'border-amber-200 bg-amber-50 text-amber-700';
-    case 'link-unavailable': return 'border-slate-300 bg-slate-50 text-slate-600';
+    // Orange, not slate: in slate it was indistinguishable from the neutral
+    // "Reachable" link badge, though it means the opposite — the reader
+    // cannot get to the guidance.
+    case 'link-unavailable': return 'border-orange-200 bg-orange-50 text-orange-800';
     case 'no-source-identified': return 'border-slate-300 bg-white text-slate-600';
     case 'archived': return 'border-red-200 bg-red-50 text-red-700';
     default: return 'border-slate-200 bg-slate-50 text-slate-500';
@@ -244,6 +248,34 @@ function useOnlineStatus(): boolean {
   return online;
 }
 
+// True at Tailwind's `md` breakpoint and above, where the sections sidebar is
+// a permanent column rather than an off-canvas drawer.
+function useIsDesktop(): boolean {
+  const query = '(min-width: 768px)';
+  const [matches, setMatches] = useState(
+    typeof window === 'undefined' || !window.matchMedia ? true : window.matchMedia(query).matches
+  );
+  useEffect(() => {
+    if (!window.matchMedia) return;
+    const mq = window.matchMedia(query);
+    const update = () => setMatches(mq.matches);
+    update();
+    mq.addEventListener('change', update);
+    return () => mq.removeEventListener('change', update);
+  }, []);
+  return matches;
+}
+
+/**
+ * Screen-reader-only cue for a link that opens a new tab. The visible
+ * ExternalLink icon is decorative (aria-hidden), so without this a
+ * screen-reader user is moved to a new tab with no warning (WCAG 3.2.5 advisory,
+ * G201).
+ */
+function NewTabCue() {
+  return <span className="sr-only"> (opens in a new tab)</span>;
+}
+
 /**
  * `#/catalogue` is kept as a deep link to the Full catalogue tab.
  *
@@ -335,6 +367,35 @@ export default function App() {
   // same underlying data, no schema change, just a different lens on it.
   const [groupBy, setGroupBy] = useState<'section' | 'provider'>('section');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const isDesktop = useIsDesktop();
+  // Below md the sidebar is an off-canvas drawer. While it is closed it is
+  // `inert`, so its buttons are no longer Tab stops sitting invisibly off the
+  // left edge of the screen (measured: 5 of the first 9 Tab stops at 375px).
+  const drawerHidden = !isDesktop && !isSidebarOpen;
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
+  const drawerRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    if (isDesktop || !isSidebarOpen) return;
+    // Opening moves focus into the drawer; Escape closes it and returns focus
+    // to the button that opened it.
+    drawerRef.current?.querySelector<HTMLElement>('nav button')?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      setIsSidebarOpen(false);
+      menuButtonRef.current?.focus();
+    };
+    document.addEventListener('keydown', onKey);
+    const drawer = drawerRef.current;
+    const menuButton = menuButtonRef.current;
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      // Closing by any route (a section chosen, the backdrop, the menu button)
+      // makes the drawer inert; focus left inside it falls to <body> (the
+      // browser may already have moved it there by the time this runs).
+      const active = document.activeElement;
+      if (!active || active === document.body || drawer?.contains(active)) menuButton?.focus();
+    };
+  }, [isDesktop, isSidebarOpen]);
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
   const [editingGuideline, setEditingGuideline] = useState<Guideline | null>(null);
   const [isNewGuideline, setIsNewGuideline] = useState(false);
@@ -390,30 +451,22 @@ export default function App() {
     [guidelines, dismissedPairs]
   );
 
-  const filteredData = guidelines.filter(g => {
-    if (currentSection !== 'All' && g.section !== currentSection) return false;
-    if (linkStatusFilter !== 'All' && (g.linkVerificationStatus ?? 'unchecked') !== linkStatusFilter) return false;
-    if (searchQuery) {
-      const q = searchQuery.toLowerCase();
-      if (
-        !g.topic.toLowerCase().includes(q) &&
-        !g.summary.toLowerCase().includes(q) &&
-        !g.source.toLowerCase().includes(q)
-      ) return false;
-    }
-    return true;
-  });
+  // Pure filter (src/lib/guideline-filter.ts) so it is tested offline.
+  const activeFilter = { section: currentSection, linkStatus: linkStatusFilter, query: searchQuery };
+  const filteredData = filterGuidelines(guidelines, activeFilter);
 
   // Phase 4 item E — "Clear filters" is shown only when something is actually
   // narrowing the list: free-text search, the link-check filter, or a
   // section chosen from the sidebar.
-  const hasActiveFilters =
-    searchQuery.trim() !== '' || linkStatusFilter !== 'All' || currentSection !== 'All';
+  const filtersActive = hasActiveFilters(activeFilter);
 
   const clearFilters = () => {
     setSearchQuery('');
     setLinkStatusFilter('All');
     setCurrentSection('All');
+    // The button that was pressed disappears with the filters; put focus
+    // somewhere useful rather than letting it fall to <body>.
+    document.getElementById('guideline-search')?.focus();
   };
 
   // Two lenses on the same filtered data, chosen by the groupBy toggle:
@@ -476,7 +529,19 @@ export default function App() {
     // never reach approve_staged_guideline() as a new entry. The database
     // refuses that too (42809); this keeps the UI from ever trying. Likewise a
     // row on the editorial hold list (the database refuses with RQ002).
-    if (candidate.stagedId && !allowedActions(candidate.changeReason, candidate.reviewStatus, candidate.reviewOutcome, candidate.hold != null).publish) {
+    //
+    // FAIL CLOSED on a candidate with no stagedId. Such a candidate has no
+    // queue row, so persistGuideline would fall through to the ordinary
+    // direct INSERT — skipping every duplicate and hold check that
+    // approve_staged_guideline() performs. The dashboard only lists queue rows
+    // today, so this refuses nothing that currently reaches it; it stops a
+    // future caller from publishing a candidate around the database's guards.
+    if (!candidate.stagedId) {
+      console.warn(`[review] Refused to open the publish form for ${candidate.candidateId}: not a review-queue row.`);
+      alert('This candidate is not in the review queue, so it cannot be published from here. Nothing was changed.');
+      return;
+    }
+    if (!allowedActions(candidate.changeReason, candidate.reviewStatus, candidate.reviewOutcome, candidate.hold != null).publish) {
       console.warn(`[review] Refused to open the publish form for ${candidate.candidateId} (${candidate.changeReason}, ${candidate.reviewStatus}${candidate.hold ? ', held' : ''}).`);
       alert(candidate.hold
         ? `This item is on the editorial hold list (${candidate.hold.status}) and cannot be published while the hold stands. Nothing was changed.`
@@ -896,7 +961,20 @@ Add a note from the entry to restore the audit trail.`
 
   return (
     <DraftOwnerContext.Provider value={draftOwner}>
-    <div className="flex flex-col h-screen overflow-hidden bg-white font-sans text-slate-800">
+    <div style={{ height: '100dvh' }} className="flex flex-col h-screen overflow-hidden bg-white font-sans text-slate-800">
+
+      {/* Skip link: the first Tab stop, visible only when focused. Without it
+          a keyboard user passes the header and every sidebar entry before
+          reaching the search box. */}
+      <a
+        href="#main-content"
+        // Focus is moved directly rather than via the fragment: the app routes
+        // on location.hash (#/about, #/catalogue), so leave the URL alone.
+        onClick={e => { e.preventDefault(); document.getElementById('main-content')?.focus(); }}
+        className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-[60] focus:px-3 focus:py-2 focus:rounded-md focus:bg-white focus:text-slate-900 focus:shadow-lg focus:text-[13px] focus:font-medium"
+      >
+        Skip to guidelines
+      </a>
 
       {/* Header */}
       <header className="h-[56px] bg-white border-b border-slate-200 flex items-center justify-between px-5 shrink-0 z-50">
@@ -910,6 +988,7 @@ Add a note from the entry to restore the audit trail.`
               exactly as it did with the bare 20px icon (it has no spare width
               at 375px). */}
           <button
+            ref={menuButtonRef}
             type="button"
             className="md:hidden -mx-3 w-11 h-11 shrink-0 flex items-center justify-center rounded text-slate-600"
             onClick={() => setIsSidebarOpen(!isSidebarOpen)}
@@ -919,11 +998,12 @@ Add a note from the entry to restore the audit trail.`
           >
             <Menu className="w-5 h-5" aria-hidden="true" />
           </button>
-          <div className="bg-[#0F172A] text-white w-7 h-7 rounded flex items-center justify-center font-semibold text-sm shrink-0">
+          <div aria-hidden="true" className="bg-[#0F172A] text-white w-7 h-7 rounded flex items-center justify-center font-semibold text-sm shrink-0">
             O
           </div>
           <div className="flex flex-col leading-none min-w-0">
-            <span className="font-serif text-[1rem] text-slate-900 leading-tight truncate">Orthopaedic Guidelines Hub</span>
+            {/* The page's one <h1>; styled exactly as the former <span>. */}
+            <h1 className="font-serif text-[1rem] font-normal text-slate-900 leading-tight truncate m-0">Orthopaedic Guidelines Hub</h1>
             {/* md: not sm: — deliberately matches the hamburger's own
                 `md:hidden` breakpoint below. Between 640-767px, sm: would
                 show this alongside the still-visible mobile hamburger and
@@ -974,7 +1054,7 @@ Add a note from the entry to restore the audit trail.`
                 : "bg-amber-50 text-amber-700 border-amber-200"
             )}
           >
-            <Database className={cn("w-3.5 h-3.5", dataState === 'loading' && "animate-pulse")} />
+            <Database aria-hidden="true" className={cn("w-3.5 h-3.5", dataState === 'loading' && "animate-pulse")} />
             <span>
               {dataState === 'loading' ? 'Loading…' : dataState === 'live' ? 'Supabase Live' : 'Offline snapshot'}
             </span>
@@ -994,8 +1074,13 @@ Add a note from the entry to restore the audit trail.`
               canEdit — this component writes nothing itself. See
               ReviewDashboard.tsx. */}
           <button
+            type="button"
             onClick={() => setCurrentSection(REVIEW_QUEUE_VIEW)}
             title="Manually review discovered guideline candidates awaiting editorial completion"
+            // The text label is display:none below lg, which left only the
+            // title attribute as this icon button's name.
+            aria-label="Review Staged Guidelines"
+            aria-current={currentSection === REVIEW_QUEUE_VIEW ? 'page' : undefined}
             className={cn(
               "flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors",
               currentSection === REVIEW_QUEUE_VIEW
@@ -1003,17 +1088,19 @@ Add a note from the entry to restore the audit trail.`
                 : "text-slate-700 bg-slate-100 hover:bg-slate-200"
             )}
           >
-            <ClipboardList className="w-3.5 h-3.5" />
+            <ClipboardList aria-hidden="true" className="w-3.5 h-3.5" />
             <span className="hidden lg:inline">Review Staged Guidelines</span>
           </button>
 
           {/* Export JSON backup button */}
           <button
+            type="button"
             onClick={handleExportJSON}
             title="Download current guidelines as JSON backup"
+            aria-label="Export JSON"
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-md transition-colors"
           >
-            <Download className="w-3.5 h-3.5" />
+            <Download aria-hidden="true" className="w-3.5 h-3.5" />
             <span className="hidden lg:inline">Export JSON</span>
           </button>
         </div>
@@ -1021,8 +1108,8 @@ Add a note from the entry to restore the audit trail.`
 
       {/* Offline notice — honest signal that this is a cached copy, not live data */}
       {!isOnline && (
-        <div className="bg-amber-50 border-b border-amber-200 px-5 py-1.5 flex items-center gap-2 text-[11px] text-amber-800 shrink-0">
-          <WifiOff className="w-3 h-3 shrink-0" />
+        <div role="status" className="bg-amber-50 border-b border-amber-200 px-5 py-1.5 flex items-center gap-2 text-[11px] text-amber-800 shrink-0">
+          <WifiOff aria-hidden="true" className="w-3 h-3 shrink-0" />
           <span>Offline — showing a cached copy. Always confirm against the live source guidance.</span>
         </div>
       )}
@@ -1032,13 +1119,19 @@ Add a note from the entry to restore the audit trail.`
 
         {isSidebarOpen && (
           <div
+            aria-hidden="true"
             className="fixed inset-0 top-[56px] bg-black/40 z-30 md:hidden"
             onClick={() => setIsSidebarOpen(false)}
           />
         )}
 
         {/* Sidebar */}
-        <aside id="sections-drawer" aria-label="Sections" className={cn(
+        <aside
+          ref={drawerRef}
+          id="sections-drawer"
+          aria-label="Sections"
+          inert={drawerHidden}
+          className={cn(
           "w-[240px] bg-white border-r border-slate-200 flex flex-col justify-between overflow-y-auto shrink-0 transition-transform duration-300 z-40",
           "fixed md:relative top-[56px] md:top-0 bottom-0 left-0",
           isSidebarOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
@@ -1049,6 +1142,8 @@ Add a note from the entry to restore the audit trail.`
             </div>
             <nav className="flex flex-col gap-px">
               <button
+                type="button"
+                aria-current={currentSection === 'All' ? 'page' : undefined}
                 onClick={() => { setCurrentSection('All'); setIsSidebarOpen(false); }}
                 className={cn(
                   "flex justify-between items-center px-2.5 py-1.5 min-h-[44px] md:min-h-0 rounded transition-colors",
@@ -1069,6 +1164,8 @@ Add a note from the entry to restore the audit trail.`
               {/* Full catalogue — the dense spreadsheet-style table. Was an
                   unlisted hash route; promoted to a normal tab on request. */}
               <button
+                type="button"
+                aria-current={currentSection === CATALOGUE_VIEW ? 'page' : undefined}
                 onClick={() => { setCurrentSection(CATALOGUE_VIEW); setIsSidebarOpen(false); }}
                 title="Dense table of every entry — provider, then section, then title"
                 className={cn(
@@ -1079,7 +1176,7 @@ Add a note from the entry to restore the audit trail.`
                 )}
               >
                 <span className="flex items-center gap-1.5 min-w-0">
-                  <Table2 className="w-3 h-3 shrink-0" />
+                  <Table2 aria-hidden="true" className="w-3 h-3 shrink-0" />
                   <span className="text-[12px] font-medium">Full catalogue</span>
                 </span>
                 <span className={cn(
@@ -1091,6 +1188,8 @@ Add a note from the entry to restore the audit trail.`
               </button>
 
               <button
+                type="button"
+                aria-current={currentSection === DUPLICATES_VIEW ? 'page' : undefined}
                 onClick={() => { setCurrentSection(DUPLICATES_VIEW); setIsSidebarOpen(false); }}
                 className={cn(
                   "flex justify-between items-center px-2.5 py-1.5 min-h-[44px] md:min-h-0 rounded transition-colors",
@@ -1109,6 +1208,8 @@ Add a note from the entry to restore the audit trail.`
               </button>
 
               <button
+                type="button"
+                aria-current={currentSection === CHANGELOG_VIEW ? 'page' : undefined}
                 onClick={() => { setCurrentSection(CHANGELOG_VIEW); setIsSidebarOpen(false); }}
                 className={cn(
                   "flex items-center gap-1.5 px-2.5 py-1.5 min-h-[44px] md:min-h-0 rounded transition-colors",
@@ -1117,11 +1218,13 @@ Add a note from the entry to restore the audit trail.`
                     : "text-slate-600 hover:bg-slate-50"
                 )}
               >
-                <History className="w-3 h-3 shrink-0" />
+                <History aria-hidden="true" className="w-3 h-3 shrink-0" />
                 <span className="text-[12px] font-medium">Changelog</span>
               </button>
 
               <button
+                type="button"
+                aria-current={currentSection === ABOUT_VIEW ? 'page' : undefined}
                 onClick={() => { setCurrentSection(ABOUT_VIEW); setIsSidebarOpen(false); window.location.hash = ABOUT_HASH; }}
                 className={cn(
                   "flex items-center gap-1.5 px-2.5 py-1.5 min-h-[44px] md:min-h-0 rounded transition-colors",
@@ -1130,7 +1233,7 @@ Add a note from the entry to restore the audit trail.`
                     : "text-slate-600 hover:bg-slate-50"
                 )}
               >
-                <Info className="w-3 h-3 shrink-0" />
+                <Info aria-hidden="true" className="w-3 h-3 shrink-0" />
                 <span className="text-[12px] font-medium">About &amp; methodology</span>
               </button>
 
@@ -1146,7 +1249,7 @@ Add a note from the entry to restore the audit trail.`
         </aside>
 
         {/* Main */}
-        <main className="flex-1 flex flex-col bg-[#F8FAFC] overflow-y-auto relative">
+        <main id="main-content" tabIndex={-1} className="flex-1 flex flex-col bg-[#F8FAFC] overflow-y-auto relative focus:outline-none">
 
           {/* Search hero. Sticky within `main`'s own scroll area (main is the
               nearest scrolling ancestor, so top-0 here means "top of the
@@ -1159,25 +1262,50 @@ Add a note from the entry to restore the audit trail.`
               Ankle/Paediatrics) that used to sit here was removed at the
               user's request. */}
           {currentSection !== DUPLICATES_VIEW && currentSection !== CHANGELOG_VIEW && currentSection !== REVIEW_QUEUE_VIEW && currentSection !== CATALOGUE_VIEW && currentSection !== ABOUT_VIEW && (
-            <div className="sticky top-0 z-10 bg-[#F8FAFC] px-5 pt-3 pb-2 border-b border-slate-100 shrink-0">
+            <div role="search" className="sticky top-0 z-10 bg-[#F8FAFC] px-5 pt-3 pb-2 border-b border-slate-100 shrink-0">
               <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+                {/* A real label: the placeholder alone was the input's only
+                    name, and it disappears as soon as anyone types. */}
+                <label htmlFor="guideline-search" className="sr-only">Search guidelines</label>
+                <Search aria-hidden="true" className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
                 <input
-                  type="text"
+                  id="guideline-search"
+                  type="search"
                   placeholder="Search condition, injury, procedure or guidance body…"
-                  className="w-full pl-10 pr-4 py-2.5 bg-white border border-slate-200 rounded-lg text-[14px] focus:outline-none focus:ring-2 focus:ring-slate-300 transition-shadow shadow-sm"
+                  autoComplete="off"
+                  aria-describedby="guideline-result-count"
+                  // ring-slate-500 (4.8:1 on white), not slate-300 (1.5:1): the
+                  // focus indicator has to be visible (WCAG 2.4.7 / 1.4.11).
+                  className="w-full pl-10 pr-4 py-2.5 bg-white border border-slate-300 rounded-lg text-[14px] focus:outline-none focus:ring-2 focus:ring-slate-500 transition-shadow shadow-sm"
                   value={searchQuery}
                   onChange={e => setSearchQuery(e.target.value)}
                 />
               </div>
-              {hasActiveFilters && (
-                <button
-                  onClick={clearFilters}
-                  className="mt-1.5 px-1 py-1 text-[11px] font-medium text-slate-500 hover:text-slate-700 transition-colors"
+              {/* Result count. Always rendered (sr-only when nothing is
+                  filtered) so the live region exists before it changes —
+                  screen readers ignore regions that appear already filled. */}
+              <div className="flex items-center gap-3 flex-wrap">
+                <p
+                  id="guideline-result-count"
+                  role="status"
+                  aria-live="polite"
+                  className={cn(
+                    "m-0 text-[11px] text-slate-600",
+                    filtersActive && dataState !== 'loading' ? "mt-1.5" : "sr-only"
+                  )}
                 >
-                  Clear filters ×
-                </button>
-              )}
+                  {dataState === 'loading' ? '' : resultCountText(filteredData.length, guidelines.length)}
+                </p>
+                {filtersActive && (
+                  <button
+                    type="button"
+                    onClick={clearFilters}
+                    className="mt-1.5 px-1 py-1 text-[11px] font-medium text-slate-600 hover:text-slate-900 underline-offset-2 hover:underline transition-colors"
+                  >
+                    Clear filters<span aria-hidden="true"> ×</span>
+                  </button>
+                )}
+              </div>
             </div>
           )}
 
@@ -1209,17 +1337,21 @@ Add a note from the entry to restore the audit trail.`
               </span>
             ) : (
               <>
-                <span className="text-[11px] text-slate-500 hidden md:block">
+                {/* lg, not md: at 768px this hint, the filter and the group
+                    toggle measured 15px wider than the panel beside the
+                    sidebar, pushing "By provider" past the edge. */}
+                <span className="text-[11px] text-slate-500 hidden lg:block">
                   Tap a card to expand sources and versions.
                 </span>
-                <div className="flex items-center gap-2 w-full md:w-auto">
+                <div className="flex items-center gap-2 flex-wrap w-full lg:w-auto">
                   {/* Search input lives in the sticky hero above (see "Search
                       hero + quick-access chips") — one searchQuery input, not
                       two. */}
                   <select
                     value={linkStatusFilter}
                     onChange={e => setLinkStatusFilter(e.target.value)}
-                    className="px-2.5 py-2 border border-slate-200 rounded text-[12px] bg-white focus:outline-none focus:ring-1 focus:ring-slate-300 shrink-0"
+                    aria-label="Filter by link-check status"
+                    className="px-2.5 py-2 border border-slate-300 rounded text-[12px] bg-white focus:outline-none focus:ring-2 focus:ring-slate-500 shrink-0 max-w-full"
                   >
                     <option value="All">All link-check statuses</option>
                     {LINK_STATUS_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
@@ -1227,8 +1359,10 @@ Add a note from the entry to restore the audit trail.`
                   {/* Group-by toggle: same filtered data, different lens on the main panel.
                       Sidebar section filtering is untouched — this only changes how the
                       resulting cards are bucketed and labelled below. */}
-                  <div className="hidden md:flex items-center border border-slate-200 rounded overflow-hidden shrink-0">
+                  <div role="group" aria-label="Group cards" className="hidden md:flex items-center border border-slate-200 rounded overflow-hidden shrink-0">
                     <button
+                      type="button"
+                      aria-pressed={groupBy === 'section'}
                       onClick={() => setGroupBy('section')}
                       title="Group cards by clinical section"
                       className={cn(
@@ -1239,6 +1373,8 @@ Add a note from the entry to restore the audit trail.`
                       By section
                     </button>
                     <button
+                      type="button"
+                      aria-pressed={groupBy === 'provider'}
                       onClick={() => setGroupBy('provider')}
                       title="Group cards by issuing provider/organisation"
                       className={cn(
@@ -1268,7 +1404,11 @@ Add a note from the entry to restore the audit trail.`
           {/* The catalogue is a wide dense table and needs the full panel
               width; every other view keeps the readable max-w-4xl measure. */}
           <div className={cn(
-            "px-4 pt-3 pb-8 w-full",
+            "px-4 pt-3 w-full",
+            // The fixed offline-snapshot banner (bottom of the viewport) is up
+            // to ~70px tall on a phone; without room for it the last card sits
+            // underneath and cannot be scrolled into view.
+            dataState === 'fallback' ? "pb-28" : "pb-8",
             currentSection !== CATALOGUE_VIEW && "max-w-4xl"
           )}>
             {currentSection === DUPLICATES_VIEW ? (
@@ -1329,9 +1469,23 @@ Add a note from the entry to restore the audit trail.`
                     <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">{gapNote}</p>
                   </div>
                 ) : (
-                  <p className="text-[12px] text-slate-500 mt-3">
-                    No results — try a different term or browse by category.
-                  </p>
+                  <div className="mt-3 border border-slate-200 bg-white rounded-md px-3.5 py-3 max-w-lg">
+                    <p className="text-[12px] font-medium text-slate-800 m-0">
+                      {emptyResultText(activeFilter, s => linkStatusLabel(s as Guideline['linkVerificationStatus']))}
+                    </p>
+                    <p className="text-[11px] text-slate-600 mt-1 mb-0 leading-relaxed">
+                      Try a broader or differently spelled term — for example the condition, the injury or the issuing body.
+                    </p>
+                    {filtersActive && (
+                      <button
+                        type="button"
+                        onClick={clearFilters}
+                        className="mt-2 inline-flex items-center px-3 py-2 text-[12px] font-medium text-slate-700 bg-white border border-slate-300 rounded-md hover:bg-slate-50"
+                      >
+                        Clear search and filters
+                      </button>
+                    )}
+                  </div>
                 );
               })()
             ) : (
@@ -1524,27 +1678,27 @@ function CatalogueView({ guidelines }: { guidelines: Guideline[] }) {
 
                     return (
                       <div key={item.id} className="border-b border-slate-100 last:border-0">
+                        {/* Same pattern as the browse card: the topic is the
+                            expand <button>, its ::after overlay makes the whole
+                            row clickable, and the "Open" link is layered above
+                            it instead of nested inside a role="button" row. */}
                         <div
-                          role="button"
-                          tabIndex={0}
-                          aria-expanded={isOpen}
-                          onClick={() => setExpandedId(isOpen ? null : item.id)}
-                          onKeyDown={e => {
-                            if (e.key === 'Enter' || e.key === ' ') {
-                              e.preventDefault();
-                              setExpandedId(isOpen ? null : item.id);
-                            }
-                          }}
                           className={cn(
-                            "flex items-center gap-2 px-3 py-1.5 text-[11px] cursor-pointer hover:bg-slate-50 transition-colors",
-                            "focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-400",
+                            "relative flex items-center gap-2 px-3 py-1.5 text-[11px] hover:bg-slate-50 transition-colors",
                             isOpen && "bg-slate-50"
                           )}
                         >
                           <span className="flex-1 min-w-0 flex items-center gap-1.5">
-                            <span className="min-w-0 truncate text-slate-800" title={item.topic}>
+                            <button
+                              type="button"
+                              aria-expanded={isOpen}
+                              aria-controls={`catalogue-row-${item.id}`}
+                              onClick={() => setExpandedId(isOpen ? null : item.id)}
+                              title={item.topic}
+                              className="min-w-0 truncate text-left text-slate-800 focus:outline-none after:absolute after:inset-0 after:content-[''] focus-visible:after:ring-2 focus-visible:after:ring-inset focus-visible:after:ring-slate-600"
+                            >
                               {item.topic}
-                            </span>
+                            </button>
                             {/* Only non-current statuses are shown: the Link check
                                 column says whether a URL answered, which is no
                                 evidence the guidance is current (girft-bunions). */}
@@ -1589,16 +1743,19 @@ function CatalogueView({ guidelines }: { guidelines: Guideline[] }) {
                               <a
                                 href={primaryUrl}
                                 target="_blank"
-                                rel="noopener noreferrer"
-                                onClick={e => e.stopPropagation()}
+                                rel={NEW_TAB_REL}
                                 title="Open source guidance in a new tab"
-                                className="inline-flex items-center gap-1 text-slate-600 hover:text-slate-900 underline underline-offset-2"
+                                className="relative z-[1] inline-flex items-center gap-1 text-slate-600 hover:text-slate-900 underline underline-offset-2 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-600"
                               >
-                                Open
+                                {/* 231 links all named "Open" are
+                                    indistinguishable in a screen reader's
+                                    links list; the hidden text names each. */}
+                                Open<span className="sr-only"> source guidance: {item.topic}</span>
                                 <ExternalLink className="w-3 h-3 shrink-0" />
+                                <NewTabCue />
                               </a>
                             ) : (
-                              <span className="text-slate-400">—</span>
+                              <span className="text-slate-500">—</span>
                             )}
                           </span>
                         </div>
@@ -1607,16 +1764,17 @@ function CatalogueView({ guidelines }: { guidelines: Guideline[] }) {
                             as the row, so it can never drift from the browse
                             screen's copy — there is only one copy. */}
                         {isOpen && (
-                          <div className="px-3 pb-2.5 pt-1 bg-slate-50 text-[11px]">
+                          <div id={`catalogue-row-${item.id}`} className="px-3 pb-2.5 pt-1 bg-slate-50 text-[11px]">
                             {hasPrimary && (
                               <a
                                 href={primaryUrl}
                                 target="_blank"
-                                rel="noopener noreferrer"
+                                rel={NEW_TAB_REL}
                                 className="inline-flex items-center gap-1.5 px-3 py-2 mb-2 bg-[#0F172A] text-white rounded-md text-[11px] font-medium hover:bg-slate-800 transition-colors"
                               >
                                 Open source guidance
                                 <ExternalLink className="w-3.5 h-3.5" />
+                                <NewTabCue />
                               </a>
                             )}
 
@@ -1642,11 +1800,12 @@ function CatalogueView({ guidelines }: { guidelines: Guideline[] }) {
                                         <a
                                           href={v.url}
                                           target="_blank"
-                                          rel="noopener noreferrer"
+                                          rel={NEW_TAB_REL}
                                           className="text-slate-600 hover:text-slate-900 underline underline-offset-2 inline-flex items-center gap-1"
                                         >
                                           {v.label}
                                           <ExternalLink className="w-2.5 h-2.5 shrink-0" />
+                                          <NewTabCue />
                                         </a>
                                       ) : (
                                         <span className="text-slate-500">{v.label}</span>
@@ -1711,31 +1870,42 @@ function SectionContainer({
     ? (SECTION_SUBTITLES[section] || 'Clinical guidance')
     : `${items.length} guideline${items.length === 1 ? '' : 's'}`;
 
+  const bodyId = useId();
+
   return (
-    <div className="border border-slate-200 rounded-md mb-2.5 overflow-hidden bg-white">
-      <div
-        className="px-3.5 py-2 flex justify-between items-center cursor-pointer select-none hover:bg-slate-50 transition-colors"
-        onClick={onToggleCollapse}
-      >
-        <div>
-          <span className="text-[13px] font-semibold text-slate-700">{section}</span>
-          <span className="text-[11px] text-slate-500 ml-2">{subtitle}</span>
-        </div>
-        <ChevronDown className={cn(
-          "w-3.5 h-3.5 text-slate-500 transition-transform duration-200 shrink-0",
-          isCollapsed && "rotate-180"
-        )} />
-      </div>
+    <section className="border border-slate-200 rounded-md mb-2.5 overflow-hidden bg-white">
+      {/* Disclosure header: a heading containing a real button. It was a
+          clickable <div> — no role, no Tab stop, no expanded state — so
+          keyboard and screen-reader users could not collapse a section, and
+          the sections were not navigable as headings. */}
+      <h2 className="m-0 text-[13px] font-normal">
+        <button
+          type="button"
+          onClick={onToggleCollapse}
+          aria-expanded={!isCollapsed}
+          aria-controls={bodyId}
+          className="w-full px-3.5 py-2 flex justify-between items-center gap-2 text-left select-none hover:bg-slate-50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-600"
+        >
+          <span>
+            <span className="text-[13px] font-semibold text-slate-700">{section}</span>
+            <span className="text-[11px] text-slate-500 ml-2">{subtitle}</span>
+          </span>
+          <ChevronDown aria-hidden="true" className={cn(
+            "w-3.5 h-3.5 text-slate-500 transition-transform duration-200 shrink-0",
+            isCollapsed && "rotate-180"
+          )} />
+        </button>
+      </h2>
 
       {!isCollapsed && (
-        <div className="px-3.5 pb-3.5 flex flex-col gap-2.5 border-t border-slate-100">
+        <div id={bodyId} className="px-3.5 pb-3.5 flex flex-col gap-2.5 border-t border-slate-100">
           <div className="h-1.5" />
           {items.map(g => (
             <GuidelineCard key={g.id} item={g} sectionContext={section} groupBy={groupBy} allGuidelines={allGuidelines} canEdit={canEdit} onEdit={onEdit} onQuickUpdate={onQuickUpdate} />
           ))}
         </div>
       )}
-    </div>
+    </section>
   );
 }
 
@@ -1785,30 +1955,19 @@ function GuidelineCard({
   // target, so the action doesn't render rather than pointing nowhere.
   const primaryUrl = item.versions[0]?.url;
   const hasPrimaryLink = Boolean(primaryUrl && primaryUrl !== '#');
+  const bodyId = useId();
 
   return (
     <div className="border border-slate-200 rounded-lg overflow-hidden bg-white">
 
-      {/* Collapsed row. A single accessible control (role="button" + tabIndex
-          + Enter/Space), not the earlier button/div split — a plain <div>
-          can safely contain the provider <a> directly (unlike a <button>,
-          where nesting interactive content is invalid HTML and was the
-          reason for that split). Mouse users can click anywhere on the row;
-          keyboard users tab to the row itself. The provider link stops
-          propagation so it opens externally without also toggling. */}
-      <div
-        role="button"
-        tabIndex={0}
-        aria-expanded={isExpanded}
-        onClick={() => setIsExpanded(!isExpanded)}
-        onKeyDown={e => {
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault();
-            setIsExpanded(!isExpanded);
-          }
-        }}
-        className="w-full px-3 py-2.5 flex items-start gap-2 cursor-pointer hover:bg-slate-50 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-400"
-      >
+      {/* Collapsed row. The expand control is a real <button> on the title;
+          its ::after overlay covers the whole row, so a click anywhere on the
+          row still toggles, exactly as before. The row used to be
+          role="button" with the provider <a> nested INSIDE it — an
+          interactive element inside another (axe "nested-interactive"),
+          which screen readers flatten or mis-announce. Now the provider link
+          is a sibling layered above the overlay (relative z-[1]). */}
+      <div className="relative w-full px-3 py-2.5 flex items-start gap-2 hover:bg-slate-50 transition-colors">
         <div className="flex flex-col gap-1 min-w-0 flex-1">
           {/* Priority order per Phase 4: title, then provider + one
               high-level type label + (when useful) a section cue, then an
@@ -1816,18 +1975,44 @@ function GuidelineCard({
               notes and changelog all move into the expanded body below —
               same data, nothing dropped, just not competing for attention
               in the scan line. */}
-          <span className="text-[13px] font-medium text-slate-800 leading-snug">{item.topic}</span>
+          <button
+            type="button"
+            aria-expanded={isExpanded}
+            aria-controls={bodyId}
+            onClick={() => setIsExpanded(!isExpanded)}
+            className="text-left text-[13px] font-medium text-slate-800 leading-snug focus:outline-none after:absolute after:inset-0 after:content-[''] after:rounded-lg focus-visible:after:ring-2 focus-visible:after:ring-inset focus-visible:after:ring-slate-600"
+          >
+            {item.topic}
+          </button>
           <div className="flex items-center gap-1.5 flex-wrap text-[11px] text-slate-500">
+            {/* Guidance status on the scan line when it is NOT current, as the
+                Full catalogue already does. Previously a superseded or
+                under-review entry looked identical to a current one until
+                expanded. */}
+            {item.guidanceStatus && item.guidanceStatus !== 'current' && (
+              <>
+                <span
+                  className={cn(
+                    "inline-block px-1.5 py-px rounded border text-[10px] font-medium",
+                    guidanceStatusBadgeClass(item.guidanceStatus)
+                  )}
+                >
+                  <span className="sr-only">Guidance status: </span>
+                  {guidanceStatusLabel(item.guidanceStatus)}
+                </span>
+                <span aria-hidden="true" className="text-slate-300">·</span>
+              </>
+            )}
             {providerHref ? (
               <a
                 href={providerHref}
                 target="_blank"
-                rel="noopener noreferrer"
-                onClick={e => e.stopPropagation()}
+                rel={NEW_TAB_REL}
                 title={`Open the ${canonicalProvider(item.source)} website in a new tab`}
-                className="hover:text-slate-900 hover:underline underline-offset-2 focus:outline-none focus-visible:ring-1 focus-visible:ring-slate-400 rounded"
+                className="relative z-[1] hover:text-slate-900 hover:underline underline-offset-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-600 rounded"
               >
                 {item.source}
+                <NewTabCue />
               </a>
             ) : (
               <span>{item.source}</span>
@@ -1870,7 +2055,7 @@ function GuidelineCard({
 
       {/* Expanded body */}
       {isExpanded && (
-        <div className="border-t border-slate-100 px-3 pt-3 pb-2.5">
+        <div id={bodyId} className="border-t border-slate-100 px-3 pt-3 pb-2.5">
 
           {/* Primary actions for an expanded card.
               "Open source guidance" is the next action a clinician usually
@@ -1895,11 +2080,12 @@ function GuidelineCard({
                 <a
                   href={primaryUrl}
                   target="_blank"
-                  rel="noreferrer"
+                  rel={NEW_TAB_REL}
                   className="inline-flex items-center gap-1.5 px-3.5 py-2.5 bg-[#0F172A] text-white rounded-md text-[12px] font-medium hover:bg-slate-800 transition-colors"
                 >
                   Open source guidance
                   <ExternalLink className="w-3.5 h-3.5" />
+                  <NewTabCue />
                 </a>
               )}
               {WRITES_ENABLED && canEdit && (
@@ -1919,15 +2105,9 @@ function GuidelineCard({
               from the reachability badge further down, because those two things
               were previously read as one. */}
           <div className="flex items-center gap-1.5 flex-wrap mb-2">
-            <span
-              title={guidanceStatusHint(item.guidanceStatus)}
-              className={cn(
-                "text-[10px] px-1.5 py-px rounded border font-medium",
-                guidanceStatusBadgeClass(item.guidanceStatus)
-              )}
-            >
-              {guidanceStatusLabel(item.guidanceStatus)}
-            </span>
+            <StatusExplanation label={guidanceStatusLabel(item.guidanceStatus)}
+              kind="guidance status" hint={guidanceStatusHint(item.guidanceStatus)}
+              badgeClass={guidanceStatusBadgeClass(item.guidanceStatus)} />
             <span className="text-[10px] text-slate-500">guidance status</span>
             <a
               href={ABOUT_HASH}
@@ -1945,7 +2125,7 @@ function GuidelineCard({
             <span className="text-slate-500 shrink-0">Scope:</span>
             {item.scopeNote
               ? <span className="text-slate-600">{item.scopeNote}</span>
-              : <span className="text-slate-400 italic">not specified by the source</span>}
+              : <span className="text-slate-500 italic">not specified by the source</span>}
           </div>
 
           {item.summary && <AboutThisSource />}
@@ -1969,15 +2149,8 @@ function GuidelineCard({
                   Source Links
                 </div>
                 <div className="flex items-center gap-1.5 flex-wrap">
-                  <span
-                    title={linkStatusHint(linkStatus)}
-                    className={cn(
-                      "text-[10px] px-1.5 py-px rounded border font-medium",
-                      linkStatusBadgeClass(linkStatus)
-                    )}
-                  >
-                    {linkStatusLabel(linkStatus)}
-                  </span>
+                  <StatusExplanation label={linkStatusLabel(linkStatus)} kind="link reachability"
+                    hint={linkStatusHint(linkStatus)} badgeClass={linkStatusBadgeClass(linkStatus)} alignRight />
                   <a
                     href={ABOUT_HASH}
                     onClick={e => e.stopPropagation()}
@@ -2020,7 +2193,7 @@ function GuidelineCard({
                       <a
                         href={v.url}
                         target="_blank"
-                        rel="noreferrer"
+                        rel={NEW_TAB_REL}
                         // py-2 (not the old py-0.5) so the tappable area of the
                         // link itself, not just the visible text glyph, is
                         // closer to a real touch target on a phone. Label
@@ -2031,6 +2204,7 @@ function GuidelineCard({
                       >
                         {v.label}
                         <ExternalLink className="w-3 h-3 shrink-0 text-slate-500" />
+                        <NewTabCue />
                       </a>
                     ) : (
                       <span className="text-[11px] text-slate-500 py-2">{v.label}</span>
@@ -2123,33 +2297,33 @@ function GuidelineCard({
             </div>
             <dl className="grid grid-cols-2 sm:grid-cols-4 gap-x-3 gap-y-1.5">
               <div className="flex flex-col">
-                <dt className="text-[9px] text-slate-400 uppercase tracking-wide">Publisher</dt>
+                <dt className="text-[9px] text-slate-500 uppercase tracking-wide">Publisher</dt>
                 <dd className="text-[11px] text-slate-600">{item.source}</dd>
               </div>
               <div className="flex flex-col">
-                <dt className="text-[9px] text-slate-400 uppercase tracking-wide">Published</dt>
+                <dt className="text-[9px] text-slate-500 uppercase tracking-wide">Published</dt>
                 <dd className="text-[11px] text-slate-600">
-                  {item.subGroup || <span className="text-slate-400 italic">not stated</span>}
+                  {item.subGroup || <span className="text-slate-500 italic">not stated</span>}
                 </dd>
               </div>
               <div className="flex flex-col">
-                <dt className="text-[9px] text-slate-400 uppercase tracking-wide" title="When a person last reviewed this entry.">
+                <dt className="text-[9px] text-slate-500 uppercase tracking-wide" title="When a person last reviewed this entry.">
                   Editorial review
                 </dt>
                 <dd className="text-[11px] text-slate-600 tabular-nums">
-                  {item.editorialReviewDate || <span className="text-slate-400 italic">not recorded</span>}
+                  {item.editorialReviewDate || <span className="text-slate-500 italic">not recorded</span>}
                 </dd>
               </div>
               <div className="flex flex-col">
-                <dt className="text-[9px] text-slate-400 uppercase tracking-wide" title="When an automated request last confirmed the link responds. Not a content review.">
+                <dt className="text-[9px] text-slate-500 uppercase tracking-wide" title="When an automated request last confirmed the link responds. Not a content review.">
                   Link check
                 </dt>
                 <dd className="text-[11px] text-slate-600 tabular-nums">
-                  {item.linkLastVerified || <span className="text-slate-400 italic">not checked</span>}
+                  {item.linkLastVerified || <span className="text-slate-500 italic">not checked</span>}
                 </dd>
               </div>
             </dl>
-            <div className="text-[10px] text-slate-400 mt-1.5">ID: {item.id}</div>
+            <div className="text-[10px] text-slate-500 mt-1.5">ID: {item.id}</div>
           </div>
         </div>
       )}
@@ -2168,6 +2342,20 @@ function fmtTimestamp(iso: string): string {
 // Append-only note history for a single guideline, shown inside the expanded
 // card. Fetches on mount (i.e. when the card expands). In static/offline mode
 // the service returns [] for reads and throws on write (surfaced via alert).
+function StatusExplanation({ label, kind, hint, badgeClass, alignRight = false }: {
+  label: string; kind: string; hint: string; badgeClass: string; alignRight?: boolean;
+}) {
+  return <details className="relative" onClick={event => event.stopPropagation()}>
+    <summary aria-label={`${label}: ${kind} explanation`}
+      className={cn('list-none cursor-pointer rounded border px-1.5 py-px text-[10px] font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-700', badgeClass)}>
+      {label}
+    </summary>
+    <p className={cn('absolute top-full z-20 mt-1 w-60 max-w-[calc(100vw-3rem)] rounded border border-slate-300 bg-white p-2 text-[12px] leading-relaxed text-slate-800 shadow-lg', alignRight ? 'right-0' : 'left-0')}>
+      {hint}
+    </p>
+  </details>;
+}
+
 function CardChangelog({ guidelineId, canEdit }: { guidelineId: string; canEdit: boolean }) {
   const [load, setLoad] = useState<ChangelogLoad | null>(null);
   const [text, setText] = useState('');
@@ -2370,13 +2558,36 @@ function EditModal({
    */
   isStagedCandidate: boolean;
 }) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const dialogTitle = useId();
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  useEffect(() => {
+    const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    const controls = () => Array.from(dialog.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href], [tabindex="0"]'))
+      .filter(element => element.getClientRects().length > 0);
+    (controls()[0] ?? dialog).focus();
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeRef.current(); }
+      if (event.key === 'Tab') {
+        const items = controls();
+        const first = items[0] ?? dialog, last = items[items.length - 1] ?? dialog;
+        if (event.shiftKey && (document.activeElement === first || !dialog.contains(document.activeElement))) { event.preventDefault(); last.focus(); }
+        else if (!event.shiftKey && (document.activeElement === last || !dialog.contains(document.activeElement))) { event.preventDefault(); first.focus(); }
+      }
+    };
+    document.addEventListener('keydown', onKey, true);
+    return () => { document.removeEventListener('keydown', onKey, true); if (previous?.isConnected) previous.focus(); };
+  }, []);
   const [form, setForm] = useState<Guideline>({
     ...guideline,
     versions: guideline.versions.map(v => ({ ...v })),
   });
 
-  // Required. Anyone can edit this site without signing in, so there is no
-  // account to attribute a change to — this note is the whole audit trail.
+  // A mandatory change note supplements the signed-in editor's audit trail.
+  // Actual write authorisation remains enforced by the database.
   // Validated with the same rule the database enforces (see
   // src/lib/change-note.ts and the guideline_changelog not-blank CHECK), so
   // the form and the constraint can never disagree about what counts as empty.
@@ -2439,16 +2650,17 @@ function EditModal({
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-3" onClick={onClose}>
       <div
-        className="bg-white rounded-lg w-full max-w-[500px] max-h-[88vh] flex flex-col shadow-xl"
+        ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={dialogTitle} tabIndex={-1}
+        className="bg-white rounded-lg w-full max-w-[500px] max-h-[88dvh] flex flex-col shadow-xl"
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}
         <div className="flex justify-between items-center px-4 py-2.5 border-b border-slate-200 shrink-0">
-          <h2 className="text-[13px] font-semibold text-slate-800">
+          <h2 id={dialogTitle} className="text-[13px] font-semibold text-slate-800">
             {isStagedCandidate ? 'Review & Publish Candidate' : isNew ? 'Add Guideline' : 'Edit Guideline'}
           </h2>
-          <button onClick={onClose} className="text-slate-500 hover:text-slate-600 transition-colors">
-            <X className="w-4 h-4" />
+          <button type="button" onClick={onClose} aria-label="Close" className="text-slate-500 hover:text-slate-600 transition-colors">
+            <X aria-hidden="true" className="w-4 h-4" />
           </button>
         </div>
 
@@ -2728,9 +2940,10 @@ function EditModal({
                       onChange={e => setVersion(idx, 'date', e.target.value)}
                       placeholder="Date"
                       className="w-[76px] shrink-0 px-2 py-1 border border-slate-200 rounded text-[12px] bg-white focus:outline-none focus:ring-1 focus:ring-slate-300" />
-                    <button onClick={() => removeVersion(idx)}
+                    <button type="button" onClick={() => removeVersion(idx)}
+                      aria-label={`Remove source link ${idx + 1}`}
                       className="text-slate-500 hover:text-slate-600 transition-colors shrink-0">
-                      <X className="w-3.5 h-3.5" />
+                      <X aria-hidden="true" className="w-3.5 h-3.5" />
                     </button>
                   </div>
                 ))}

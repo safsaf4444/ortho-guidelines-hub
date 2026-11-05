@@ -9,3 +9,4 @@ scripts/deploy/*.sh text eol=lf
 # SHA-256 values; a CRLF checkout would change those bytes.
 supabase/migrations/*.sql text eol=lf
 supabase/*-READONLY.sql text eol=lf
+supabase/URL-KEY-V4-ROLLBACK.sql text eol=lf

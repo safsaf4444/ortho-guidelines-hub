@@ -113,7 +113,7 @@ const tokenOf = (i: number) => {
 // ── app + browser ─────────────────────────────────────────────────────────
 let vite: ChildProcess | null = null;
 async function startApp() {
-  vite = spawn(process.execPath, [path.join(REPO, 'node_modules/vite/bin/vite.js'), '--host', '127.0.0.1', '--port', String(PORT), '--strictPort'], {
+  vite = spawn(process.execPath, [path.join(REPO, 'node_modules/vite/bin/vite.js'), '--host', '127.0.0.1', '--port', String(PORT), '--strictPort', '--mode', 'test'], {
     cwd: REPO,
     env: { ...process.env, VITE_SUPABASE_URL: SB_URL, VITE_SUPABASE_ANON_KEY: ANON },
     stdio: ['ignore', 'pipe', 'pipe'],

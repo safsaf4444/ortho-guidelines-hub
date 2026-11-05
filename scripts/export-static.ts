@@ -28,6 +28,7 @@ config({ path: resolve(process.cwd(), '.env') });
 
 import { createClient } from '@supabase/supabase-js';
 import { toGuideline, type DbGuideline } from '../src/lib/guidelines-mapper';
+import { exportIntegrityProblems } from './lib/export-integrity';
 
 const url = process.env.VITE_SUPABASE_URL;
 const key = process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.VITE_SUPABASE_ANON_KEY;
@@ -67,6 +68,19 @@ async function run() {
 
   const guidelines = (data as DbGuideline[]).map(toGuideline);
   console.log(`✅  Mapped ${guidelines.length} rows via toGuideline().`);
+
+  // Guard: the static file is the public site's offline fallback, so it must
+  // not publish a verification claim the row cannot back up (a "checked" link
+  // with no check date, no link, an impossible date) or duplicate ids. The
+  // export never sets these fields; this refuses to copy them out broken.
+  const problems = exportIntegrityProblems(guidelines);
+  if (problems.length > 0) {
+    console.error(`\n❌ ${problems.length} integrity problem(s) — refusing to overwrite the static file:`);
+    for (const p of problems.slice(0, 50)) console.error(`   - ${p}`);
+    if (problems.length > 50) console.error(`   … and ${problems.length - 50} more`);
+    console.error('Fix the rows in the database (or set their link status honestly), then export again.\n');
+    process.exit(1);
+  }
 
   // Preserve the type-definition header verbatim: everything from the first
   // `export type` up to the array marker. Starting at `export type` (not the

@@ -113,3 +113,23 @@ Recording these two, for example with the documented `PUT /v1/projects/{ref}/dat
 
 - **The `notify pgrst, 'reload schema'` in 20261025 runs after its COMMIT.** If only that statement failed, the run would report exit 23 (committed, gate 2 passes). PostgREST would then need a schema reload.
 - **Hold the freeze anyway:** no editor sessions and no staging runs. The timeouts make a collision fail cleanly; they do not make it impossible.
+
+## Target validation (SAF-12)
+
+`Apply-Migrations-Psql.ps1` shares the pure connection-field validator in
+`scripts/lib/Database-Target.ps1` with the backup wrapper. Local exemptions now
+use exact names, rather than `localhost`/`127.` prefixes. Bare `::1` is a local
+test target; bracketed/expanded IPv6 and aliases are deliberately unsupported.
+The database field must be literal `postgres`, never a URI or libpq keyword
+connection string. Host syntax and port range are checked before operational
+commands. Existing remote pooler, session-port, project-user, confirmation,
+file-hash and outcome gates remain in place.
+
+Run the harmless target-validation harness separately with:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/tests/backup-safety.test.ps1
+```
+
+This test parses wrappers without invoking them and performs no backup, restore,
+migration, SQL, network, Supabase or credential operations.

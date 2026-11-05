@@ -262,8 +262,60 @@ const KEY_TRIM = new RegExp(`^[${KEY_WHITESPACE}]+|[${KEY_WHITESPACE}]+$`, 'g');
 /** A scheme prefix. Only such strings have their query string inspected. */
 const ABSOLUTE_URL = /^[A-Za-z][A-Za-z0-9+.-]*:/;
 
-/** Query-parameter name `ver`, ASCII case-insensitive, compared raw (undecoded). */
+/**
+ * Query-parameter name `ver`, ASCII case-insensitive. Compared after
+ * {@link decodeUnreservedEscapes}, so `%76er` is `ver` (url-key v4).
+ */
 const VER_NAME = /^[Vv][Ee][Rr]$/;
+
+/** RFC 3986 §2.3 unreserved characters: ALPHA / DIGIT / "-" / "." / "_" / "~". */
+const UNRESERVED = /^[A-Za-z0-9\-._~]$/;
+const HEX_DIGIT = /^[0-9A-Fa-f]$/;
+
+/**
+ * Decodes percent-escapes of RFC 3986 UNRESERVED characters (`%2D` → `-`,
+ * `%41` → `A`, `%7e` → `~`), in one left-to-right pass. RFC 3986 §2.3 and
+ * §6.2.2.2: such escapes are equivalent to the character itself, and a
+ * normaliser should decode them. BOA's site links its assets as
+ * `/asset/a811fc01%2defc3…` while the catalogue stores `/asset/A811FC01-EFC3…`;
+ * without this the two never shared a key, and catalogued BOA documents were
+ * filed as new (discovery dry run, 2026-11-04).
+ *
+ * Everything else is kept byte for byte:
+ *   - escapes of RESERVED or other characters (`%2F`, `%3F`, `%23`, `%3D`,
+ *     `%20`, `%25`, non-ASCII bytes): decoding them could change the URL's
+ *     structure or meaning, so they are never touched here;
+ *   - malformed `%` sequences (`%`, `%2`, `%zz`): left exactly as they are.
+ *
+ * One guard keeps the result a fixpoint (the keys must be idempotent): an
+ * escape whose character is a hex digit is NOT decoded when the output so far
+ * ends in `%` or `%` + one hex digit. Decoding it there would assemble a new
+ * escape out of a stray `%` (`%%341` would become `%41`, which a second pass
+ * would turn into `A`).
+ *
+ * Applied first, before the `ver` strip, by both keys. Its SQL mirror is
+ * `public._url_decode_unreserved`. Never used to rewrite a stored URL.
+ */
+export function decodeUnreservedEscapes(url: string): string {
+  let out = '';
+  let i = 0;
+  while (i < url.length) {
+    const pct = url.indexOf('%', i);
+    if (pct < 0) { out += url.slice(i); break; }
+    out += url.slice(i, pct);
+    const hex = url.slice(pct + 1, pct + 3);
+    if (hex.length === 2 && HEX_DIGIT.test(hex[0]) && HEX_DIGIT.test(hex[1])) {
+      const ch = String.fromCharCode(parseInt(hex, 16));
+      const wouldFormEscape = HEX_DIGIT.test(ch) && /%[0-9A-Fa-f]?$/.test(out);
+      out += UNRESERVED.test(ch) && !wouldFormEscape ? ch : url.slice(pct, pct + 3);
+      i = pct + 3;
+    } else {
+      out += '%';
+      i = pct + 1;
+    }
+  }
+  return out;
+}
 
 /**
  * Strips every `ver` query parameter from a URL, LEXICALLY: the string is cut
@@ -286,7 +338,9 @@ const VER_NAME = /^[Vv][Ee][Rr]$/;
  *     it. A `?ver=` inside a fragment is not a query parameter.
  *   - The query is split on `&`. A segment is a `ver` parameter when the text
  *     before its first `=` (or the whole segment, if it has none) is `ver` in
- *     any ASCII case. The name is NOT percent-decoded: `%76er` is not `ver`.
+ *     any ASCII case. Both keys decode unreserved escapes FIRST
+ *     ({@link decodeUnreservedEscapes}), so `%76er` is `ver` (url-key v4; in
+ *     v3 it was not). Other escapes in the name are not decoded.
  *   - If no segment is `ver`, the URL is returned unchanged, byte for byte.
  *     nhfd.co.uk's `?open&<filename>` is the document identity there.
  *   - Otherwise every `ver` segment is removed (repeats included), empty
@@ -324,11 +378,12 @@ function stripVolatileCacheBustingParam(url: string): string {
  * staging holds, and for the approval near-match refusal. NOT the queue's
  * document identity: see {@link documentIdentityKey}.
  *
- * In order: trimmed (the ECMAScript trim set), `ver` cache-busting parameters
- * stripped (see stripVolatileCacheBustingParam), ASCII letters lowercased
- * EVERYWHERE — path and query values included — and trailing slashes removed
- * from the end of the whole string. It does not strip other query strings,
- * fragments or `www.`, does not decode or re-encode anything, and does not
+ * In order: trimmed (the ECMAScript trim set), escapes of unreserved
+ * characters decoded (see decodeUnreservedEscapes), `ver` cache-busting
+ * parameters stripped (see stripVolatileCacheBustingParam), ASCII letters
+ * lowercased EVERYWHERE — path and query values included — and trailing
+ * slashes removed from the end of the whole string. It does not strip other
+ * query strings, fragments or `www.`, decodes nothing else, never re-encodes, and does not
  * lowercase non-ASCII letters (Unicode case mapping differs between
  * JavaScript and the database's locale).
  *
@@ -336,8 +391,14 @@ function stripVolatileCacheBustingParam(url: string): string {
  * share a match key (`/Docs/A.pdf` vs `/docs/a.pdf` on a case-sensitive
  * server; `?token=AbC` vs `?token=abc`). That is acceptable for a heuristic
  * that proposes "probably the same", and it is why the queue does not use it
- * as identity. Its definition is unchanged from url-key v2 so candidate IDs
- * — and the editor decisions keyed on them — do not move.
+ * as identity.
+ *
+ * url-key v4 (2026-11-04) added the unreserved-escape decoding. That MOVES the
+ * key — and so the candidate ID (makeCandidateId) — of any URL containing such
+ * an escape (`%2D`, `%41`, …); every other URL keeps its v3 key exactly. A
+ * queue row or rejection keyed on a moved candidate ID is matched again by
+ * identity, not lost; see supabase/migrations/20261104_url_key_unreserved_decoding.sql,
+ * which refuses to run while any stored key would move.
  *
  * `public.document_match_key` in
  * supabase/migrations/20261024_discovery_review_queue.sql is its exact SQL
@@ -347,7 +408,7 @@ function stripVolatileCacheBustingParam(url: string): string {
  * kept verbatim in `versions[].url` and in the queue's primary_url.
  */
 export function normaliseCandidateUrl(url: string): string {
-  const trimmed = url.replace(KEY_TRIM, '');
+  const trimmed = decodeUnreservedEscapes(url.replace(KEY_TRIM, ''));
   return stripVolatileCacheBustingParam(trimmed)
     .replace(/[A-Z]+/g, s => s.toLowerCase())
     .replace(/\/+$/, '');
@@ -364,6 +425,8 @@ const SCHEME_AUTHORITY = /^([A-Za-z][A-Za-z0-9+.-]*:)(\/\/[^/?#]*)?/;
  *
  * In order:
  *   1. trim the ECMAScript trim set (whitespace around an href is not part of it);
+ *   1a. decode escapes of RFC 3986 UNRESERVED characters — RFC 3986 §6.2.2.2
+ *      (`%2D` ≡ `-`, `%41` ≡ `A`); see decodeUnreservedEscapes (url-key v4);
  *   2. remove `ver` query parameters exactly as {@link normaliseCandidateUrl}
  *      does — DELIBERATE MERGE #1: on BOFAS's DNN CMS (and WordPress assets)
  *      `?ver=` is a cache-buster, so a changed token is the same document. A
@@ -371,8 +434,8 @@ const SCHEME_AUTHORITY = /^([A-Za-z][A-Za-z0-9+.-]*:)(\/\/[^/?#]*)?/;
  *   3. lowercase the scheme and the host (after any `userinfo@`) — RFC 3986
  *      §6.2.2.1: both are case-insensitive. Path, query and fragment keep
  *      their case: servers may treat them as case-sensitive;
- *   4. uppercase the hex digits of `%XX` escapes — RFC 3986 §6.2.2.1
- *      (`%3d` ≡ `%3D`). Nothing is decoded or re-encoded;
+ *   4. uppercase the hex digits of the remaining `%XX` escapes — RFC 3986
+ *      §6.2.2.1 (`%3d` ≡ `%3D`). Nothing else is decoded, nothing re-encoded;
  *   5. strip trailing `/`s from the PATH only — DELIBERATE MERGE #2: `/a/` and
  *      `/a` are treated as one document. A `/` ending a query value or a
  *      fragment is kept.
@@ -384,7 +447,7 @@ const SCHEME_AUTHORITY = /^([A-Za-z][A-Za-z0-9+.-]*:)(\/\/[^/?#]*)?/;
  * stripped. `public.document_identity_key` is the exact SQL mirror.
  */
 export function documentIdentityKey(url: string): string {
-  let s = stripVolatileCacheBustingParam(url.replace(KEY_TRIM, ''));
+  let s = stripVolatileCacheBustingParam(decodeUnreservedEscapes(url.replace(KEY_TRIM, '')));
   const asciiLower = (t: string) => t.replace(/[A-Z]+/g, c => c.toLowerCase());
   const m = SCHEME_AUTHORITY.exec(s);
   if (m) {

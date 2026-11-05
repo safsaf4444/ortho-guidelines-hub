@@ -1,68 +1,53 @@
 /**
  * scripts/approve-change.ts
  *
- * Runs when Safa comments "approve" or "reject" on an auto-opened
+ * Runs when the owner comments "approve" or "reject" on an auto-opened
  * "[Guideline update] ..." issue. Triggered by .github/workflows/approve-change.yml,
  * which passes the issue number and the comment body in as env vars.
  *
- * On "approve": marks the row verified in Supabase with today's date and a note,
- * and closes the issue with a confirmation comment.
- * On "reject": just closes the issue, no database change -- treats it as a false
- * positive so an unrelated future change can still flag normally.
+ * On "approve": an EDITORIAL ACKNOWLEDGEMENT that the detected change is real.
+ *   The issue's URL is checked NOW with the weekly dead-link checker; only if
+ *   that check passes is the row marked reachable (link_verification_status
+ *   'verified', today's date, a note saying exactly what was checked), with a
+ *   changelog entry. A failed, timed-out or redirected check changes nothing in
+ *   the row. Either way the issue is closed with a comment saying which.
+ *   Approval never edits the entry's content or guidance status. See
+ *   scripts/lib/change-approval.ts for the rules and why (SAF-20).
+ * On "reject": clears the stored hash for the flagged URL (so the next real
+ *   change still flags) and closes the issue. No verification change.
+ *
+ * Refuses, without writing, when: the issue is already closed (a re-delivered
+ * or second comment), the row does not exist, or the issue's URL is not one of
+ * the row's links. An update that matches no row is a failure, never reported
+ * as success.
  *
  * Requires env vars: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, GITHUB_TOKEN,
  * GITHUB_REPOSITORY, ISSUE_NUMBER, COMMENT_BODY, COMMENT_AUTHOR.
  */
 
 import { createClient } from '@supabase/supabase-js';
+import { checkUrl } from './flag-dead-links';
+import {
+  asIssue,
+  extractIssueField,
+  hashesAfterReject,
+  parseCommentAction,
+  planApproval,
+  preflightChangeAction,
+  type ApprovalRow,
+} from './lib/change-approval';
 
 const SUPABASE_URL = process.env.SUPABASE_URL!;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN!;
 const GITHUB_REPOSITORY = process.env.GITHUB_REPOSITORY!;
 const ISSUE_NUMBER = process.env.ISSUE_NUMBER!;
-const COMMENT_BODY = (process.env.COMMENT_BODY ?? '').trim().toLowerCase();
+const COMMENT_BODY = process.env.COMMENT_BODY ?? '';
 const COMMENT_AUTHOR = process.env.COMMENT_AUTHOR ?? 'unknown';
 
-const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-
-/** The only part of a GitHub issue this script reads. */
-interface GitHubIssue {
-  body: string;
-}
-
-/**
- * Narrows an untyped GitHub API response to the issue shape this script needs.
- *
- * Deliberately throws instead of defaulting. This replaced `issue.body ?? ''`,
- * which meant a malformed or unexpected response produced an empty body —
- * extractField then found no Row ID and no URL, and the approval silently did
- * nothing: no error, no log, no applied change, and a green workflow run. An
- * approval step that quietly no-ops is worse than one that fails, because
- * nobody goes looking for a change they were told had been applied.
- */
-function asIssue(value: unknown, context: string): GitHubIssue {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new Error(
-      `${context}: expected a JSON object from the GitHub API, got ` +
-        `${value === null ? 'null' : Array.isArray(value) ? 'an array' : typeof value}.`,
-    );
-  }
-  const body = (value as { body?: unknown }).body;
-  if (body === null || body === undefined) {
-    throw new Error(
-      `${context}: the issue has an empty body, so it carries no approval metadata ` +
-        '(Row ID / URL). Refusing to continue rather than applying nothing silently.',
-    );
-  }
-  if (typeof body !== 'string') {
-    throw new Error(
-      `${context}: expected the issue "body" to be a string, got ${typeof body}. ` +
-        'The GitHub API response is not the shape this script was written against.',
-    );
-  }
-  return { body };
-}
+const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+  auth: { persistSession: false, autoRefreshToken: false },
+});
 
 async function githubRequest(pathAndQuery: string, init: RequestInit = {}): Promise<unknown> {
   const res = await fetch(`https://api.github.com${pathAndQuery}`, {
@@ -81,26 +66,38 @@ async function githubRequest(pathAndQuery: string, init: RequestInit = {}): Prom
   return res.json();
 }
 
-function extractField(issueBody: string, label: string): string | null {
-  // Looks for lines like: _Row ID for the approval script: `some-id` / URL: `https://...`_
-  const match = issueBody.match(new RegExp(`${label}[:\\s]*\`([^\`]+)\``, 'i'));
-  return match ? match[1] : null;
-}
-
-async function commentAndClose(message: string) {
+async function comment(message: string) {
   await githubRequest(`/repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments`, {
     method: 'POST',
     body: JSON.stringify({ body: message }),
   });
+}
+
+async function commentAndClose(message: string) {
+  await comment(message);
   await githubRequest(`/repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}`, {
     method: 'PATCH',
     body: JSON.stringify({ state: 'closed' }),
   });
 }
 
+/**
+ * UPDATE one row by id and confirm exactly one row changed. PostgREST answers
+ * an UPDATE that matches nothing with success and zero rows, so without the
+ * read-back a missing row would be reported as updated.
+ */
+async function updateOneRow(rowId: string, patch: Record<string, unknown>) {
+  const { data, error } = await supabase.from('guidelines').update(patch).eq('id', rowId).select('id');
+  if (error) throw new Error(`database update failed: ${error.message}`);
+  if (!Array.isArray(data) || data.length !== 1) {
+    throw new Error(`database update matched ${Array.isArray(data) ? data.length : 'an unknown number of'} row(s) for \`${rowId}\`, expected exactly 1; treated as failed.`);
+  }
+}
+
 async function main() {
-  if (COMMENT_BODY !== 'approve' && COMMENT_BODY !== 'reject') {
-    console.log(`Comment was "${COMMENT_BODY}", not "approve" or "reject" -- nothing to do.`);
+  const action = parseCommentAction(COMMENT_BODY);
+  if (!action) {
+    console.log(`Comment was not exactly "approve" or "reject" -- nothing to do.`);
     return;
   }
 
@@ -108,63 +105,90 @@ async function main() {
     await githubRequest(`/repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}`),
     `issue #${ISSUE_NUMBER}`,
   );
-  const issueBody: string = issue.body;
 
-  const rowId = extractField(issueBody, 'Row ID for the approval script');
-  const url = extractField(issueBody, 'URL');
+  // Idempotency: the first decision closes the issue. A second comment, or a
+  // re-delivered webhook, on a closed issue must not run the action again.
+  if (issue.state !== 'open') {
+    console.log(`Issue #${ISSUE_NUMBER} is ${issue.state}; it was already processed. Nothing done.`);
+    return;
+  }
 
-  if (!rowId) {
+  const rowId = extractIssueField(issue.body, 'Row ID for the approval script');
+  const url = extractIssueField(issue.body, 'URL');
+
+  let row: ApprovalRow | null = null;
+  if (rowId) {
+    const { data, error } = await supabase
+      .from('guidelines')
+      .select('id, versions, content_hashes')
+      .eq('id', rowId)
+      .maybeSingle();
+    if (error) throw new Error(`could not read row \`${rowId}\`: ${error.message}`);
+    row = (data as ApprovalRow | null) ?? null;
+  }
+
+  const pre = preflightChangeAction(rowId, url, row);
+  if (!pre.ok) {
+    // Left OPEN: a human needs to look, and closing would hide that.
+    await comment(`${pre.message} (requested by @${COMMENT_AUTHOR})`);
+    console.error(`Refused: ${pre.reason}`);
+    process.exitCode = 1;
+    return;
+  }
+  // preflight guarantees all three.
+  const id = rowId!;
+  const link = url!;
+  const found = row!;
+
+  if (action === 'reject') {
+    const next = hashesAfterReject(found.content_hashes, link);
+    if (next) await updateOneRow(id, { content_hashes: next });
     await commentAndClose(
-      `Could not find a row ID in this issue's body, so I can't update the database automatically. Please make this change by hand and close this issue.`
+      `Marked as a false positive by @${COMMENT_AUTHOR}. ${next ? 'The stored hash for this URL was cleared so the next real change still flags. ' : ''}`
+        + 'No link-status or content change was made.',
     );
     return;
   }
 
-  if (COMMENT_BODY === 'reject') {
-    // Clear the stored hash for this URL so the next real change on this row still flags,
-    // rather than silently comparing against a hash we now know was a false-positive trigger.
-    if (url) {
-      const { data: row } = await supabase
-        .from('guidelines')
-        .select('content_hashes')
-        .eq('id', rowId)
-        .single();
-      if (row?.content_hashes) {
-        const updated = { ...row.content_hashes };
-        delete updated[url];
-        await supabase.from('guidelines').update({ content_hashes: updated }).eq('id', rowId);
-      }
-    }
-    await commentAndClose(`Marked as a false positive by @${COMMENT_AUTHOR}. No database change made.`);
+  // approve: a real check of the link, then a decision from its verdict.
+  const check = await checkUrl(link);
+  console.log(`Link check for ${link}: ${check.verdict} (${check.detail})`);
+  const plan = planApproval({
+    rowId: id,
+    url: link,
+    check,
+    author: COMMENT_AUTHOR,
+    issueNumber: ISSUE_NUMBER,
+    today: new Date().toISOString().slice(0, 10),
+  });
+
+  if (plan.kind === 'acknowledge-only') {
+    await commentAndClose(plan.comment);
     return;
   }
 
-  // approve
-  const { error } = await supabase
-    .from('guidelines')
-    .update({
-      link_verification_status: 'verified',
-      link_last_verified: new Date().toISOString().slice(0, 10),
-      link_verification_notes: `Auto-detected content change, approved by @${COMMENT_AUTHOR} on ${new Date()
-        .toISOString()
-        .slice(0, 10)} via issue #${ISSUE_NUMBER}.`,
-    })
-    .eq('id', rowId);
-
-  if (error) {
-    await commentAndClose(`Approval received, but the database update failed: ${error.message}. Please check manually.`);
+  await updateOneRow(id, { ...plan.patch });
+  const { error: noteError } = await supabase
+    .from('guideline_changelog')
+    .insert({ guideline_id: id, description: plan.changelog });
+  if (noteError) {
+    // The status write landed; its audit entry did not. Said loudly, left open.
+    await comment(
+      `Row \`${id}\` WAS marked reachable, but writing its changelog entry failed: ${noteError.message}. `
+        + 'Add the change note by hand.',
+    );
+    process.exitCode = 1;
     return;
   }
-
-  await commentAndClose(`Approved by @${COMMENT_AUTHOR} -- row \`${rowId}\` is now marked verified with today's date. Live.`);
+  await commentAndClose(plan.comment);
 }
 
 main().catch(async (err) => {
   console.error(err);
   try {
-    await commentAndClose(`Something went wrong running the approval script: ${err}. Please check manually.`);
+    await comment(`Something went wrong running the approval script: ${err instanceof Error ? err.message : String(err)}. Nothing further was changed. Please check manually.`);
   } catch {
     /* ignore secondary failure */
   }
-  process.exit(1);
+  process.exitCode = 1;
 });

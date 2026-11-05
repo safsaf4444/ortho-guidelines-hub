@@ -156,7 +156,12 @@ try {
 
   console.log('\n[2] BOA parsing equivalence (scoped fetch stub — no socket opened)');
 
-  const BOA_FIXTURE = `
+  // SAF-21: the BOA parser keeps the publisher's section heading (as
+  // versions[0].label) and refuses a page without section structure, so the
+  // original flat fixture is also given as one section. Everything the
+  // baseline decided (which links, topics, URLs, order, noise filter, dedupe)
+  // must still be identical; the label is the one deliberate difference.
+  const FLAT_FIXTURE = `
 <html><body>
   <a href="/asset/AAAA-1111/">First standard</a>
   <a href="https://www.boa.ac.uk/asset/BBBB-2222/">Second   standard
@@ -168,6 +173,23 @@ try {
   <a href="/asset/EEEE-5555/">   Padded topic   </a>
   <a>Anchor with no href</a>
 </body></html>`;
+  const BOA_FIXTURE = `
+<html><body>
+  <h4>Clinical BOASts</h4>
+  <ul>
+    <li><a href="/asset/AAAA-1111/">First standard</a></li>
+    <li><a href="https://www.boa.ac.uk/asset/BBBB-2222/">Second   standard
+       with   collapsed    whitespace</a></li>
+    <li><a href="/asset/AAAA-1111/">Duplicate of the first</a></li>
+    <li><a href="/asset/CCCC-3333/">Download and read the full guidelines for BOA Standards here</a></li>
+    <li><a href="/asset/DDDD-4444/"></a></li>
+    <li><a href="/standards-guidance/other.html">Not an asset link</a></li>
+    <li><a href="/asset/EEEE-5555/">   Padded topic   </a></li>
+    <li><a>Anchor with no href</a></li>
+  </ul>
+</body></html>`;
+  const withoutSectionLabel = (items: DiscoveredItem[]) =>
+    items.map((i) => ({ ...i, versions: i.versions.map(({ url }) => ({ url })) }));
 
   const realFetch = globalThis.fetch;
   let stubCalls = 0;
@@ -188,13 +210,26 @@ try {
 
   eq('fetch stub served both calls (no live request)', stubCalls, 2);
   eq('fetch restored afterwards', globalThis.fetch === realFetch, true);
-  eq('BOA parsing: baseline vs current, deep-equal', oldParsed, newParsed);
+  eq('BOA parsing: baseline vs current, deep-equal apart from the SAF-21 section label',
+    withoutSectionLabel(oldParsed), withoutSectionLabel(newParsed));
+  eq('BOA parsing: the one deliberate difference is the label (baseline constant -> owning heading)',
+    [oldParsed.map((i) => i.versions[0].label), newParsed.map((i) => i.versions[0].label)],
+    [['BOASt PDF', 'BOASt PDF', 'BOASt PDF'], ['Clinical BOASts', 'Clinical BOASts', 'Clinical BOASts']]);
   eq('BOA parsing: expected item count', newParsed.length, 3);
   eq(
     'parseBoaIndex(html, url) === BOAAdapter.fetchCandidates() output',
     current.parseBoaIndex(BOA_FIXTURE, 'https://www.boa.ac.uk/standards-guidance/boasts.html'),
     newParsed,
   );
+
+  let flatErr = '';
+  try {
+    current.parseBoaIndex(FLAT_FIXTURE, 'https://www.boa.ac.uk/standards-guidance/boasts.html');
+  } catch (e) {
+    flatErr = (e as Error).message;
+  }
+  check('SAF-21 fail-closed: the flat, section-less page the baseline parsed is now refused',
+    /^BOA index structure: /.test(flatErr), flatErr || 'did not throw');
 
   // Non-2xx must still throw the same message, and must not be swallowed.
   let oldErr = '';

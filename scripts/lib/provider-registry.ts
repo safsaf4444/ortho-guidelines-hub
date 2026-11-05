@@ -201,9 +201,28 @@ export const PROVIDER_REGISTRY: readonly ProviderRegistryEntry[] = [
       },
     ],
     uncoveredSurfaces: [
-      'Round Table consensus booklets (12 booklets, 2011–2025) — one catalogue entry already covers them via another route',
+      'Round Table consensus booklets (12 booklets, 2011–2025) — one catalogue entry already covers them via another route. '
+        + 'A parser exists (parseBofasRoundTableIndex in scripts/adapters/bofas.ts) and the coverage-gap tool can read the '
+        + 'page offline; registering it as a discovery surface is an owner decision (it would raise every earlier booklet as a candidate).',
       'The BOFAS Hyperbook — six catalogue entries already cover parts of it',
       'The BOFAS Registry annual reports',
+    ],
+  },
+  {
+    key: 'BSG',
+    name: 'British Sarcoma Group (BSG)',
+    catalogueProvider: 'BSG',
+    participation: 'active',
+    participationSetOn: '2026-11-05',
+    surfaceCoverage: 'complete',
+    surfaces: [
+      {
+        url: 'https://britishsarcomagroup.org.uk/guidelines-2/',
+        description:
+          'Guidelines & Resources index (Divi promo modules). Parsed by parseBsgGuidelinesIndex in scripts/adapters/bsg.ts; '
+          + 'the catalogue\'s recorded fallback /guidelines/ carries only a privacy-policy link (observed 2026-11-05). '
+          + 'Staging ownership stays with sync-providers (BSGAdapter); discovery runs BSG as a dry-run comparison only.',
+      },
     ],
   },
   {

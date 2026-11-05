@@ -73,8 +73,8 @@ import { parseBessPathwaysIndex, BESS_PATHWAYS_SURFACE } from './adapters/bess';
 import type { SurfaceParse } from './adapters/types';
 // BOFAS keeps its existing parser. Its parse rules are deliberately unchanged
 // by this batch — what improves is the MATCHING applied to what it returns.
-import { parseBofasPublicationsIndex } from './sync-providers';
-import { parseBofasStatedLabels } from './adapters/bofas';
+import { parseBofasPublicationsSurface, gateBofasScope } from './adapters/bofas';
+import { parseBsgGuidelinesIndex, gateBsgScope, BSG_GUIDELINES_SURFACE } from './adapters/bsg';
 
 const OUTPUT_DIR = path.join(process.cwd(), 'reports');
 
@@ -120,7 +120,9 @@ export interface SurfacePlan {
    * the parser read correctly, on grounds of SCOPE.
    */
   gate?: (
-    item: { topic: string; discoveredUrl: string },
+    // The runner passes the full DiscoveredRecord; `sectionHeading` is exposed
+    // so a gate can filter on the page's own section labels (BOFAS, BSG).
+    item: { topic: string; discoveredUrl: string; sectionHeading?: string },
     ctx: {
       index: ReturnType<typeof buildCatalogueIndex>;
       /** Normalised URL keys already discovered on EARLIER surfaces of this provider. */
@@ -205,7 +207,7 @@ export type RetirementAssertion = {
  */
 export function admitItem(
   plan: Pick<SurfacePlan, 'gate' | 'assertsRetirement'>,
-  item: { topic: string; discoveredUrl: string },
+  item: { topic: string; discoveredUrl: string; sectionHeading?: string },
   ctx: { index: ReturnType<typeof buildCatalogueIndex>; seenEarlier: Set<string> },
   surfaceFinalUrl: string,
 ):
@@ -261,23 +263,25 @@ export function surfacePlansFor(entry: ProviderRegistryEntry): SurfacePlan[] {
     case 'BESS':
       return [{ url: BESS_PATHWAYS_SURFACE, parse: parseBessPathwaysIndex, expectItems: true }];
     case 'BOFAS':
+      // Discovery V2: the full SurfaceParse parser (sections, stated years,
+      // visible exclusions). The sync pipeline's parseBofasPublicationsIndex is
+      // unchanged and still owns BOFAS staging. The UK-FALCON audit report is
+      // filtered by its section heading, visibly.
       return [
         {
           url: entry.surfaces[0].url,
-          parse: (html, surfaceUrl) => {
-            // The year the page prints beside each link, verbatim. See
-            // scripts/adapters/bofas.ts for what is and is not read.
-            const stated = parseBofasStatedLabels(html, surfaceUrl);
-            return {
-              items: parseBofasPublicationsIndex(html, surfaceUrl).map((d) => ({
-                topic: d.topic,
-                discoveredUrl: d.versions[0].url,
-                statedLabels: stated.get(d.versions[0].url) ?? [],
-              })),
-              excluded: [],
-            };
-          },
+          parse: parseBofasPublicationsSurface,
           expectItems: true,
+          gate: gateBofasScope,
+        },
+      ];
+    case 'BSG':
+      return [
+        {
+          url: BSG_GUIDELINES_SURFACE,
+          parse: parseBsgGuidelinesIndex,
+          expectItems: true,
+          gate: gateBsgScope,
         },
       ];
     default:

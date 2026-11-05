@@ -1,0 +1,23 @@
+{
+  "purpose": "Independent known-item evaluation, selected from catalogue titles/metadata before first engine execution. Targets are not an exhaustive clinical relevance set: report target-hit@5, top-1 and MRR, not clinical accuracy or precision.",
+  "frozenBeforeFirstExecution": true,
+  "catalogueBase": "caf34be9f52addb176a5d7ca863e8e2b4531fc42",
+  "queries": [
+    {"id":"h01","query":"liaison fracture national audit","targets":["fls-db"]},
+    {"id":"h02","query":"hip infection replacement","targets":["bhs-periprosthetic-joint-infection"]},
+    {"id":"h03","query":"hand injury national standards","targets":["bssh-hand-trauma-standards"]},
+    {"id":"h04","query":"imaging children spine EOS","targets":["nice-eos-imaging-htg274"]},
+    {"id":"h05","query":"ankle replacement BOFAS","targets":["bofas-total-ankle-replacement-statement","end-stage-ankle-arthritis"]},
+    {"id":"h06","query":"PFFD proximal femoral deficiency","targets":["nice-pffd-reconstruction-htg189"]},
+    {"id":"h07","query":"paediatric supracondylar BOAST","targets":["paediatric-supracondylar-fracture"]},
+    {"id":"h08","query":"radial fracture BSSH","targets":["bssh-distal-radial-fractures"]},
+    {"id":"h09","query":"talus","targets":["bofas-hyperbook-trauma"]},
+    {"id":"h10","query":"scaphoid GIRFT hand pathway","targets":["girft-scaphoid-fracture-pathway"]},
+    {"id":"h11","query":"mallet hand standards","targets":["bssh-hand-trauma-standards"]},
+    {"id":"h12","query":"CRPS hand surgery","targets":["bssh-crps-guidelines"]},
+    {"id":"h13","query":"patient information BSCOS","targets":["bscos-patient-information"]},
+    {"id":"h14","query":"infection peripheral bone adults","targets":["ebjis-peripheral-bone-infection-adults"]},
+    {"id":"h15","query":"renal dialysis transplantation","targets":[]},
+    {"id":"h16","query":"zxqv 982734","targets":[]}
+  ]
+}

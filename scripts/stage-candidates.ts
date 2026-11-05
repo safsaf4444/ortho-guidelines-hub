@@ -258,10 +258,17 @@ function readCandidates(): { candidates: IngestionCandidate[]; runId: string } {
 
   console.log(`[Stage] Read ${out.length} candidate(s) from ${reports.length} adapter report(s).`);
   if (failed.length > 0) {
-    console.warn(
+    console.error(
       `[Stage] ${failed.length} adapter(s) FAILED during discovery and contributed nothing: `
       + failed.map(r => `${r.adapter} (${r.error})`).join('; '),
     );
+    // A failed source is a failed run, even when every other adapter's
+    // candidates file cleanly (they still do — this only sets the exit code).
+    // Previously this was a warning and the step stayed green, so a week in
+    // which a provider could not be read looked identical, in the workflow
+    // status, to a week in which it published nothing.
+    console.error('[Stage] The run will exit 1 so the failed source is visible in the workflow status.');
+    process.exitCode = 1;
   }
 
   // The legacy `newCandidates` array is deliberately NOT staged. Those records

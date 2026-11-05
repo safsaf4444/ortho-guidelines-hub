@@ -133,5 +133,37 @@ eq(
   'https://other.test/z.pdf',
 );
 
+console.log('\n[6] Document paths and publisher-supplied accessible titles');
+const LINK_VARIANTS = `
+  <a href="/guidance.PDF?version=2#page=3">Uppercase document</a>
+  <a href="/search?q=guidance.pdf">Search results</a>
+  <a href="/guidance.pdf/preview">Preview page</a>
+  <a href="javascript:open('guidance.pdf')">Script link</a>
+  <a href="https://[invalid/guidance.pdf">Malformed link</a>
+  <a href="/nerve.pdf" aria-label=" Peripheral   nerve guidance ">here</a>
+  <a href="/thumb.pdf" title="Thumb injury guidance">Download PDF</a>
+  <a href="/hand.pdf" aria-label="Accessible label" title="Tooltip">Hand injury guidance</a>
+  <a href="/empty.pdf" aria-label="Hand standards"></a>
+  <a href="/fallback.pdf" aria-label="Click here" title="Published standards">here</a>
+  <a href="/unlabelled.pdf">here</a>
+  <a href="//other.test/external.pdf">External guidance</a>
+`;
+const variants = parseBsshGuidelinesIndex(LINK_VARIANTS, BASE);
+eq('only valid HTTP(S) document paths admitted', variants.length, 8);
+eq('uppercase PDF preserves query and fragment', variants[0]?.versions[0].url,
+  'https://www.bssh.ac.uk/guidance.PDF?version=2#page=3');
+eq('generic text uses verbatim aria-label with collapsed whitespace', variants[1]?.topic, 'Peripheral nerve guidance');
+eq('generic download text uses verbatim title attribute', variants[2]?.topic, 'Thumb injury guidance');
+eq('meaningful visible title wins over attributes', variants[3]?.topic, 'Hand injury guidance');
+eq('empty anchor can use its publisher-supplied accessible label', variants[4]?.topic, 'Hand standards');
+eq('generic aria-label does not hide meaningful title attribute', variants[5]?.topic, 'Published standards');
+eq('unlabelled generic text remains an observation, no title invented', variants[6]?.topic, 'here');
+eq('protocol-relative PDF resolves correctly', variants[7]?.versions[0].url, 'https://other.test/external.pdf');
+eq('malformed links do not abort later valid items', variants.at(-1)?.topic, 'External guidance');
+eq('variant fixture is deterministic', parseBsshGuidelinesIndex(LINK_VARIANTS, BASE), variants);
+eq('absolute publisher URL bytes survive validation',
+  parseBsshGuidelinesIndex('<a href="https://Other.test:443/Hand%2dGuide.PDF?ver=x%3d#Part">Hand guidance</a>', BASE)[0]?.versions[0].url,
+  'https://Other.test:443/Hand%2dGuide.PDF?ver=x%3d#Part');
+
 console.log(`\n──────────────\n${pass} passed, ${fail} failed\n`);
 process.exit(fail === 0 ? 0 : 1);

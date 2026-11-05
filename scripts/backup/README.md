@@ -119,3 +119,29 @@ The whole procedure is rehearsed locally by `npx tsx scripts/tests/local-supabas
 - **Scope is `public` only.** Roles, extensions and other schemas (`auth`, `storage`, `vault`, …) are not included. Production uses no extension objects from `public`; the restore target must be a Supabase database.
 - **Free plan:** there are no platform backups or point-in-time recovery to fall back on. This logical dump is the backup.
 - **Not yet run against production.** The pooler's support for an exported snapshot across two sessions (session mode) is expected but unproven. If it fails, the run stops with `FAILED.txt` and writes no backup.
+
+## Target validation (SAF-12)
+
+The PowerShell wrapper validates connection fields before encryption probes,
+Docker, folder creation or password prompts. Local test exemptions are limited
+to exact `localhost` (case-insensitive), `127.0.0.1`, `host.docker.internal`,
+and bare `::1`; a supplied local-test credential is still required. Lookalike
+names are remote and cannot disable TLS or use that credential parameter.
+
+Only the literal database name `postgres` is supported. PostgreSQL URIs,
+keyword connection strings, host lists, socket paths, host:port strings,
+trailing-dot aliases, ambiguous IPv4 and bracketed/expanded IPv6 are refused.
+The host field accepts a single DNS name, canonical dotted IPv4, or bare `::1`;
+ports must be 1?65535. Remote targets still require TLS and the prompted-password
+path. This does not add a remote backup-host allowlist or verify DNS resolution.
+
+Offline regression test (no operational wrapper is invoked):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/tests/backup-safety.test.ps1
+```
+
+The harness parses both wrappers as data and executes only command-whitelisted
+target branches plus the command-free validation helper. Invalid cases must
+fail before a harmless operational-boundary sentinel. It does not test Docker,
+PostgreSQL, actual credential handling, dumps, restores or encrypted storage.

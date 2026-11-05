@@ -452,7 +452,11 @@ try {
   {
     // The live shape of candidate 1 of the 15 Oct sweep: BOFAS hosts its own
     // copy of a co-published document the catalogue holds at a BOA address.
+    // The V2 BOFAS parser admits a PDF only under a content heading (a
+    // headless page is treated as a structural change and every PDF is
+    // excluded visibly), so the fixture carries the live page's <h2>.
     const BOFAS_PAGE = `
+      <h2>BOFAS Position Statements</h2>
       <p><a href="/Portals/0/Position Statements/SpecS-Management-of-End-Stage-Ankle-Arthritis.pdf?ver=IfQ%3d%3d">BOFAS / BOA Speciality Standards on Management of End Stage Ankle Arthritis</a> (2025)</p>`;
     responder = () => new Response(BOFAS_PAGE, { status: 200 });
 
@@ -537,12 +541,17 @@ try {
 
     // (c) End to end: BOFAS with a scope filter added, over the five documents
     // the catalogue already holds plus one item the filter declines.
+    // Heading required by the V2 BOFAS parser (headless pages are treated as a
+    // structural change and admit nothing); the research PDF sits under its
+    // own heading so the test's scope filter, not the parser, is what declines it.
     const BOFAS_HELD_PAGE = `
+      <h2>BOFAS Position Statements</h2>
       <p><a href="/Portals/0/Position Statements/BOFAS VTE Statement - v1.0 - 2025-06.pdf?ver=a">BOFAS Position Statement on VTE</a> (2025)</p>
       <p><a href="/Portals/0/Position Statements/FAME STUDY POSITION STATEMENT.pdf?ver=b">BOFAS Position Statement on the FAME Study</a> (2019)</p>
       <p><a href="/Portals/0/Position Statements/BOFAS Statement on TAR .pdf?ver=c">BOFAS Position Statement on Total Ankle Replacement</a> (2019)</p>
       <p><a href="/Portals/0/Position%20Statements/DiabeticFoot%20FINAL.pdf?ver=d">BOFAS / BOA / Multidisciplinary Diabetic Foot Guidelines</a> (2016)</p>
       <p><a href="/Portals/0/Position Statements/BOFAS Pathways 2.pdf?ver=e">BOFAS Pathways of Care in Foot and Ankle Surgery</a></p>
+      <h2>Research</h2>
       <p><a href="/Portals/0/Research/Some-Audit-Report.pdf?ver=f">A research report</a> (2022)</p>`;
     responder = () => new Response(BOFAS_HELD_PAGE, { status: 200 });
 

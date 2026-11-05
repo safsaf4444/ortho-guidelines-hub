@@ -68,6 +68,7 @@ import path from 'path';
 import { pathToFileURL } from 'url';
 import * as cheerio from 'cheerio';
 import RssParser from 'rss-parser';
+import { fetchProviderIndex } from './lib/provider-fetch';
 import { GUIDELINES_DATA, type Guideline } from '../src/data/guidelines-data';
 import {
   CANDIDATE_SCHEMA_VERSION,
@@ -172,20 +173,54 @@ function isBlocked(url: string, blocked: Set<string>): boolean {
 
 // ─── Adapters ────────────────────────────────────────────────────────────────
 
+/** A BOASt index whose section structure cannot be trusted. Fails the BOA run. */
+export class BoaIndexStructureError extends Error {
+  constructor(message: string) {
+    super(`BOA index structure: ${message}`);
+    this.name = 'BoaIndexStructureError';
+  }
+}
+
 /**
  * Pure DOM parse of a BOASt index page.
  *
  * Split out of `BOAAdapter.fetchCandidates` so the parsing rules can be tested
- * offline against fixture HTML — previously they were only reachable by making
- * a live request to boa.ac.uk. Behaviour is unchanged: same selector, same
- * noise filter, same dedupe, same whitespace handling, same URL resolution,
- * same result order. `baseUrl` receives exactly the URL that was fetched, which
- * is what the inline version used to resolve relative hrefs against.
+ * offline against fixture HTML. Unchanged from before: the asset selector, the
+ * noise filter, the dedupe (first occurrence wins), the whitespace handling,
+ * the URL resolution and the result order. `baseUrl` receives exactly the URL
+ * that was fetched.
+ *
+ * SECTIONS (SAF-21). The index groups its standards as an `<h4>` heading
+ * immediately followed by the list that belongs to it (`<h4>Clinical BOASts</h4>
+ * <ul>…</ul>`). Each candidate carries publisher evidence, verbatim
+ * (whitespace collapsed), in the existing version-link fields:
+ *   versions[0].label  the text of the heading that OWNS the link's list;
+ *   versions[0].date   the `<em>` text in the link's own `<li>`, also through
+ *                      wrapper markup (`<li><p>… <em>…</em></p></li>`), but
+ *                      never from a list nested inside it or from the text
+ *                      of any link in it ("June 2026", "Updated July 2025", "Archived June
+ *                      2026"), absent when the page states none.
+ * No heading names are hard-coded, and nothing is classified from them: an
+ * archived standard is an observation for editorial review, never "withdrawn".
+ *
+ * FAIL-CLOSED. The structure is checked, not guessed. The parse throws
+ * {@link BoaIndexStructureError}, and the adapter run is recorded as failed
+ * rather than returning a partial or mislabelled set, when:
+ *   - a (non-noise) asset link's NEAREST list does not directly follow an
+ *     `<h4>` (a stray link, a list whose heading is missing or was moved, a
+ *     nested sub-list, or changed section markup). Ownership is never
+ *     inherited from an outer list;
+ *   - a section list is nested inside another section list (two owners);
+ *   - a heading that owns a list has no text;
+ *   - the same document URL appears under two different sections;
+ *   - no asset link is found inside any section list at all (wrong page, or
+ *     the markup changed wholesale).
  */
 export function parseBoaIndex(html: string, baseUrl: string): DiscoveredItem[] {
   const $ = cheerio.load(html);
   const results: DiscoveredItem[] = [];
-  const seen = new Set<string>();
+  const sectionOf = new Map<string, string>();
+  const clean = (value: string) => value.replace(/\s+/g, ' ').trim();
 
   // Nav/chrome link text that is not a guideline title. The BOASt index carries
   // an aggregate "Download and read the full guidelines for BOA Standards
@@ -194,31 +229,87 @@ export function parseBoaIndex(html: string, baseUrl: string): DiscoveredItem[] {
   // without silently reintroducing the noise.
   const NOISE_TOPIC_PHRASES = ['download and read the full guidelines'];
 
+  // The lists that belong to a section: the element immediately after an <h4>.
+  const owner = new Map<unknown, string>();
+  $('h4').each((_, h) => {
+    const list = $(h).next();
+    if (!list.is('ul, ol')) return;
+    const heading = clean($(h).text());
+    if (!heading) throw new BoaIndexStructureError('a section list follows an <h4> with no text.');
+    owner.set(list.get(0), heading);
+  });
+
   $("a[href*='asset']").each((_, el) => {
     const link = $(el);
     const rawHref = link.attr('href')?.trim();
     // Verbatim link text, whitespace-collapsed only. No rewriting.
-    const topic = link.text().replace(/\s+/g, ' ').trim();
+    const topic = clean(link.text());
 
     if (!rawHref || !topic) return;
 
     const topicLower = topic.toLowerCase();
     if (NOISE_TOPIC_PHRASES.some(p => topicLower.includes(p))) return;
 
+    // Ownership is taken from the link's NEAREST list only, never inherited
+    // from an outer one: a nested list that does not itself follow an <h4>
+    // (e.g. an <h4> inside an <li>, then other markup, then the list) must not
+    // pick up an unrelated outer heading.
+    const list = link.closest('ul, ol');
+    if (!list.length || !owner.has(list.get(0))) {
+      throw new BoaIndexStructureError(
+        `asset link "${topic}" (${rawHref}) is not inside a list that directly follows an <h4> section heading. `
+        + 'Refusing to guess its section.',
+      );
+    }
+    const section = owner.get(list.get(0))!;
+    // A section list nested inside another section list has two candidate
+    // owners. Ambiguous: refuse rather than pick one.
+    const outer = list.parents('ul, ol').filter((_, l) => owner.has(l)).first();
+    if (outer.length) {
+      throw new BoaIndexStructureError(
+        `asset link "${topic}" (${rawHref}) is in section "${section}", which is nested inside section `
+        + `"${owner.get(outer.get(0))}". Refusing to guess its section.`,
+      );
+    }
+
     const fullUrl = rawHref.startsWith('http')
       ? rawHref
       : new URL(rawHref, baseUrl).href;
 
-    if (seen.has(fullUrl)) return;
-    seen.add(fullUrl);
+    const earlier = sectionOf.get(fullUrl);
+    if (earlier !== undefined) {
+      if (earlier !== section) {
+        throw new BoaIndexStructureError(`${fullUrl} is listed under both "${earlier}" and "${section}".`);
+      }
+      return;
+    }
+    sectionOf.set(fullUrl, section);
 
+    // Publisher date: the <em> text belonging to the link's own <li> (a child
+    // of the owning list), found through wrapper markup such as <p> or <span>.
+    // Emphasis inside ANY anchor in the <li> (the document link or a secondary
+    // link such as "Notes"), or inside any list nested in the <li>, belongs to
+    // something else and is ignored.
+    const item = link.closest('li');
+    const dateEms = item.length && item.parent().get(0) === list.get(0)
+      ? item.find('em').filter((_, em) => {
+        const e = $(em);
+        const anchor = e.closest('a');
+        return e.closest('ul, ol').get(0) === list.get(0)
+          && !(anchor.length && $.contains(item.get(0)!, anchor.get(0)!));
+      })
+      : $();
+    const date = clean(dateEms.text());
     results.push({
       topic,
       source: 'BOA',
-      versions: [{ label: 'BOASt PDF', url: fullUrl }],
+      versions: [{ label: section, url: fullUrl, ...(date ? { date } : {}) }],
     });
   });
 
+  if (results.length === 0) {
+    throw new BoaIndexStructureError('no asset links were found inside any section list.');
+  }
   return results;
 }
 
@@ -235,15 +326,7 @@ export const BOAAdapter: ProviderAdapter = {
   sourceTag: 'BOA',
   async fetchCandidates(): Promise<DiscoveredItem[]> {
     const targetUrl = 'https://www.boa.ac.uk/standards-guidance/boasts.html';
-    const res = await fetch(targetUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) OrthoGuidelinesHub/1.0',
-      },
-    });
-
-    if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${targetUrl}`);
-
-    const html = await res.text();
+    const html = await fetchProviderIndex(targetUrl);
     return parseBoaIndex(html, targetUrl);
   },
 };
@@ -307,15 +390,7 @@ export const BSGAdapter: ProviderAdapter = {
   sourceTag: 'BSG',
   async fetchCandidates(): Promise<DiscoveredItem[]> {
     const targetUrl = 'https://britishsarcomagroup.org.uk/guidelines-2/';
-    const res = await fetch(targetUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) OrthoGuidelinesHub/1.0',
-      },
-    });
-
-    if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${targetUrl}`);
-
-    const html = await res.text();
+    const html = await fetchProviderIndex(targetUrl);
     return parseBsgIndex(html, targetUrl);
   },
 };
@@ -383,15 +458,7 @@ export const BOFASAdapter: ProviderAdapter = {
   sourceTag: 'BOFAS',
   async fetchCandidates(): Promise<DiscoveredItem[]> {
     const targetUrl = 'https://www.bofas.org.uk/clinician/research/bofas-publications';
-    const res = await fetch(targetUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) OrthoGuidelinesHub/1.0',
-      },
-    });
-
-    if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${targetUrl}`);
-
-    const html = await res.text();
+    const html = await fetchProviderIndex(targetUrl);
     return parseBofasPublicationsIndex(html, targetUrl);
   },
 };
@@ -421,14 +488,33 @@ export function parseBsshGuidelinesIndex(html: string, baseUrl: string): Discove
   const results: DiscoveredItem[] = [];
   const seen = new Set<string>();
 
-  $('a[href*=".pdf"]').each((_, el) => {
+  // Inspect the parsed pathname: a query containing '.pdf' is not a document,
+  // while an uppercase .PDF extension is. Malformed links cannot abort a page.
+  $('a[href]').each((_, el) => {
     const link = $(el);
     const rawHref = link.attr('href')?.trim();
-    const topic = link.text().replace(/\s+/g, ' ').trim();
+    const clean = (value: string | undefined) => (value ?? '').replace(/\s+/g, ' ').trim();
+    const anchorText = clean(link.text());
+    const generic = /^(?:here|click here|read more|download(?: pdf)?)\.?$/i;
+    // Only publisher-supplied labels on this exact anchor are eligible. Keep
+    // meaningful visible text first; never infer a title from surrounding prose
+    // or a filename. Without a better label, preserve the original observation.
+    const topic = (!anchorText || generic.test(anchorText))
+      ? [clean(link.attr('aria-label')), clean(link.attr('title'))]
+        .find((value) => value && !generic.test(value)) || anchorText
+      : anchorText;
 
     if (!rawHref || !topic) return;
 
-    const fullUrl = rawHref.startsWith('http') ? rawHref : new URL(rawHref, baseUrl).href;
+    let resolved: URL;
+    try {
+      resolved = new URL(rawHref, baseUrl);
+    } catch {
+      return;
+    }
+    if (!['http:', 'https:'].includes(resolved.protocol) || !/\.pdf$/i.test(resolved.pathname)) return;
+    // Validation must not rewrite a publisher's absolute source URL.
+    const fullUrl = /^https?:\/\//i.test(rawHref) ? rawHref : resolved.href;
 
     if (seen.has(fullUrl)) return;
     seen.add(fullUrl);
@@ -454,15 +540,7 @@ export const BSSHAdapter: ProviderAdapter = {
   sourceTag: 'BSSH',
   async fetchCandidates(): Promise<DiscoveredItem[]> {
     const targetUrl = 'https://www.bssh.ac.uk/professionals/guidelines.aspx';
-    const res = await fetch(targetUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) OrthoGuidelinesHub/1.0',
-      },
-    });
-
-    if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${targetUrl}`);
-
-    const html = await res.text();
+    const html = await fetchProviderIndex(targetUrl);
     return parseBsshGuidelinesIndex(html, targetUrl);
   },
 };
@@ -619,7 +697,22 @@ function describeLooseMatch(discovered: string, catalogue: string): string {
 
 // ─── Diff Engine ─────────────────────────────────────────────────────────────
 
-export async function runDryRun(adapters: ProviderAdapter[]): Promise<DiffReport[]> {
+/**
+ * Options for {@link runDryRun}.
+ *
+ * `requireItems`: every adapter is reading an index page known to list
+ * guidance, so ZERO parsed items means the markup or selector moved, not that
+ * the provider withdrew everything. With this set, a zero-item sweep is
+ * recorded as a failed adapter (report.error) instead of a successful empty
+ * one — the same rule scripts/discover.ts applies to its surfaces
+ * (`expectItems`). Off by default so stub adapters in the offline tests keep
+ * their meaning; the CLI entrypoint below turns it on.
+ */
+export interface DryRunOptions {
+  requireItems?: boolean;
+}
+
+export async function runDryRun(adapters: ProviderAdapter[], options: DryRunOptions = {}): Promise<DiffReport[]> {
   const blocked = getBlockedDomains();
   const existingUrlMap = loadExistingUrlMap(GUIDELINES_DATA);
   const catalogue = loadCatalogueIndex(GUIDELINES_DATA);
@@ -635,6 +728,12 @@ export async function runDryRun(adapters: ProviderAdapter[]): Promise<DiffReport
 
     try {
       const discovered = await adapter.fetchCandidates();
+      if (options.requireItems && discovered.length === 0) {
+        throw new Error(
+          `parsed 0 items from ${adapter.name}, whose index is known to carry items. Treated as a failed `
+            + 'sweep (markup or selector change), not as an empty result.',
+        );
+      }
       let matchedCount = 0;
       let skippedBlocked = 0;
       let requiresComparison = 0;
@@ -776,7 +875,7 @@ if (isMain) {
     // provider-feasibility report for details on each.
     const adapters: ProviderAdapter[] = [BOAAdapter, BSGAdapter, BOFASAdapter, BSSHAdapter];
 
-    const reports = await runDryRun(adapters);
+    const reports = await runDryRun(adapters, { requireItems: true });
 
     console.log('\n=== Summary Report ===');
     for (const r of reports) {

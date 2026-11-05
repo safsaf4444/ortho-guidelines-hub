@@ -73,11 +73,28 @@ check('…closing the modal (its draft)', !!modalReset && /setEditingGuideline\(
 check('…and dropping the staging id it would publish against',
   !!modalReset && /setStagedCandidateId\(null\)/.test(modalReset[1]));
 
-const cardNote = app.match(/function CardChangelog[\s\S]*?\n}\n/);
+// Accept either checkout EOL; retain both ownership assertions below.
+const cardNotePattern = /function CardChangelog[\s\S]*?\r?\n}\r?\n/;
+const cardNote = app.match(cardNotePattern);
 check('card notes read the owner from context',
   !!cardNote && /useContext\(DraftOwnerContext\)/.test(cardNote[0]));
 check('card notes clear their text when the owner changes',
   !!cardNote && /if \(textOwner !== draftOwner\) \{[\s\S]*?setText\(''\)/.test(cardNote[0]));
+
+// Same real source, both checkout formats. Retain the owner/reset requirements.
+for (const [format, source] of [
+  ['LF', app.replace(/\r\n/g, '\n')],
+  ['CRLF', app.replace(/\r\n/g, '\n').replace(/\n/g, '\r\n')],
+]) {
+  const card = source.match(cardNotePattern)?.[0] ?? '';
+  check(format + ': extraction retains both ownership guards',
+    /useContext\(DraftOwnerContext\)/.test(card)
+    && /if \(textOwner !== draftOwner\) \{[\s\S]*?setText\(''\)/.test(card));
+  check(format + ': removing owner read is still detected',
+    !/useContext\(DraftOwnerContext\)/.test(card.replace('useContext(DraftOwnerContext)', 'undefined')));
+  check(format + ': removing draft reset is still detected',
+    !/if \(textOwner !== draftOwner\) \{[\s\S]*?setText\(''\)/.test(card.replaceAll("setText('')", '/* reset removed */')));
+}
 
 check('the review queue keeps drafts in React state only (no browser storage)',
   !/localStorage|sessionStorage|indexedDB/.test(dashboard));

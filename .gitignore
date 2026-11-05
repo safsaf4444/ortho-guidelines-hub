@@ -56,3 +56,14 @@ scripts/.equivalence-baseline.ts
 scripts/tests/local-supabase/.work/
 scripts/tests/local-supabase/supabase/.temp/
 scripts/tests/local-supabase/supabase/.branches/
+
+# Durable per-provider monitoring baselines (scripts/lib/monitor-store.ts); local state, never committed.
+.monitoring-baselines/
+
+# Generated final-consolidation handoff artifacts, delivered separately from source.
+/FINAL-INTEGRATION-REPORT.md
+/FINAL-RELEASE-CHECKLIST.md
+/OWNER-DECISIONS.md
+/FINAL-HANDOFF.md
+/final-integration.patch
+/final-integration.patch.sha256

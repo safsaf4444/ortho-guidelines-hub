@@ -82,7 +82,9 @@ $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path.TrimEnd('\')
 $src = if ($SourceRoot) { (Resolve-Path $SourceRoot).Path.TrimEnd('\') } else { $repoRoot }
 
 # -- Target: the intended project only, or the local rehearsal --------------
-$isLocalHost = $PoolerHost -match '^(localhost|127\.|host\.docker\.internal$)'
+. (Join-Path $PSScriptRoot '../lib/Database-Target.ps1')
+try { Assert-DatabaseConnectionParts -HostName $PoolerHost -Port $Port -Database $Database } catch { Fail $_.Exception.Message }
+$isLocalHost = Test-LocalDatabaseHost $PoolerHost
 if ($isLocalHost) {
   if (-not $Credential) { Fail 'a local host is for the rehearsal only; pass -Credential for it.' }
 } else {

@@ -53,7 +53,9 @@ foreach ($f in $forbidden) {
   }
 }
 if ($dest -match '\\OneDrive( - [^\\]+)?(\\|$)') { Fail "destination $dest looks like a OneDrive folder." }
-$isLocalHost = $PoolerHost -match '^(localhost|127\.|host\.docker\.internal$)'
+. (Join-Path $PSScriptRoot '../lib/Database-Target.ps1')
+try { Assert-DatabaseConnectionParts -HostName $PoolerHost -Port $Port -Database $Database } catch { Fail $_.Exception.Message }
+$isLocalHost = Test-LocalDatabaseHost $PoolerHost
 if ($isLocalHost -and -not $Credential) { Fail 'a local host is for testing only; pass -Credential for it.' }
 if (-not $isLocalHost -and $SslMode -ne 'require') { Fail 'a remote host needs -SslMode require.' }
 if (-not $isLocalHost -and $Credential) { Fail '-Credential is for the local test only; for a real database the password is prompted for (not echoed).' }

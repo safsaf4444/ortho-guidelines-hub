@@ -34,4 +34,13 @@
   body {
     @apply bg-background text-foreground;
   }
+  /* One visible keyboard-focus indicator for every control that does not set
+     its own. slate-700 is 10:1 on white; the offset keeps it clear of dark
+     selected buttons. In the base layer, so components with a deliberate
+     focus-visible ring (utilities layer) still win. Mouse clicks do not
+     trigger :focus-visible on buttons, so this only appears for keyboard use. */
+  :focus-visible {
+    outline: 2px solid #334155;
+    outline-offset: 2px;
+  }
 }

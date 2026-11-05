@@ -3,6 +3,7 @@ import { GUIDELINES_DATA } from '../data/guidelines-data';
 import type { Guideline } from '../data/guidelines-data';
 import { toGuideline, toDbRow, type DbGuideline } from './guidelines-mapper';
 import { classifyWriteFailure, isZeroRowWrite, markRefused, refusedOrMissingMessage } from './write-result';
+import { endSentence } from './utils';
 
 /** Where the rows the app is showing actually came from. */
 export type GuidelinesSource = 'live' | 'fallback';
@@ -72,7 +73,7 @@ export const guidelinesService = {
 
       if (error) {
         console.warn('[guidelines-service] query error — falling back to static data:', error.message);
-        return { rows: visible(), source: 'fallback', reason: `The database returned an error: ${error.message}` };
+        return { rows: visible(), source: 'fallback', reason: endSentence(`The database returned an error: ${error.message}`) };
       }
       if (!data || data.length === 0) {
         console.info('[guidelines-service] table is empty — falling back to static data (run npm run seed)');
@@ -82,7 +83,7 @@ export const guidelinesService = {
     } catch (err) {
       console.warn('[guidelines-service] Supabase unreachable — falling back to static data:', err);
       const msg = err instanceof Error ? err.message : String(err);
-      return { rows: visible(), source: 'fallback', reason: `The database could not be reached: ${msg}` };
+      return { rows: visible(), source: 'fallback', reason: endSentence(`The database could not be reached: ${msg}`) };
     }
   },
 
