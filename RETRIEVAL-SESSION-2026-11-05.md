@@ -23,8 +23,10 @@ carried into this branch unchanged; they are not part of this retrieval work.
 - `scripts/tests/provider-fetch.test.ts`: loopback HTTP server exercises success,
   HTTP 503, stalled headers, stalled body and recovery/no retries; mocked fetch
   verifies all four adapters use a signal and the established User-Agent.
-- `package.json`: added `test:provider-fetch`. Run it separately from
-  `test:offline`; it binds a disposable loopback server.
+- `package.json`: added `test:provider-fetch` (focused alias), and the same
+  test file is the last step of `test:offline` (it binds a disposable loopback
+  server, as `apply-migrations.test.ts` already does). It runs once per
+  `test:offline`; the alias is not called from there.
 
 ## Confirmed architecture and offline baseline
 
