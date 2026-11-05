@@ -195,18 +195,22 @@ export class BoaIndexStructureError extends Error {
  * <ul>…</ul>`). Each candidate carries publisher evidence, verbatim
  * (whitespace collapsed), in the existing version-link fields:
  *   versions[0].label  the text of the heading that OWNS the link's list;
- *   versions[0].date   the `<em>` text in the link's own `<li>`
- *                      ("June 2026", "Updated July 2025", "Archived June 2026"),
- *                      absent when the page states none.
+ *   versions[0].date   the `<em>` text in the link's own `<li>`, also through
+ *                      wrapper markup (`<li><p>… <em>…</em></p></li>`), but
+ *                      never from a list nested inside it or from the link
+ *                      text ("June 2026", "Updated July 2025", "Archived June
+ *                      2026"), absent when the page states none.
  * No heading names are hard-coded, and nothing is classified from them: an
  * archived standard is an observation for editorial review, never "withdrawn".
  *
  * FAIL-CLOSED. The structure is checked, not guessed. The parse throws
  * {@link BoaIndexStructureError}, and the adapter run is recorded as failed
  * rather than returning a partial or mislabelled set, when:
- *   - a (non-noise) asset link is not inside a list that directly follows an
- *     `<h4>` (a stray link, a list whose heading is missing or was moved, or
- *     changed section markup);
+ *   - a (non-noise) asset link's NEAREST list does not directly follow an
+ *     `<h4>` (a stray link, a list whose heading is missing or was moved, a
+ *     nested sub-list, or changed section markup). Ownership is never
+ *     inherited from an outer list;
+ *   - a section list is nested inside another section list (two owners);
  *   - a heading that owns a list has no text;
  *   - the same document URL appears under two different sections;
  *   - no asset link is found inside any section list at all (wrong page, or
@@ -246,14 +250,27 @@ export function parseBoaIndex(html: string, baseUrl: string): DiscoveredItem[] {
     const topicLower = topic.toLowerCase();
     if (NOISE_TOPIC_PHRASES.some(p => topicLower.includes(p))) return;
 
-    const list = link.parents('ul, ol').filter((_, l) => owner.has(l)).first();
-    if (!list.length) {
+    // Ownership is taken from the link's NEAREST list only, never inherited
+    // from an outer one: a nested list that does not itself follow an <h4>
+    // (e.g. an <h4> inside an <li>, then other markup, then the list) must not
+    // pick up an unrelated outer heading.
+    const list = link.closest('ul, ol');
+    if (!list.length || !owner.has(list.get(0))) {
       throw new BoaIndexStructureError(
         `asset link "${topic}" (${rawHref}) is not inside a list that directly follows an <h4> section heading. `
         + 'Refusing to guess its section.',
       );
     }
     const section = owner.get(list.get(0))!;
+    // A section list nested inside another section list has two candidate
+    // owners. Ambiguous: refuse rather than pick one.
+    const outer = list.parents('ul, ol').filter((_, l) => owner.has(l)).first();
+    if (outer.length) {
+      throw new BoaIndexStructureError(
+        `asset link "${topic}" (${rawHref}) is in section "${section}", which is nested inside section `
+        + `"${owner.get(outer.get(0))}". Refusing to guess its section.`,
+      );
+    }
 
     const fullUrl = rawHref.startsWith('http')
       ? rawHref
@@ -268,8 +285,18 @@ export function parseBoaIndex(html: string, baseUrl: string): DiscoveredItem[] {
     }
     sectionOf.set(fullUrl, section);
 
+    // Publisher date: the <em> text belonging to the link's own <li> (a child
+    // of the owning list), found through wrapper markup such as <p> or <span>.
+    // Emphasis inside the link itself, or inside any list nested in the <li>,
+    // belongs to something else and is ignored.
     const item = link.closest('li');
-    const date = item.length ? clean(item.children('em').text()) : '';
+    const dateEms = item.length && item.parent().get(0) === list.get(0)
+      ? item.find('em').filter((_, em) => {
+        const e = $(em);
+        return e.closest('ul, ol').get(0) === list.get(0) && !e.closest('a').is(link);
+      })
+      : $();
+    const date = clean(dateEms.text());
     results.push({
       topic,
       source: 'BOA',

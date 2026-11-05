@@ -251,5 +251,43 @@ throwsStructure('a page with only the aggregate bundle', '<h4>Introduction</h4><
 check('the error is named for the run log', new BoaIndexStructureError('x').name === 'BoaIndexStructureError'
   && /^BOA index structure: /.test(new BoaIndexStructureError('x').message));
 
+console.log('\n[8] Review follow-up: dates through wrappers; no inherited section ownership');
+
+const one = (body: string) => parseBoaIndex(`<h4>Clinical</h4><ul>${body}</ul>`, BASE);
+const dateOf = (body: string) => one(body)[0].versions[0].date;
+eq('date: direct child <em> (unchanged)', dateOf('<li><a href="/asset/A/">Standard</a> <em>June 2026</em></li>'), 'June 2026');
+eq('date: <em> inside a <p> wrapper', dateOf('<li><p><a href="/asset/A/">Standard</a> <em>Archived June 2026</em></p></li>'), 'Archived June 2026');
+eq('date: <em> inside nested wrappers', dateOf('<li><div><span><a href="/asset/A/">Standard</a></span> <span><em>&nbsp; Updated July 2025</em></span></div></li>'), 'Updated July 2025');
+check('date: absent when the <li> has no <em>', !('date' in one('<li><p><a href="/asset/A/">Standard</a></p></li>')[0].versions[0]));
+check('date: emphasis inside the link text is not a date',
+  !('date' in one('<li><a href="/asset/A/"><em>Standard</em></a></li>')[0].versions[0]));
+check('date: <em> in a list nested inside the <li> is ignored', (() => {
+  let err: unknown;
+  let v: { date?: string } | undefined;
+  try { v = one('<li><a href="/asset/A/">Standard</a><ul><li>Note <em>March 2020</em></li></ul></li>')[0].versions[0]; } catch (e) { err = e; }
+  return !err && v !== undefined && !('date' in v);
+})());
+eq('date: own <em> kept, nested-list <em> ignored',
+  dateOf('<li><p><a href="/asset/A/">Standard</a> <em>June 2026</em></p><ol><li><em>Archived 2019</em></li></ol></li>'), 'June 2026');
+eq('date: a sibling item\'s <em> never leaks',
+  one('<li><a href="/asset/A/">One</a></li><li><a href="/asset/B/">Two</a> <em>May 2024</em></li>').map((i) => i.versions[0].date ?? null),
+  [null, 'May 2024']);
+
+throwsStructure('nested heading, intervening markup, then a list: no inherited outer section',
+  '<h4>Clinical</h4><ul><li><h4>Archived</h4><p>Note</p><ul><li><a href="/asset/A/">Document</a></li></ul></li></ul>',
+  /"Document".*not inside a list that directly follows an <h4>/);
+throwsStructure('asset link in an unheaded sub-list of a section list',
+  '<h4>Clinical</h4><ul><li>Group<ul><li><a href="/asset/A/">Document</a></li></ul></li></ul>',
+  /"Document".*not inside a list that directly follows an <h4>/);
+throwsStructure('a section list nested inside another section list (two owners)',
+  '<h4>Clinical</h4><ul><li><h4>Archived</h4><ul><li><a href="/asset/A/">Document</a></li></ul></li></ul>',
+  /"Document".*section "Archived", which is nested inside section "Clinical"/);
+eq('legitimate sibling section lists are unaffected',
+  parseBoaIndex('<h4>Clinical</h4><ul><li><a href="/asset/A/">One</a> <em>June 2026</em></li></ul>'
+    + '<h4>Archived</h4><ul><li><p><a href="/asset/B/">Two</a> <em>Archived May 2019</em></p></li></ul>', BASE)
+    .map((i) => [i.topic, i.versions[0].label, i.versions[0].date]),
+  [['One', 'Clinical', 'June 2026'], ['Two', 'Archived', 'Archived May 2019']]);
+eq('section fixture [6] still parses identically', parseBoaIndex(SECTIONS, BASE), sect);
+
 console.log(`\n──────────────\n${pass} passed, ${fail} failed\n`);
 process.exit(fail === 0 ? 0 : 1);
