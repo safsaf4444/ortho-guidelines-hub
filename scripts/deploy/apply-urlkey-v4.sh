@@ -24,7 +24,8 @@
 #
 # Inputs (environment only): PGHOST PGPORT PGUSER PGDATABASE PGSSLMODE
 # PGAPPNAME, PGPASSWORD (passed by NAME), MODE, SHA_MIG SHA_GATE SHA_RB,
-# EXPECT_GUIDELINES EXPECT_CHANGELOG EXPECT_STAGED EXPECT_EDITORS EXPECT_HOLDS.
+# EXPECT_GUIDELINES EXPECT_CHANGELOG EXPECT_STAGED EXPECT_EDITORS EXPECT_HOLDS,
+# and for MODE=rollback PRE_V4_HOLDS (the apply record's expected.holds).
 # Files: /sql (read-only copies made and hashed by the host script).
 # Output: /record/transcript.log and /record/steps.tsv.
 #
@@ -65,6 +66,7 @@ for v in PGHOST PGUSER PGDATABASE PGPASSWORD MODE SHA_MIG SHA_GATE SHA_RB EXPECT
   [ -n "${!v:-}" ] || stop 10 "$v is not set"
 done
 case "$MODE" in apply|rollback|inspect) ;; *) stop 10 "MODE must be apply, rollback or inspect" ;; esac
+if [ "$MODE" = "rollback" ]; then [ -n "${PRE_V4_HOLDS:-}" ] || stop 10 "PRE_V4_HOLDS is not set (required for rollback)"; fi
 export PGCLIENTENCODING=UTF8
 
 check_sha() { local got; got=$(sha256sum "$1" | cut -d' ' -f1); [ "$got" = "$2" ] || stop 10 "sha256 of $(basename "$1") is $got, expected $2"; step "sha256" "$(basename "$1") $got"; }
@@ -80,7 +82,7 @@ gate() {
        -v expect_staged="$EXPECT_STAGED" -v expect_editors="$EXPECT_EDITORS" -v expect_holds="$EXPECT_HOLDS" \
        -f "$GATE"
 }
-run_file() { psql -X -v ON_ERROR_STOP=1 --echo-errors -f "$1"; }
+run_file() { local f="$1"; shift; psql -X -v ON_ERROR_STOP=1 --echo-errors "$@" -f "$f"; }
 
 if [ "$MODE" = "inspect" ]; then
   step "MODE" "inspect: read-only gates only; nothing is sent"
@@ -100,7 +102,7 @@ fi
 step "gate$before" "passed"
 
 step "$MODE" "sending $(basename "$file")"
-run_file "$file"; m=$?
+if [ "$MODE" = "rollback" ]; then run_file "$file" -v pre_v4_holds="$PRE_V4_HOLDS"; else run_file "$file"; fi; m=$?
 if [ $m -ne 0 ]; then
   step "$MODE" "psql exit $m; classifying read-only"
   gate "$before" && stop 11 "$(basename "$file") FAILED or REFUSED (psql exit $m); gate $before passes: NOTHING of it committed."

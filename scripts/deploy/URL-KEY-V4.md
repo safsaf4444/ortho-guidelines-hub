@@ -122,8 +122,24 @@ Consequences:
 **If the migration succeeded but must be withdrawn (separate approval):**
 
 ```powershell
-... same arguments ... -Rollback -ConfirmProject xutjahmbyrvifcltpxxu -ConfirmRollback URL-KEY-V4-ROLLBACK
+... same arguments ... -Rollback -ConfirmProject xutjahmbyrvifcltpxxu -ConfirmRollback URL-KEY-V4-ROLLBACK -ApplyRecord 'C:\Users\safad\OrthoBackups\urlkey-v4-apply-<UTC>\record.json'
 ```
+
+- **The apply record is the only source of the pre-v4 holds.** `-ApplyRecord` must point to the `record.json` of the apply run that put the database on v4. The wrapper reads `expected.holds` from it. That value was checked against the database by that run's gate 0, immediately before the migration. It is **never typed in, and never recalculated from the database**: a fingerprint taken now would match the current holds by construction and defeat the check.
+- **What the wrapper requires of the record** (exit 2, nothing runs, otherwise):
+  - it is a url-key v4 **apply** record of migration `20261104_url_key_unreserved_decoding`;
+  - its exit code is 0, 12 or 13, so v4 was committed;
+  - it contains a passed gate 0;
+  - its migration bytes match `8c775bf8…`;
+  - it is for the same target (the production project, not a rehearsal);
+  - its `expected.holds` is well formed;
+  - **no newer committed apply record** sits beside it, in case v4 was rolled back and applied again.
+- **Preserving and identifying the right record:**
+  - **Keep the apply run folder.** That is `urlkey-v4-apply-<UTC>` in the record folder (`C:\Users\safad\OrthoBackups`), with its read-only files; the wrapper leaves it in place. Never edit, move or delete it while v4 is live, and copy it only to encrypted storage.
+  - **Write its path and `expected.holds`** into the deployment record at the time of the apply.
+  - **The right record** is the most recent `urlkey-v4-apply-*` folder whose `record.json` has `"mode": "apply"` and `exitCode` 0, 12 or 13. Exit 2, 10, 11 or 14 records are refused runs, and the wrapper rejects them.
+  - **If the record is lost or damaged,** there is no safe substitute. Do not rebuild it. Treat rollback as unavailable until the holds have been reviewed manually through a reviewed change.
+- **Holds must be unchanged since the apply.** The rollback refuses (exit 11, nothing changed) unless the holds now are exactly the recorded value. A hold stores only its key, not its URL. A hold added under v4 for an escaped URL (`…%2ddoc`) stores the decoded key (`…-doc`), which nothing can tell apart from a plain key, and which v3 would no longer match for that URL (Codex P2 on #323, reproduced locally). So any hold added, changed or removed since the apply must be reviewed, and re-keyed for v3 by its own reviewed change, before a rollback.
 
 - **Sequence:** gate 1 → `URL-KEY-V4-ROLLBACK.sql` → gate 0.
 - **What it does:** in one transaction, it restores the 20261024 bodies and comments byte for byte, and drops the decoder.

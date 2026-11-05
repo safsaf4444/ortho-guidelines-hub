@@ -30,6 +30,9 @@ const GATE = 'supabase/URL-KEY-V4-GATE-READONLY.sql';
 const OLD_GATE = 'supabase/POST-MIGRATION-GATE-READONLY.sql';
 const DEST = fs.mkdtempSync(path.join(os.tmpdir(), 'ortho-urlkey-v4-'));
 const BOA = 'https://www.boa.ac.uk/asset/a811fc01%2defc3%2d44b7%2dbf6c4b0d4d4c2c85';
+let rec12 = '';
+let refusedApplyRec = '';
+let inspectRec = '';
 
 const q = (sql: string) => { const r = psql(sql); if (r.status !== 0) throw new Error(`psql: ${r.err}`); return r.out; };
 const asAdmin = (sql: string) => {
@@ -69,13 +72,13 @@ function expectations() {
 }
 type Exp = ReturnType<typeof expectations>;
 interface Run { status: number | null; out: string; folder?: string; record?: Record<string, unknown>; transcript: string }
-function run(opts: { mode?: 'apply' | 'inspect' | 'rollback' | 'dry'; exp?: Exp; extra?: string; host?: string; credential?: boolean; sourceRoot?: string; user?: string; ssl?: string; port?: number; confirmMigration?: string } = {}): Run {
+function run(opts: { mode?: 'apply' | 'inspect' | 'rollback' | 'dry'; exp?: Exp; extra?: string; host?: string; credential?: boolean; sourceRoot?: string; user?: string; ssl?: string; port?: number; confirmMigration?: string; applyRecord?: string } = {}): Run {
   const exp = opts.exp ?? expectations();
   const before = new Set(fs.readdirSync(DEST));
   const cred = opts.credential === false ? '' : `-Credential (New-Object System.Management.Automation.PSCredential('postgres', (ConvertTo-SecureString 'postgres' -AsPlainText -Force)))`;
   const mode = opts.mode ?? 'apply';
   const modeArgs = mode === 'apply' ? `-Apply -ConfirmMigration ${opts.confirmMigration ?? '20261104_url_key_unreserved_decoding'}`
-    : mode === 'inspect' ? '-Inspect' : mode === 'rollback' ? '-Rollback -ConfirmRollback URL-KEY-V4-ROLLBACK' : '';
+    : mode === 'inspect' ? '-Inspect' : mode === 'rollback' ? `-Rollback -ConfirmRollback URL-KEY-V4-ROLLBACK ${opts.applyRecord ? `-ApplyRecord '${opts.applyRecord}'` : ''}` : '';
   const ps = `& { & '${SCRIPT}' -PoolerHost '${opts.host ?? 'host.docker.internal'}' -Port ${opts.port ?? 54322} -DbUser '${opts.user ?? 'postgres'}' -SslMode ${opts.ssl ?? 'disable'} -RecordDir '${DEST}' ` +
     `-ExpectGuidelines '${exp.guidelines}' -ExpectChangelog '${exp.changelog}' -ExpectStaged ${exp.staged} -ExpectEditors ${exp.editors} -ExpectHolds '${exp.holds}' ` +
     `${modeArgs} ${cred} ${opts.sourceRoot ? `-SourceRoot '${opts.sourceRoot}'` : ''} ${opts.extra ?? ''}; exit $LASTEXITCODE }`;
@@ -213,6 +216,7 @@ try {
       create event trigger rehearsal_inject_hold on ddl_command_end when tag in ('COMMENT') execute function rehearsal.inject_hold();`);
     const e0 = expectations();
     const r = run({ exp: e0 });
+    rec12 = r.folder ? path.join(r.folder, 'record.json') : '';
     asAdmin('drop event trigger if exists rehearsal_inject_hold; drop schema if exists rehearsal cascade;');
     show(r);
     check('exit 12, worded as COMMITTED and NOT reversed', r.status === 12 && /COMMITTED \(COMMIT acknowledged\)/.test(r.transcript) && /NOT reversed/.test(r.transcript), r.transcript.slice(-300));
@@ -222,7 +226,7 @@ try {
     eq('-Inspect with the original expectations reports 49 (state unknown: holds differ)', run({ mode: 'inspect', exp: e0 }).status, 49);
     q(`delete from public.discovery_staging_holds where reason = 'v4 rehearsal injected';`);
     eq('after removing the injected hold, -Inspect reports 41 (v4)', run({ mode: 'inspect', exp: e0 }).status, 41);
-    eq('back to v3 for the next steps with the tested -Rollback (exit 0)', run({ mode: 'rollback', exp: e0 }).status, 0);
+    eq('back to v3 for the next steps with the tested -Rollback (exit 0)', run({ mode: 'rollback', exp: e0, applyRecord: rec12 }).status, 0);
     eq('…key functions byte-identical to 20261024 again', keyDefs(), v3Defs);
   }
 
@@ -230,10 +234,12 @@ try {
   const exp = expectations();
   const data0 = dataFp();
   let v4Defs = '';
+  let applyRec = '';
   {
     const r = run({ exp });
     show(r);
     eq('exit 0', r.status, 0);
+    applyRec = r.folder ? path.join(r.folder, 'record.json') : '';
     eq('steps in order', (r.record?.steps as string[] | undefined)?.map((s) => s.split('\t')[1]),
       ['sha256', 'sha256', 'sha256', 'gate0', 'apply', 'apply', 'gate1', 'RESULT']);
     check('two gates passed', (r.transcript.match(/GATE PASSED/g) ?? []).length === 2);
@@ -254,10 +260,13 @@ try {
   console.log('\n[6] Repeat execution, inspect, and the gates after v4');
   {
     const again = run({ exp });
+    refusedApplyRec = again.folder ? path.join(again.folder, 'record.json') : '';
     check('re-running -Apply: exit 14 (already v4), nothing sent', again.status === 14 && /already in the target state/.test(again.transcript) && !/sending 20261104/.test(again.transcript), again.transcript.slice(-300));
     eq('…record.json distinguishes it from a preflight refusal', again.record?.outcome, 'already in the target state; nothing sent');
     eq('…key functions unchanged by the refused repeat', keyDefs(), v4Defs);
-    eq('-Inspect reports 41 (v4)', run({ mode: 'inspect', exp }).status, 41);
+    const insp = run({ mode: 'inspect', exp });
+    inspectRec = insp.folder ? path.join(insp.folder, 'record.json') : '';
+    eq('-Inspect reports 41 (v4)', insp.status, 41);
     eq('v4 gate stage 1 passes directly', gate(GATE, 1, exp).status, 0);
     const old = gate(OLD_GATE, 2, { ...exp });
     check('old review-queue gate (stage 2) fails ONLY at G19 after v4, as documented', old.status === 3 && /FAIL G19/.test(old.err) && (old.err.match(/NOTICE:\s+FAIL/g) ?? []).length === 1, old.err.split('\n').filter((l) => /FAIL/.test(l)).join(' | '));
@@ -267,19 +276,83 @@ try {
   {
     q(`insert into public.staged_guidelines (candidate_id, provider, topic, versions, primary_url, change_reason) values ('v4-filed', 'BOA', 'filed under v4', '[]', '${BOA}', 'NEW_GUIDELINE');`);
     const e2 = expectations();
-    const r = run({ mode: 'rollback', exp: e2 });
+    const r = run({ mode: 'rollback', exp: e2, applyRecord: applyRec });
     show(r);
     check('rollback with a v4-keyed row: exit 11, refused, gate 1 re-passes (v4 intact)', r.status === 11 && /queue rows filed under v4 would change key under v3/.test(r.transcript), r.transcript.slice(-400));
     eq('…key functions still v4', keyDefs(), v4Defs);
     q(`delete from public.staged_guidelines where candidate_id = 'v4-filed';`);
-    const ok = run({ mode: 'rollback', exp });
+    // Codex P2 (#323, r4474179529): a hold added under v4 for an escaped URL stores the
+    // DECODED key; the per-key check cannot see it, so the holds must equal the apply's.
+    const ESC = 'https://example.org/held%2ddoc';
+    q(`insert into public.discovery_staging_holds (match_key, status, reason, held_since)
+       values (public.document_match_key('${ESC}'), 'pending-editorial-decision', 'v4-era hold', current_date);`);
+    eq('…the v4-era hold stores the decoded key', q(`select match_key from public.discovery_staging_holds where reason = 'v4-era hold'`), 'https://example.org/held-doc');
+    const e3 = expectations();
+    const vh = run({ mode: 'rollback', exp: e3, applyRecord: applyRec });
+    show(vh);
+    check('rollback with a v4-era hold: exit 11, refused (holds changed since apply), v4 intact',
+      vh.status === 11 && /staging holds changed since v4 was applied/.test(vh.transcript) && keyDefs() === v4Defs, vh.transcript.slice(-400));
+    check('…the hold is still there and still holds the escaped URL under v4',
+      q(`select exists (select 1 from public.discovery_staging_holds where match_key = public.document_match_key('${ESC}'))`) === 't');
+    // The pre-v4 holds can come ONLY from a genuine committed apply record of this target.
+    const noRec = run({ mode: 'rollback', exp: e3 });
+    check('-Rollback without -ApplyRecord: refused by the wrapper (exit 2) before anything ran',
+      noRec.status === 2 && /needs -ApplyRecord/.test(noRec.out) && noRec.folder === undefined);
+    const refusedRb = (label: string, rec: string, re: RegExp) => {
+      const x = run({ mode: 'rollback', exp: e3, applyRecord: rec });
+      check(`-ApplyRecord ${label}: refused (exit 2), nothing ran`, x.status === 2 && re.test(x.out) && x.folder === undefined && keyDefs() === v4Defs, x.out.slice(-250));
+    };
+    refusedRb('that does not exist', path.join(DEST, 'no-such', 'record.json'), /not found/);
+    refusedRb('from an -Inspect run', inspectRec, /not a url-key v4 APPLY record/);
+    refusedRb('from a refused apply (exit 14, never committed)', refusedApplyRec, /did not commit v4/);
+    refusedRb('older than a later committed apply', rec12, /newer committed apply record exists/);
+    // Tampered copies, each in its own folder so no sibling record is involved.
+    const forged = (label: string, edit: (o: any) => void, re: RegExp) => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ortho-v4-rec-'));
+      const sub = path.join(dir, 'urlkey-v4-apply-forged');
+      fs.mkdirSync(sub);
+      const o = JSON.parse(fs.readFileSync(applyRec, 'utf-8').replace(/^\uFEFF/, ''));
+      edit(o);
+      fs.writeFileSync(path.join(sub, 'record.json'), JSON.stringify(o));
+      refusedRb(label, path.join(sub, 'record.json'), re);
+      fs.rmSync(dir, { recursive: true, force: true });
+    };
+    forged('for different migration bytes', (o) => { o.files[0].sha256 = '0'.repeat(64); }, /different migration bytes/);
+    forged('for another target (production)', (o) => { o.target.project = 'xutjahmbyrvifcltpxxu'; }, /is not this target/);
+    forged('with a malformed expected.holds', (o) => { o.expected.holds = '1:abc'; }, /expected\.holds is missing or malformed/);
+    forged('without a passed gate 0', (o) => { o.steps = o.steps.filter((s: string) => !/\tgate0\t/.test(s)); }, /no passed gate 0/);
+    {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ortho-v4-rec-'));
+      fs.mkdirSync(path.join(dir, 'urlkey-v4-apply-garbage'));
+      fs.writeFileSync(path.join(dir, 'urlkey-v4-apply-garbage', 'record.json'), 'not json {');
+      refusedRb('that is not JSON', path.join(dir, 'urlkey-v4-apply-garbage', 'record.json'), /not valid JSON/);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+    const direct = applyFile('supabase/URL-KEY-V4-ROLLBACK.sql');
+    check('the rollback file run WITHOUT pre_v4_holds fails closed (psql error, nothing changed)',
+      direct.status !== 0 && keyDefs() === v4Defs, direct.err.slice(-200));
+    {
+      // A recorded value is taken as-is: the record's holds, not the database's, decide.
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ortho-v4-rec-'));
+      const sub = path.join(dir, 'urlkey-v4-apply-other');
+      fs.mkdirSync(sub);
+      const o = JSON.parse(fs.readFileSync(applyRec, 'utf-8').replace(/^\uFEFF/, ''));
+      o.expected.holds = e3.holds.replace(/^\d+/, '9');
+      fs.writeFileSync(path.join(sub, 'record.json'), JSON.stringify(o));
+      const wrong = run({ mode: 'rollback', exp: e3, applyRecord: path.join(sub, 'record.json') });
+      check('a record whose holds differ from the holds now is refused by the rollback SQL (exit 11), v4 intact', wrong.status === 11 && /staging holds changed since v4 was applied/.test(wrong.transcript) && keyDefs() === v4Defs);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+    q(`delete from public.discovery_staging_holds where reason = 'v4-era hold';`);
+    const ok = run({ mode: 'rollback', exp, applyRecord: applyRec });
+    check('the rollback record names the apply record it used', ok.record?.applyRecord === applyRec && ok.record?.preV4Holds === exp.holds);
     show(ok);
     eq('rollback: exit 0', ok.status, 0);
     eq('key functions and comments byte-identical to the 20261024 originals; decoder gone', keyDefs(), v3Defs);
     eq('schema identical to before the procedure', schemaFp(), base);
     eq('catalogue, links and changelog unchanged', dataFp(), data0);
     eq('-Inspect reports 40 (v3)', run({ mode: 'inspect', exp }).status, 40);
-    const rb2 = run({ mode: 'rollback', exp });
+    const rb2 = run({ mode: 'rollback', exp, applyRecord: applyRec });
     check('-Rollback on a v3 database: exit 14 (already v3), nothing sent', rb2.status === 14 && !/sending URL-KEY-V4-ROLLBACK/.test(rb2.transcript));
     eq('old review-queue gate (stage 2) passes again, G19 included', gate(OLD_GATE, 2, exp).status, 0);
     const re = run({ exp });

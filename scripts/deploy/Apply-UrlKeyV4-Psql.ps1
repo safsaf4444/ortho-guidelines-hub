@@ -31,10 +31,18 @@
   * NOT done: migration history is not written. No db push, no Management API.
 
   -Inspect  read-only: reports v3 (exit 40), v4 (41) or neither (49).
-  -Rollback with -ConfirmRollback URL-KEY-V4-ROLLBACK: gate 1 -> the rollback
-            file -> gate 0. The rollback refuses, atomically, if any row was
-            filed under v4 with a key v3 would compute differently. Separate
-            approval only.
+  -Rollback with -ConfirmRollback URL-KEY-V4-ROLLBACK and -ApplyRecord
+            <record.json of the APPLY run that put this database on v4>:
+            gate 1 -> the rollback file -> gate 0. The pre-v4 holds
+            fingerprint is READ FROM THAT RECORD (expected.holds, verified by
+            its gate 0), never typed in or recalculated from the database. The
+            record must be a committed v4 apply (exit 0, 12 or 13) of these
+            exact migration bytes against this same target, with no newer
+            committed apply record beside it. The rollback refuses, atomically,
+            if any row was filed under v4 with a key v3 would compute
+            differently, or if the staging holds differ in any way from that
+            recorded value (a hold stores only its key, so a v4-era hold
+            cannot be checked otherwise). Separate approval only.
 
 .EXAMPLE
   # Dry run (no Docker, no network, no password):
@@ -61,6 +69,8 @@ param(
   [string] $ConfirmProject = '',
   [string] $ConfirmMigration = '',
   [string] $ConfirmRollback = '',
+  # Rollback only: path to the record.json of the APPLY run that put this database on v4.
+  [string] $ApplyRecord = '',
   [int] $Port = 5432,
   [string] $Database = 'postgres',
   [ValidateSet('require', 'disable')] [string] $SslMode = 'require',
@@ -77,7 +87,7 @@ $MIGRATION = '20261104_url_key_unreserved_decoding'
 $FILES = [ordered]@{
   'supabase/migrations/20261104_url_key_unreserved_decoding.sql' = '8c775bf8aab61b7235be7d911c8e6aa3eb310130f0e479bad590e3c1ab1e45a5'
   'supabase/URL-KEY-V4-GATE-READONLY.sql'                        = '7847d343e42ed8dc70668962a2a505eea690ef45eb319d9e60494b68d39baaa4'
-  'supabase/URL-KEY-V4-ROLLBACK.sql'                             = '710e05520c6a55f4978c2db7c969c616e2d0c31368712f38fed60f105a8b95c7'
+  'supabase/URL-KEY-V4-ROLLBACK.sql'                             = 'f4240a9eebb8bf541cf27e9b4018cdc1cd991b30e32817a3191df7a81c806c9d'
 }
 
 function Fail([string] $msg) { Write-Host "[v4] REFUSED: $msg" -ForegroundColor Red; exit 2 }
@@ -142,6 +152,43 @@ if (-not $isLocalHost -and $ConfirmProject -ne $PROJECT_REF) { Fail "-$((Get-Cul
 if ($mode -eq 'apply' -and $ConfirmMigration -ne $MIGRATION) { Fail "-Apply needs -ConfirmMigration $MIGRATION." }
 if ($mode -eq 'rollback' -and $ConfirmRollback -ne 'URL-KEY-V4-ROLLBACK') { Fail '-Rollback needs -ConfirmRollback URL-KEY-V4-ROLLBACK.' }
 
+# -- Rollback: the pre-v4 holds come ONLY from the original apply record -----
+# Not a typed value and not recalculated: a value recalculated from the
+# database now would match the current holds by construction and defeat the
+# rollback's holds check (Codex P2 on #323).
+$preV4Holds = ''
+$applyRecordPath = $null
+if ($mode -eq 'rollback') {
+  if (-not $ApplyRecord) { Fail '-Rollback needs -ApplyRecord <record.json of the APPLY run that put this database on v4>.' }
+  if (-not (Test-Path -LiteralPath $ApplyRecord -PathType Leaf)) { Fail "apply record $ApplyRecord not found." }
+  $applyRecordPath = (Resolve-Path -LiteralPath $ApplyRecord).Path
+  try { $ar = Get-Content -Raw -Encoding UTF8 -LiteralPath $applyRecordPath | ConvertFrom-Json } catch { Fail "apply record $applyRecordPath is not valid JSON." }
+  $targetLabel = if ($isLocalHost) { 'local rehearsal' } else { $PROJECT_REF }
+  $committedExits = @(0, 12, 13)
+  $migRel = 'supabase/migrations/20261104_url_key_unreserved_decoding.sql'
+  if ($ar.kind -ne 'ortho-guidelines-hub url-key v4 migration (psql, exact files)' -or $ar.mode -ne 'apply' -or $ar.migration -ne $MIGRATION) {
+    Fail "apply record $applyRecordPath is not a url-key v4 APPLY record."
+  }
+  if ($committedExits -notcontains [int]$ar.exitCode) { Fail "apply record exit $($ar.exitCode): that run did not commit v4, so it does not describe this database's pre-v4 holds." }
+  if (-not (@($ar.steps) | Where-Object { [string]$_ -match '\tgate0\tpassed\z' })) { Fail 'apply record has no passed gate 0: its expected holds were never verified.' }
+  if (-not (@($ar.files) | Where-Object { $_.file -eq $migRel -and $_.sha256 -eq $FILES[$migRel] })) { Fail 'apply record is for different migration bytes.' }
+  if ([string]$ar.target.project -ne $targetLabel) { Fail "apply record target '$($ar.target.project)' is not this target '$targetLabel'." }
+  $recordedHolds = [string]$ar.expected.holds
+  if (-not [regex]::IsMatch($recordedHolds, '\A[0-9]+:[0-9a-f]{32}\z')) { Fail 'apply record expected.holds is missing or malformed.' }
+  # The database's CURRENT v4 state comes from the most recent committed apply.
+  $runsDir = Split-Path (Split-Path $applyRecordPath -Parent) -Parent
+  foreach ($d in @(Get-ChildItem -LiteralPath $runsDir -Directory -Filter 'urlkey-v4-apply-*' -ErrorAction SilentlyContinue)) {
+    $p = Join-Path $d.FullName 'record.json'
+    if ($p -eq $applyRecordPath -or -not (Test-Path -LiteralPath $p)) { continue }
+    try { $o = Get-Content -Raw -Encoding UTF8 -LiteralPath $p | ConvertFrom-Json } catch { continue }
+    if ($o.mode -eq 'apply' -and $committedExits -contains [int]$o.exitCode -and [string]$o.target.project -eq $targetLabel -and [string]$o.startedUtc -gt [string]$ar.startedUtc) {
+      Fail "a newer committed apply record exists: $p. Pass the record of the apply that put the database on v4 most recently."
+    }
+  }
+  $preV4Holds = $recordedHolds
+  Write-Host "[v4] Apply record: $applyRecordPath (started $($ar.startedUtc), exit $($ar.exitCode)); pre-v4 holds $preV4Holds"
+}
+
 # -- Record folder: outside the repo and OneDrive ---------------------------
 $dest = [System.IO.Path]::GetFullPath($RecordDir).TrimEnd('\')
 foreach ($f in @($repoRoot, $env:OneDrive, $env:OneDriveConsumer, $env:OneDriveCommercial) | Where-Object { $_ }) {
@@ -187,6 +234,7 @@ try {
       -e "SHA_MIG=$($FILES[$keys[0]])" -e "SHA_GATE=$($FILES[$keys[1]])" -e "SHA_RB=$($FILES[$keys[2]])" `
       -e "EXPECT_GUIDELINES=$ExpectGuidelines" -e "EXPECT_CHANGELOG=$ExpectChangelog" `
       -e "EXPECT_STAGED=$ExpectStaged" -e "EXPECT_EDITORS=$ExpectEditors" -e "EXPECT_HOLDS=$ExpectHolds" `
+      -e "PRE_V4_HOLDS=$preV4Holds" `
       -v "$($sqlDir):/sql:ro" -v "$($logDir):/record" -v "$($PSScriptRoot):/procedure:ro" `
       $Image /procedure/apply-urlkey-v4.sh
   $exit = $LASTEXITCODE
@@ -217,6 +265,8 @@ $record = [ordered]@{
   tool = [ordered]@{ image = $Image; psql = (& docker run --rm --entrypoint psql $Image --version) }
   files = $plan
   expected = [ordered]@{ guidelines = $ExpectGuidelines; changelog = $ExpectChangelog; staged = $ExpectStaged; editors = $ExpectEditors; holds = $ExpectHolds }
+  applyRecord = $applyRecordPath
+  preV4Holds = $(if ($mode -eq 'rollback') { $preV4Holds } else { $null })
   exitCode = $exit
   outcome = $(if ($meaning.ContainsKey($exit)) { $meaning[$exit] } else { "unexpected exit $($exit): inspect read-only" })
   migrationHistory = 'NOT written by this route'

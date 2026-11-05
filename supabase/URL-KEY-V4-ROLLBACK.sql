@@ -15,6 +15,16 @@
 --      no longer equals its (now v3) function, i.e. if any row was filed under
 --      v4 with an unreserved escape in its URL. Those rows need their own
 --      reviewed plan; this file never rewrites a record.
+--   0. REFUSES first, before changing anything, unless the staging holds are
+--      EXACTLY as they were when v4 was applied (psql variable pre_v4_holds:
+--      the `expected.holds` count:md5 in the apply run's record.json, verified
+--      there by both gates). A hold stores only its key, not its URL: a hold
+--      added under v4 for an escaped URL (`…%2ddoc`) stores the DECODED key
+--      (`…-doc`), which step 4 cannot tell apart from any other key, and which
+--      v3 would no longer match for that URL. So any hold added, changed or
+--      removed since the apply blocks the rollback until it has been reviewed
+--      and re-keyed for v3 by its own reviewed change. Without the variable
+--      the file does not parse, so it fails closed.
 -- It touches no table data, no catalogue entry and no source link.
 -- Rehearsed locally: scripts/tests/local-supabase/urlkey-v4-rehearsal.ts.
 -- ============================================================================
@@ -24,8 +34,22 @@ begin;
 set local lock_timeout = '5s';
 set local statement_timeout = '60s';
 
+select set_config('rb.pre_v4_holds', :'pre_v4_holds', true);
+
 do $$
+declare
+  v_holds_now text;
 begin
+  -- Same fingerprint as URL-KEY-V4-GATE-READONLY.sql V34 and the apply record.
+  select count(*) || ':' || md5(coalesce(string_agg(h::text, '|' order by match_key), ''))
+    into v_holds_now
+    from public.discovery_staging_holds h;
+  if v_holds_now is distinct from current_setting('rb.pre_v4_holds') then
+    raise exception using errcode = '55000',
+      message = 'URL-KEY-V4-ROLLBACK: the staging holds changed since v4 was applied. Nothing was changed.',
+      detail  = format('holds when v4 was applied: %s; holds now: %s', current_setting('rb.pre_v4_holds'), v_holds_now),
+      hint    = 'A hold added under v4 stores a decoded key that v3 may no longer match for its URL, and the URL is not stored. Review every hold added or changed since the apply and re-key it for v3 through its own reviewed change before any rollback.';
+  end if;
   if to_regprocedure('public._url_decode_unreserved(text)') is null
      or obj_description('public.document_identity_key(text)'::regprocedure, 'pg_proc') not like '[url-key v4 %'
      or obj_description('public.document_match_key(text)'::regprocedure, 'pg_proc') not like '[url-key v4 %' then
