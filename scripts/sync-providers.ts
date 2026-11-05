@@ -68,6 +68,7 @@ import path from 'path';
 import { pathToFileURL } from 'url';
 import * as cheerio from 'cheerio';
 import RssParser from 'rss-parser';
+import { fetchProviderIndex } from './lib/provider-fetch';
 import { GUIDELINES_DATA, type Guideline } from '../src/data/guidelines-data';
 import {
   CANDIDATE_SCHEMA_VERSION,
@@ -235,15 +236,7 @@ export const BOAAdapter: ProviderAdapter = {
   sourceTag: 'BOA',
   async fetchCandidates(): Promise<DiscoveredItem[]> {
     const targetUrl = 'https://www.boa.ac.uk/standards-guidance/boasts.html';
-    const res = await fetch(targetUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) OrthoGuidelinesHub/1.0',
-      },
-    });
-
-    if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${targetUrl}`);
-
-    const html = await res.text();
+    const html = await fetchProviderIndex(targetUrl);
     return parseBoaIndex(html, targetUrl);
   },
 };
@@ -307,15 +300,7 @@ export const BSGAdapter: ProviderAdapter = {
   sourceTag: 'BSG',
   async fetchCandidates(): Promise<DiscoveredItem[]> {
     const targetUrl = 'https://britishsarcomagroup.org.uk/guidelines-2/';
-    const res = await fetch(targetUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) OrthoGuidelinesHub/1.0',
-      },
-    });
-
-    if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${targetUrl}`);
-
-    const html = await res.text();
+    const html = await fetchProviderIndex(targetUrl);
     return parseBsgIndex(html, targetUrl);
   },
 };
@@ -383,15 +368,7 @@ export const BOFASAdapter: ProviderAdapter = {
   sourceTag: 'BOFAS',
   async fetchCandidates(): Promise<DiscoveredItem[]> {
     const targetUrl = 'https://www.bofas.org.uk/clinician/research/bofas-publications';
-    const res = await fetch(targetUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) OrthoGuidelinesHub/1.0',
-      },
-    });
-
-    if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${targetUrl}`);
-
-    const html = await res.text();
+    const html = await fetchProviderIndex(targetUrl);
     return parseBofasPublicationsIndex(html, targetUrl);
   },
 };
@@ -421,14 +398,33 @@ export function parseBsshGuidelinesIndex(html: string, baseUrl: string): Discove
   const results: DiscoveredItem[] = [];
   const seen = new Set<string>();
 
-  $('a[href*=".pdf"]').each((_, el) => {
+  // Inspect the parsed pathname: a query containing '.pdf' is not a document,
+  // while an uppercase .PDF extension is. Malformed links cannot abort a page.
+  $('a[href]').each((_, el) => {
     const link = $(el);
     const rawHref = link.attr('href')?.trim();
-    const topic = link.text().replace(/\s+/g, ' ').trim();
+    const clean = (value: string | undefined) => (value ?? '').replace(/\s+/g, ' ').trim();
+    const anchorText = clean(link.text());
+    const generic = /^(?:here|click here|read more|download(?: pdf)?)\.?$/i;
+    // Only publisher-supplied labels on this exact anchor are eligible. Keep
+    // meaningful visible text first; never infer a title from surrounding prose
+    // or a filename. Without a better label, preserve the original observation.
+    const topic = (!anchorText || generic.test(anchorText))
+      ? [clean(link.attr('aria-label')), clean(link.attr('title'))]
+        .find((value) => value && !generic.test(value)) || anchorText
+      : anchorText;
 
     if (!rawHref || !topic) return;
 
-    const fullUrl = rawHref.startsWith('http') ? rawHref : new URL(rawHref, baseUrl).href;
+    let resolved: URL;
+    try {
+      resolved = new URL(rawHref, baseUrl);
+    } catch {
+      return;
+    }
+    if (!['http:', 'https:'].includes(resolved.protocol) || !/\.pdf$/i.test(resolved.pathname)) return;
+    // Validation must not rewrite a publisher's absolute source URL.
+    const fullUrl = /^https?:\/\//i.test(rawHref) ? rawHref : resolved.href;
 
     if (seen.has(fullUrl)) return;
     seen.add(fullUrl);
@@ -454,15 +450,7 @@ export const BSSHAdapter: ProviderAdapter = {
   sourceTag: 'BSSH',
   async fetchCandidates(): Promise<DiscoveredItem[]> {
     const targetUrl = 'https://www.bssh.ac.uk/professionals/guidelines.aspx';
-    const res = await fetch(targetUrl, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) OrthoGuidelinesHub/1.0',
-      },
-    });
-
-    if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${targetUrl}`);
-
-    const html = await res.text();
+    const html = await fetchProviderIndex(targetUrl);
     return parseBsshGuidelinesIndex(html, targetUrl);
   },
 };

@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "typecheck:scripts": "tsc --noEmit -p tsconfig.scripts.json",
+    "test:provider-fetch": "tsx scripts/tests/provider-fetch.test.ts",
     "preview": "vite preview",
     "seed": "tsx scripts/seed.ts",
     "export-static": "tsx scripts/export-static.ts",
