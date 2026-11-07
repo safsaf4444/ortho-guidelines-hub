@@ -1278,7 +1278,7 @@ Add a note from the entry to restore the audit trail.`
                   aria-describedby="guideline-result-count"
                   // ring-slate-500 (4.8:1 on white), not slate-300 (1.5:1): the
                   // focus indicator has to be visible (WCAG 2.4.7 / 1.4.11).
-                  className="w-full pl-10 pr-4 py-2.5 bg-white border border-slate-300 rounded-lg text-[14px] focus:outline-none focus:ring-2 focus:ring-slate-500 transition-shadow shadow-sm"
+                  className="w-full pl-10 pr-4 py-2.5 bg-white border border-slate-300 rounded-lg text-[14px] placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-slate-500 transition-shadow shadow-sm"
                   value={searchQuery}
                   onChange={e => setSearchQuery(e.target.value)}
                 />
