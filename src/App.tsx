@@ -1068,7 +1068,7 @@ Add a note from the entry to restore the audit trail.`
               be offered and then refused. Icon-only below xl on purpose; see
               the header-width note in EditorAuthControl.tsx before giving it a
               label at a smaller breakpoint. */}
-          <EditorAuthControl session={session} />
+          {isSupabaseEnabled && WRITES_ENABLED && <EditorAuthControl session={session} />}
 
           {/* Review Staged Guidelines — manual review tool. The BUTTON stays
               visible to everyone; the queue behind it is editor-only at the
