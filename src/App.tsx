@@ -26,7 +26,8 @@ import { allowedActions } from './lib/review-actions'
 import { splitPublishers, canonicalProvider, providerUrl } from './lib/providers'
 import { findGapNote } from './lib/gap-detection'
 import { buildCatalogue, catalogueRowCount } from './lib/catalogue'
-import { filterGuidelines, hasActiveFilters, resultCountText, emptyResultText, NEW_TAB_REL } from './lib/guideline-filter'
+import { filterGuidelinesOutcome, hasActiveFilters, resultCountText, emptyResultText, NEW_TAB_REL } from './lib/guideline-filter'
+import { rankSearchGroups } from './lib/search/app-adapter'
 import { usePwaUpdate } from './lib/pwa-update'
 import { prepareChangeNote, isValidChangeNote, archiveNote, linkStatusNote, mergeNote, MAX_NOTE_LENGTH } from './lib/change-note'
 
@@ -54,7 +55,7 @@ const ABOUT_VIEW = '__about__';
 // what prevents a write — the allowlist is. To revoke write access outright,
 // empty `public.is_editor()` (one statement, shown at the foot of the
 // migration); to revoke it for one person, remove their UUID from it.
-const WRITES_ENABLED: boolean = true;
+const WRITES_ENABLED: boolean = import.meta.env.VITE_STATIC_PREVIEW !== 'true';
 
 // Display labels only — the underlying field name and stored values
 // (unchecked/needs-review/broken/verified) are unchanged; see
@@ -284,12 +285,7 @@ function NewTabCue() {
  * user's request, so the hash is no longer the only way in — it is retained
  * only so an existing bookmark still lands on the right tab.
  *
- * Honoured on initial load only, not via a `hashchange` listener: now that
- * the tab is the primary entry point, syncing hash ↔ view state in both
- * directions would add state complexity for no real benefit. A hash check
- * rather than a router because GitHub Pages serves static files only — a
- * real `/catalogue` path would 404 on reload — and one view never justified
- * pulling in @tanstack/react-router (which stays unused).
+ * Hash routes are re-resolved on hashchange, including the root route.
  */
 const CATALOGUE_HASH = '#/catalogue';
 const ABOUT_HASH = '#/about';
@@ -297,6 +293,7 @@ const ABOUT_HASH = '#/about';
 function sectionFromHash(): string | null {
   if (typeof window === 'undefined') return null;
   const h = window.location.hash.replace(/\/+$/, '');
+  if (h === '' || h === '#') return 'All';
   if (h === CATALOGUE_HASH) return CATALOGUE_VIEW;
   if (h === ABOUT_HASH) return ABOUT_VIEW;
   return null;
@@ -453,7 +450,8 @@ export default function App() {
 
   // Pure filter (src/lib/guideline-filter.ts) so it is tested offline.
   const activeFilter = { section: currentSection, linkStatus: linkStatusFilter, query: searchQuery };
-  const filteredData = filterGuidelines(guidelines, activeFilter);
+  const searchOutcome = filterGuidelinesOutcome(guidelines, activeFilter);
+  const filteredData = searchOutcome.ordered;
 
   // Phase 4 item E — "Clear filters" is shown only when something is actually
   // narrowing the list: free-text search, the link-check filter, or a
@@ -494,7 +492,11 @@ export default function App() {
     });
   }
 
-  const sortedSections = groupBy === 'section'
+  // Fix the reported prosthesis-abbreviation display order without changing
+  // established clinical ordering for unrelated searches (for example CES).
+  // Object insertion order follows the strongest ranked hit in each group.
+  const useRankedGroups = Boolean(searchOutcome.notice) || rankSearchGroups(searchQuery);
+  const sortedSections = useRankedGroups ? Object.keys(grouped) : groupBy === 'section'
     ? sortSections(Object.keys(grouped))
     : Object.keys(grouped).sort((a, b) => a.localeCompare(b));
 
@@ -1295,6 +1297,9 @@ Add a note from the entry to restore the audit trail.`
                   )}
                 >
                   {dataState === 'loading' ? '' : resultCountText(filteredData.length, guidelines.length)}
+                  {dataState !== 'loading' && searchOutcome.notice && (
+                    <span className="block mt-1">{searchOutcome.notice}</span>
+                  )}
                 </p>
                 {filtersActive && (
                   <button

@@ -5,11 +5,20 @@ filters before calling `app-adapter.ts`. Blank queries preserve catalogue order;
 nonempty queries require all query concepts (`minCoverage: 1`) and exclude
 related-only suggestions. Archived boolean flags remain excluded. Stored
 guidance-status labels affect ranking; they are not independent clinical review.
-The existing UI groups results by section, then retains ranking within a section.
+For bare THR/TKR/THA/TKA queries and the disclosed partial fallback, groups follow
+the strongest result's first occurrence, retaining ranking within each group.
+Abbreviation detection uses parsed retrieval tokens, so punctuation, case and whitespace do not change this ordering.
+Other searches and empty-query browse order remain unchanged.
 
 The engine can return partial suggestions for other callers. They are explicitly
 labelled partial and follow full matches. The public UI does not mix these into
-its primary results. Search is lexical retrieval and does not interpret clinical
+strict primary results. When a standalone "painful" qualifier has no full matches
+and the remaining query includes a hip/knee replacement concept, it can show
+explicitly labelled partial matches. Every other query constraint must still
+match in full; original unmatched-term explanations are preserved. This is
+retrieval assistance, not an inference that pain means infection or another
+diagnosis. Unknown/negative qualifiers are not generally discarded.
+Search is lexical retrieval and does not interpret clinical
 negation or establish treatment suitability.
 
 The imported dictionary has **102 entries**, despite its author's earlier

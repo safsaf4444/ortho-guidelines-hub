@@ -1,5 +1,5 @@
 import type { Guideline } from '../data/guidelines-data';
-import { applySearchToCatalogue } from './search/app-adapter';
+import { applySearchToCatalogue, type CatalogueSearchOutcome } from './search/app-adapter';
 
 /**
  * The browse view's filter, as a pure function so it can be tested offline.
@@ -18,13 +18,17 @@ export function normaliseQuery(query: string): string {
   return query.trim().toLowerCase();
 }
 
-export function filterGuidelines(guidelines: Guideline[], f: GuidelineFilter): Guideline[] {
+export function filterGuidelinesOutcome(guidelines: Guideline[], f: GuidelineFilter): CatalogueSearchOutcome {
   const scoped = guidelines.filter(g => {
     if (f.section !== 'All' && g.section !== f.section) return false;
     if (f.linkStatus !== 'All' && (g.linkVerificationStatus ?? 'unchecked') !== f.linkStatus) return false;
     return true;
   });
-  return applySearchToCatalogue(scoped,normaliseQuery(f.query)).ordered;
+  return applySearchToCatalogue(scoped,normaliseQuery(f.query));
+}
+
+export function filterGuidelines(guidelines: Guideline[], f: GuidelineFilter): Guideline[] {
+  return filterGuidelinesOutcome(guidelines,f).ordered;
 }
 
 export function hasActiveFilters(f: GuidelineFilter): boolean {

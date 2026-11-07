@@ -1,3 +1,4 @@
+import { stagedPayloadProblems } from './staged-payload';
 import { supabase } from './supabase';
 import { isNotAnEditorError, NOT_AN_EDITOR_MESSAGE } from './editor-session';
 import {
@@ -333,6 +334,8 @@ export const stagedService = {
     if (!supabase) {
       throw new Error('Publishing needs the live database — not available in offline/static mode.');
     }
+    const problems = stagedPayloadProblems(guideline);
+    if (problems.length) throw markRefused(new Error('Not published: ' + problems.join(' ')));
     const { data, error } = await supabase.rpc('approve_staged_guideline', {
       p_candidate_id: stagedId,
       // toDbRow emits exactly the snake_case column shape the RPC's

@@ -232,7 +232,7 @@ try {
   }
 
   console.log('\n[6] No horizontal overflow');
-  for (const width of [320, 375, 768, 1024, 1280]) {
+  for (const width of [320, 375, 390, 768, 1024, 1280, 1440]) {
     const page = await open(width);
     await page.locator('main section button[aria-controls][aria-expanded="false"]').first().click();
     if (width === 320) {

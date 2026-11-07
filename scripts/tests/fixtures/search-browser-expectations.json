@@ -1,0 +1,157 @@
+[
+  {
+    "query": "ACL injury",
+    "count": 5
+  },
+  {
+    "query": "hip fracture",
+    "count": 19
+  },
+  {
+    "query": "carpal tunnel syndrome",
+    "count": 5
+  },
+  {
+    "query": "osteoarthritis",
+    "count": 23,
+    "first": "Osteoarthritis in over 16s - diagnosis and management"
+  },
+  {
+    "query": "rotator cuff tear",
+    "count": 8
+  },
+  {
+    "query": "cauda equina syndrome",
+    "count": 6,
+    "first": "BASS standards of care for cauda equina syndrome"
+  },
+  {
+    "query": "compartment syndrome",
+    "count": 2,
+    "first": "Compartment syndrome of the extremities"
+  },
+  {
+    "query": "Achilles tendon rupture",
+    "count": 3,
+    "first": "Acute Achilles tendon rupture"
+  },
+  {
+    "query": "ACL",
+    "count": 5
+  },
+  {
+    "query": "THR",
+    "count": 20,
+    "first": "Primary joint replacement - hip, knee and shoulder"
+  },
+  {
+    "query": "TKR",
+    "count": 14,
+    "first": "Primary joint replacement - hip, knee and shoulder"
+  },
+  {
+    "query": "OA",
+    "count": 23,
+    "first": "Osteoarthritis in over 16s - diagnosis and management"
+  },
+  {
+    "query": "NOF",
+    "count": 19
+  },
+  {
+    "query": "CES",
+    "count": 6,
+    "first": "BASS standards of care for cauda equina syndrome"
+  },
+  {
+    "query": "MSCC",
+    "count": 1,
+    "first": "Spinal metastases & metastatic spinal cord compression (MSCC)"
+  },
+  {
+    "query": "painful hip replacement",
+    "count": 20,
+    "first": "Primary joint replacement - hip, knee and shoulder"
+  },
+  {
+    "query": "suspected cauda equina",
+    "count": 3,
+    "first": "Suspected cauda equina syndrome (CES) - national pathway"
+  },
+  {
+    "query": "child with limp",
+    "count": 0
+  },
+  {
+    "query": "ankle injury",
+    "count": 4
+  },
+  {
+    "query": "infected joint replacement",
+    "count": 7,
+    "first": "Acute peri-prosthetic joint infection (PJI)"
+  },
+  {
+    "query": "carpel tunnel",
+    "count": 2,
+    "first": "Adult carpal tunnel syndrome"
+  },
+  {
+    "query": "achillies tendon",
+    "count": 1,
+    "first": "Acute Achilles tendon rupture"
+  },
+  {
+    "query": "osteoarthrits",
+    "count": 10,
+    "first": "Osteoarthritis in over 16s - diagnosis and management"
+  },
+  {
+    "query": "rotaor cuff",
+    "count": 1
+  },
+  {
+    "query": "hip fractre",
+    "count": 10
+  },
+  {
+    "query": "hip-fracture",
+    "count": 1
+  },
+  {
+    "query": "zzzznonsenseword",
+    "count": 0
+  },
+  {
+    "query": "!!!@@@###",
+    "count": 0
+  },
+  {
+    "query": "MiXeD CaSe AcL",
+    "count": 0
+  },
+  {
+    "query": "acl",
+    "count": 5
+  },
+  {
+    "query": "AcL",
+    "count": 5
+  },
+  {
+    "query": "  hip fracture  ",
+    "count": 19
+  },
+  {
+    "query": "hip    fracture",
+    "count": 19
+  },
+  {
+    "query": "hip fracture.",
+    "count": 19
+  },
+  {
+    "query": "hip, fracture",
+    "count": 19
+  }
+]

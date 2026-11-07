@@ -1,0 +1,14 @@
+{
+  "source": "User-pasted Section D of https://claude.ai/artifact/H6RRAUuacfvyFuV9Kkh9JA, 5 November 2026",
+  "note": "The report claims 34 queries; its explicitly written variants expand to 35 literal strings. These are observational browser-QA inputs, not exhaustive clinical relevance labels or a replacement for the frozen held-out evaluation.",
+  "queries": [
+    "ACL injury", "hip fracture", "carpal tunnel syndrome", "osteoarthritis",
+    "rotator cuff tear", "cauda equina syndrome", "compartment syndrome",
+    "Achilles tendon rupture", "ACL", "THR", "TKR", "OA", "NOF", "CES", "MSCC",
+    "painful hip replacement", "suspected cauda equina", "child with limp",
+    "ankle injury", "infected joint replacement", "carpel tunnel",
+    "achillies tendon", "osteoarthrits", "rotaor cuff", "hip fractre", "hip-fracture",
+    "zzzznonsenseword", "!!!@@@###", "MiXeD CaSe AcL", "acl", "AcL",
+    "  hip fracture  ", "hip    fracture", "hip fracture.", "hip, fracture"
+  ]
+}

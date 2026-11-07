@@ -44,3 +44,8 @@
     outline-offset: 2px;
   }
 }
+
+/* Loading feedback stays visible without nonessential pulsing when motion is reduced. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-pulse { animation: none; }
+}

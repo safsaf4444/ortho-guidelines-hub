@@ -10,3 +10,6 @@ scripts/deploy/*.sh text eol=lf
 supabase/migrations/*.sql text eol=lf
 supabase/*-READONLY.sql text eol=lf
 supabase/URL-KEY-V4-ROLLBACK.sql text eol=lf
+
+# Frozen search evaluation is pinned to its original LF byte digest.
+scripts/tests/fixtures/search-heldout.json text eol=lf
