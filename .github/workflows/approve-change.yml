@@ -1,10 +1,11 @@
-name: Approve or reject guideline change
+name: Acknowledge guideline change request
 
 on:
   issue_comment:
     types: [created]
 
 permissions:
+  contents: read
   issues: write
 
 jobs:
@@ -25,19 +26,14 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          # Node 22, matching detect-changes.yml. scripts/approve-change.ts uses
-          # the same @supabase/supabase-js client, whose realtime component needs
-          # native WebSocket support; on Node 20 that failed with "Node.js 20
-          # detected without native WebSocket support" (detect-changes run #1).
+          # Repository runtime; this handler has no database or publisher client.
           node-version: '22'
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci --ignore-scripts
 
-      - name: Process approval/rejection
+      - name: Acknowledge request (no database authority)
         env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}

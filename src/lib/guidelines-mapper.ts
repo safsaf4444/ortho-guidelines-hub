@@ -31,7 +31,7 @@ export interface DbGuideline {
   link_verification_notes: string | null;
   versions: GuidelineVersion[];  // JSONB array
   source_type: SourceType;             // NOT NULL, default 'national'
-  guidance_status: GuidanceStatus;     // NOT NULL, default 'current'
+  guidance_status: GuidanceStatus;     // Explicit status required; no client default
   scope_note: string | null;
   editorial_review_date: string | null; // Postgres date → 'YYYY-MM-DD'
   inclusion_reason: string | null;
@@ -74,6 +74,8 @@ export function toGuideline(row: DbGuideline): Guideline {
 // ─── Guideline → DB row ───────────────────────────────────────────────────────
 
 export function toDbRow(g: Guideline): Omit<DbGuideline, 'created_at' | 'updated_at'> {
+  if (!g.guidanceStatus) throw new Error('Explicit clinical status required; current is never inferred.');
+  if (!g.sourceType) throw new Error('Explicit source type required.');
   return {
     id:                   g.id,
     section:              g.section,
@@ -95,8 +97,8 @@ export function toDbRow(g: Guideline): Omit<DbGuideline, 'created_at' | 'updated
     link_last_verified:   g.linkLastVerified || null,
     link_verification_notes: g.linkVerificationNotes ?? null,
     versions:             g.versions,
-    source_type:          g.sourceType ?? 'national',
-    guidance_status:      g.guidanceStatus ?? 'current',
+    source_type:          g.sourceType,
+    guidance_status:      g.guidanceStatus,
     scope_note:           g.scopeNote ?? null,
     editorial_review_date: g.editorialReviewDate || null,
     inclusion_reason:     g.inclusionReason ?? null,

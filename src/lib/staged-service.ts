@@ -330,6 +330,7 @@ export const stagedService = {
     stagedId: string,
     guideline: Guideline,
     note: string,
+    evidence: {verificationEvidenceId?: string; clinicalReviewEvidenceId?: string} = {},
   ): Promise<string> {
     if (!supabase) {
       throw new Error('Publishing needs the live database — not available in offline/static mode.');
@@ -341,13 +342,19 @@ export const stagedService = {
       // toDbRow emits exactly the snake_case column shape the RPC's
       // jsonb_populate_record expects, so the mapper stays the single place
       // that knows the DB column names.
-      p_final_guideline_data: toDbRow(guideline),
+      p_final_guideline_data: { ...toDbRow(guideline),
+        ...(evidence.verificationEvidenceId ? {verification_evidence_id:evidence.verificationEvidenceId} : {}),
+        ...(evidence.clinicalReviewEvidenceId ? {clinical_review_evidence_id:evidence.clinicalReviewEvidenceId} : {}),
+      },
       p_changelog_note: note,
     });
 
     if (error) {
       console.error('[staged-service] approve failed — raw error:', error);
       if (isNotAnEditorError(error)) throw new Error(NOT_AN_EDITOR_MESSAGE);
+      if (['GV002','GV003','GV004','GV006'].includes(error.code)) {
+        throw markRefused(new Error('Not published: ' + error.message));
+      }
       // The RPC's already-processed guard. It takes the row lock BEFORE testing
       // review_status, so two concurrent approvals serialise and the second is
       // refused rather than publishing twice — and so is a retry after a

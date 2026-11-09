@@ -1,3 +1,4 @@
+/** Historical pure availability planner only. GitHub comments no longer execute these writes; named DB-editor RPCs and immutable evidence are the authority. */
 /**
  * scripts/lib/change-approval.ts
  * ──────────────────────────────

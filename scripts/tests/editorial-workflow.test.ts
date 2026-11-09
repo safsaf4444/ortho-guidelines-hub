@@ -103,8 +103,8 @@ check('planApproval has no way to write without a check outcome (check is a requ
   /check: CheckOutcome;/.test(read('scripts/lib/change-approval.ts')));
 check('approve-change.ts writes verification fields only via planApproval (no literal status in the script)',
   !/link_verification_status\s*:/.test(read('scripts/approve-change.ts')));
-check('approve-change.ts calls the shared checker (checkUrl) before planning',
-  /await checkUrl\(link\)[^]*planApproval\(/.test(read('scripts/approve-change.ts')));
+check('GitHub acknowledgement cannot call the checker or legacy write planner',
+  !/\b(?:checkUrl|planApproval)\s*\(/.test(read('scripts/approve-change.ts')));
 
 eq('comment "approve" (any case, padded) is an approval', parseCommentAction('  APPROVE \n'), 'approve');
 eq('comment "reject" is a rejection', parseCommentAction('reject'), 'reject');
@@ -432,9 +432,9 @@ for (const t of ['staged_discovery_decisions', 'staged_discovery_evidence']) {
 check('guideline_changelog: editors get INSERT only (no UPDATE/DELETE policy)',
   /create policy changelog_editor_insert\s*\n\s*on public\.guideline_changelog\s*\n\s*for insert/.test(ROLES_SQL)
   && !/on public\.guideline_changelog\s*\n\s*for (update|delete)/.test(ROLES_SQL + QUEUE_SQL));
-check('approve-change.ts writes a changelog entry after a verification write', /from\('guideline_changelog'\)\s*\n\s*\.insert/.test(read('scripts/approve-change.ts')));
-check('approve-change.ts ignores a closed issue (idempotent re-delivery)', /if \(issue\.state !== 'open'\)/.test(read('scripts/approve-change.ts')));
-check('approve-change.ts requires exactly one updated row', /data\.length !== 1/.test(read('scripts/approve-change.ts')));
+check('GitHub acknowledgement has no database client or mutation surface', !/createClient|from\('(?:guidelines|guideline_changelog)'\)|supabase\./.test(read('scripts/approve-change.ts')));
+check('GitHub acknowledgement ignores a closed issue', /if\s*\(issue\.state\s*!==\s*'open'\)/.test(read('scripts/approve-change.ts')));
+check('GitHub acknowledgement explicitly disclaims database or publication authority', read('scripts/approve-change.ts').includes('No database, verification, clinical approval or publication change'));
 
 // ════════════════════════════════════════════════════════════════════════════
 console.log('\n[I] Trust boundaries in GitHub workflows');
@@ -475,10 +475,10 @@ check('approve-change.yml: acts only on OWNER / COLLABORATOR / MEMBER comments',
   && !/author_association == '(CONTRIBUTOR|NONE|FIRST_TIME_CONTRIBUTOR)'/.test(approveWf));
 check('approve-change.yml: the comment reaches the script as an env var', /COMMENT_BODY: \$\{\{ github\.event\.comment\.body \}\}/.test(approveWf));
 const serviceRoleUsers = WF.filter((n) => /SUPABASE_SERVICE_ROLE_KEY/.test(wf[n].split('\n').filter((l) => !/^\s*#/.test(l)).join('\n')));
-eq('only these workflows hold the service-role key (a new one must be a deliberate change)', serviceRoleUsers, ['approve-change', 'detect-changes', 'guideline-sync']);
+eq('only these workflows hold the service-role key (a new one must be a deliberate change)', serviceRoleUsers, ['detect-changes', 'guideline-sync']);
 check('deploy.yml: the build never sees the service-role key', !/SERVICE_ROLE/.test(wf.deploy.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n')));
 gap('approve-change.yml: COLLABORATOR includes read-only collaborators; the gate is GitHub association, not the database editor allowlist (owner decision: restrict to OWNER)',
-  /author_association == 'COLLABORATOR'/.test(approveWf));
+  /author_association == 'COLLABORATOR'/.test(approveWf) && serviceRoleUsers.includes('approve-change'));
 
 console.log(`\n──────── ${pass} passed, ${fail} failed (${gaps} known gap(s) printed, not counted) ────────\n`);
 process.exit(fail > 0 ? 1 : 0);

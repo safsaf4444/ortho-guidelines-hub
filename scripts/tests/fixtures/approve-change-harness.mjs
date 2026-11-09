@@ -43,8 +43,8 @@ globalThis.fetch = async (input, init = {}) => {
 
   // ── GitHub ──────────────────────────────────────────────────────────────
   if (url.startsWith('https://api.github.com/')) {
-    if (method === 'GET' && /\/issues\/\d+$/.test(url)) return json(200, scenario.issue);
-    if (method === 'POST' && /\/issues\/\d+\/comments$/.test(url)) return json(201, { id: 1 });
+    if (method === 'GET' && /\/issues\/\d+$/.test(url)) return json(scenario.issueStatus ?? 200, scenario.issue);
+    if (method === 'POST' && /\/issues\/\d+\/comments$/.test(url)) return json(scenario.commentStatus ?? 201, { id: 1 });
     if (method === 'PATCH' && /\/issues\/\d+$/.test(url)) return json(200, { state: 'closed' });
     return json(404, { message: 'harness: unrouted GitHub call' });
   }
