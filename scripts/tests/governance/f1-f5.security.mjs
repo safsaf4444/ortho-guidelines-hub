@@ -61,4 +61,14 @@ test('F2 actual service comparison class remains review-only and cannot publish 
  return row.status==='staged'&&deny(()=>approve(row.stagedId,payload('forbidden-class-'+run,u('class-target'))),/must not be published as a new entry/);
 });
 
+﻿for(const alternative of [u('owner'),{label:'Missing URL'}])test('F5 malformed incoming alternative is refused atomically '+JSON.stringify(alternative),()=>{
+ const name='bad-evidence-'+run+'-'+(++sequence),source=u(name);const rejected=deny(()=>discover(name,source,[alternative]),/Incoming evidence/);
+ return rejected&&sql(`select count(*) from public.staged_guidelines where candidate_id='${name}'`)==='0';
+});
+test('F5 malformed observed/staged version cannot be silently skipped by service sync',()=>{
+ const name='bad-version-'+run,source=u(name),c={candidateId:name,pipeline:'sync-providers',provider:'SYNTHETIC',topic:'Synthetic invalid version',changeReason:'NEW_GUIDELINE',versions:[{url:source,label:'Synthetic'},u('owner')],primaryUrl:source,sourceUrlKey:source,discoveredAt:new Date().toISOString()};
+ const result=JSON.parse(value('service_role',null,`select public.stage_sync_candidates('${run}-bad-version',${literal([c])})`))[0];
+ return result.status==='failed'&&result.code==='GV005'&&sql(`select count(*) from public.staged_guidelines where candidate_id='${name}'`)==='0';
+});
+
 fs.writeFileSync(out+'/f1-f5-runtime.json',JSON.stringify({container,passed,failed,outcomes,competed},null,2)+'\n');console.log(passed+' passed, '+failed+' failed');process.exitCode=failed?1:0;

@@ -171,6 +171,8 @@ declare k text;begin
   raise exception 'Closed decisions are immutable; use an explicit rejection release' using errcode='GV006';
  end if;
  if new.review_status in('pending','deferred') then
+  if jsonb_typeof(new.versions) is distinct from 'array' then raise exception 'Incoming staged versions must be an array' using errcode='GV005';end if;
+  if exists(select 1 from jsonb_array_elements(new.versions) v where jsonb_typeof(v) is distinct from 'object' or jsonb_typeof(v->'url') is distinct from 'string' or v->>'url' !~* '^https?://[^/?#@[:space:]]+([/?#]|$)' or v->>'url' ~ '[[:space:]]') then raise exception 'Incoming staged versions require HTTP(S) URL objects' using errcode='GV005';end if;
   k:=public._governance_key(new.primary_url);
 
   if new.change_reason='NEW_GUIDELINE' and public._governance_rejected(k) then raise exception 'Document has an unreleased rejection; new producer or candidate ID cannot reset it' using errcode='GV006';end if;
@@ -347,9 +349,17 @@ create function public._governance_comparison_required(p_key text) returns boole
  and not exists(select 1 from public.governance_rejection_releases x where x.rejection_id=s.rejection_id));
 $$;
 create function public._governance_evidence_lock() returns trigger language plpgsql security definer set search_path=public,pg_temp as $$
-begin
+declare a jsonb;v jsonb;begin
  perform pg_advisory_xact_lock(20261107,25);
  perform 1 from public.staged_guidelines where id=new.staged_id for update;
+ perform public._governance_key(new.discovered_url);
+ foreach a in array array[coalesce(new.observed_versions,'[]'::jsonb),coalesce(new.url_alternatives,'[]'::jsonb)] loop
+  if jsonb_typeof(a) is distinct from 'array' then raise exception 'Incoming evidence versions/alternatives must be arrays' using errcode='GV005';end if;
+  for v in select value from jsonb_array_elements(a) loop
+   if jsonb_typeof(v) is distinct from 'object' or jsonb_typeof(v->'url') is distinct from 'string' then raise exception 'Incoming evidence requires explicit URL objects; malformed signals cannot be skipped' using errcode='GV005';end if;
+   perform public._governance_key(v->>'url');
+  end loop;
+ end loop;
  return new;
 end$$;
 create function public._governance_evidence_after() returns trigger language plpgsql security definer set search_path=public,pg_temp as $$
