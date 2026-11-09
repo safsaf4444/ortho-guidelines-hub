@@ -352,7 +352,7 @@ export const stagedService = {
     if (error) {
       console.error('[staged-service] approve failed — raw error:', error);
       if (isNotAnEditorError(error)) throw new Error(NOT_AN_EDITOR_MESSAGE);
-      if (['GV002','GV003','GV004','GV006'].includes(error.code)) {
+      if (['GV002','GV003','GV004','GV006','GV007'].includes(error.code)) {
         throw markRefused(new Error('Not published: ' + error.message));
       }
       // The RPC's already-processed guard. It takes the row lock BEFORE testing

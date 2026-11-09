@@ -2,6 +2,7 @@ import {spawnSync} from 'node:child_process';
 import {assertDirectMaintenanceDisabled} from '../lib/direct-maintenance-disabled';
 import assert from 'node:assert/strict';import fs from 'node:fs';
 import {receiptSelection,publicationPayloadKey,type ReceiptLoad} from '../../src/lib/editor-receipts-model';
+import {directWritesDisabled,editorModalWritable} from '../../src/lib/editor-capabilities';
 import type {Guideline} from '../../src/data/guidelines-data';
 let passed=0;function check(name:string,fn:()=>void){fn();passed++;console.log('PASS '+name);}
 const g:Guideline={id:'synthetic',topic:'Synthetic',section:'Synthetic',source:'Synthetic',type:'Synthetic',summary:'Synthetic only',regionalVariation:false,localOverlayNeeded:false,lastChecked:'',status:'Drafted',versions:[{url:'https://synthetic.example.test/source',label:'Synthetic'}],sourceType:'national',guidanceStatus:'current'};
@@ -17,6 +18,9 @@ check('human source review cannot stand in for clinical review',()=>assert.equal
 check('verified requires separate matching availability receipt',()=>assert.equal(receiptSelection({...g,linkVerificationStatus:'verified'},load,'review','',true).ready,false));
 check('needs-review unchecked outcome is explicit and may omit availability proof',()=>assert.equal(receiptSelection({...g,guidanceStatus:'needs-review'},load,'','',true).ready,true));
 check('UI propagates selected evidence to actual approval call',()=>assert.ok(fs.readFileSync('src/App.tsx','utf8').includes('stagedService.approve(stagedCandidateId, updated, prepared.note, evidence)')));
+check('modal capability opens only the staged path',()=>{assert.equal(editorModalWritable(true,true),true);assert.equal(editorModalWritable(true,false),false);assert.equal(editorModalWritable(false,true),false);assert.equal(editorModalWritable(false,false),false);assert.equal(directWritesDisabled(),true);});
+check('App save handler forwards selected evidence',()=>assert.ok(fs.readFileSync('src/App.tsx','utf8').includes('persistGuideline(updated, isNewGuideline, note, evidence)')));
+check('database isolation refusal is reported as a definite refusal',()=>assert.match(fs.readFileSync('src/lib/staged-service.ts','utf8'),/'GV006','GV007'\]/));
 check('static UI gate remains disabled in static preview',()=>assert.match(fs.readFileSync('src/App.tsx','utf8'),/VITE_STATIC_PREVIEW !== 'true'/));
 check('unsupported direct maintenance has no environment override',()=>assert.throws(()=>assertDirectMaintenanceDisabled('synthetic'),/disabled pending an audited replacement/));
 for(const script of ['seed.ts','upsert-verified.ts','detect-changes.ts'])check(script+' stops before credentials or network',()=>{

@@ -115,6 +115,18 @@ end$$;
 create function public._governance_payload_hash(p_data jsonb) returns text language sql immutable set search_path=public,pg_temp as $$
  select encode(sha256(convert_to((p_data-'verification_evidence_id'-'clinical_review_evidence_id')::text,'UTF8')),'hex');
 $$;
+-- Transaction-isolation contract (F1). Every serialised governance path runs only at READ COMMITTED,
+-- where each statement after this lock takes a fresh snapshot and so sees evidence committed while waiting.
+-- A REPEATABLE READ or SERIALIZABLE snapshot predates the wait, and evidence appends do not update the queue
+-- row, so such a transaction could validate stale evidence and publish. Those modes, and READ UNCOMMITTED
+-- (not the tested contract), are refused before the lock with GV007. This is the only pipeline-lock call site.
+create function public._governance_acquire_pipeline_lock() returns void language plpgsql set search_path=public,pg_temp as $$
+declare v_level text:=pg_catalog.current_setting('transaction_isolation');begin
+ if v_level is distinct from 'read committed' then
+  raise exception 'Editorial governance writes require READ COMMITTED; % transactions are refused',upper(v_level) using errcode='GV007',hint='Nothing was changed. Retry without overriding the transaction isolation level.';
+ end if;
+ perform pg_advisory_xact_lock(20261107,25);
+end$$;
 create function public._governance_rejected(p_key text) returns boolean language sql stable set search_path=public,pg_temp as $$
  select exists(select 1 from public.governance_rejections r where r.identity_key=p_key
  and not exists(select 1 from public.governance_rejection_releases x where x.rejection_id=r.id));
@@ -145,7 +157,7 @@ language plpgsql security definer set search_path=public,pg_temp as $$
 declare v_id uuid;v_url text;begin
  if public.is_editor() is not true then raise exception 'Named database editor required' using errcode='42501';end if;
  if p_note is null or p_note !~ '\S' or jsonb_typeof(p_data) is distinct from 'object' then raise exception 'Explicit review payload and note required' using errcode='23514';end if;
- perform pg_advisory_xact_lock(20261107,25);
+ perform public._governance_acquire_pipeline_lock();
  perform 1 from public.staged_guidelines where id=p_staged_id and review_status='pending' and change_reason='NEW_GUIDELINE';
  if not found then raise exception 'Pending new candidate required' using errcode='55000';end if;
  v_url:=p_data->'versions'->0->>'url';perform public._governance_key(v_url);
@@ -165,7 +177,7 @@ end$$;
 
 create function public._governance_queue_guard() returns trigger language plpgsql security definer set search_path=public,pg_temp as $$
 declare k text;begin
- perform pg_advisory_xact_lock(20261107,25);
+ perform public._governance_acquire_pipeline_lock();
  if TG_OP='UPDATE' and old.review_status in('accepted','rejected','resolved')
    and (to_jsonb(new)-'updated_at') is distinct from (to_jsonb(old)-'updated_at') then
   raise exception 'Closed decisions are immutable; use an explicit rejection release' using errcode='GV006';
@@ -196,7 +208,7 @@ create function public.release_rejected_document(p_url text,p_note text) returns
 declare n integer;begin
  if public.is_editor() is not true then raise exception 'Named editor required' using errcode='42501';end if;
  if p_note is null or p_note !~ '\S' then raise exception 'Release reason required' using errcode='23514';end if;
- perform pg_advisory_xact_lock(20261107,25);
+ perform public._governance_acquire_pipeline_lock();
  insert into public.governance_rejection_releases(rejection_id,actor,note)
  select r.id,auth.uid(),p_note from public.governance_rejections r where r.identity_key=public._governance_key(p_url)
  and not exists(select 1 from public.governance_rejection_releases x where x.rejection_id=r.id);
@@ -228,7 +240,7 @@ alter table public.guidelines alter column guidance_status drop default;
 
 create function public._governance_prepare(p_staged_id uuid,p_data jsonb) returns jsonb language plpgsql set search_path=public,pg_temp as $$
 declare s public.staged_guidelines;g public.guidelines;e public.governance_evidence;v_url text;k text;holder text;max_age interval;primary_key text;begin
- perform pg_advisory_xact_lock(20261107,25);
+ perform public._governance_acquire_pipeline_lock();
  select * into strict s from public.staged_guidelines where id=p_staged_id;
  perform public._governance_key(s.primary_url);
  if jsonb_typeof(p_data) is distinct from 'object' then raise exception 'Object payload required' using errcode='23514';end if;
@@ -296,7 +308,9 @@ create table public.governance_rejection_sources (
  id uuid primary key default gen_random_uuid(), rejection_id uuid not null references public.governance_rejections(id),
  evidence_id uuid references public.staged_discovery_evidence(id), producer text, candidate_class text not null,
  source_url text, observed_alias text not null, identity_key text not null, relationship text not null, trust_status text not null,
- recorded_at timestamptz not null default clock_timestamp(), unique(rejection_id,evidence_id,identity_key,relationship)
+ -- trust_status is part of the identity: contradictory labels on one alias are each retained, so any
+ -- document-level observation derives a comparison hold regardless of observation order.
+ recorded_at timestamptz not null default clock_timestamp(), unique(rejection_id,evidence_id,identity_key,relationship,trust_status)
 );
 create index governance_rejection_sources_key on public.governance_rejection_sources(identity_key);
 do $$declare t text;begin
@@ -309,7 +323,7 @@ do $$declare t text;begin
  end loop;
 end$$;
 create function public._governance_snapshot_rejection(p_staged_id uuid) returns void language plpgsql security definer set search_path=public,pg_temp as $$
-declare s public.staged_guidelines;r public.governance_rejections;e public.staged_discovery_evidence;v jsonb;u text;begin
+declare s public.staged_guidelines;r public.governance_rejections;e public.staged_discovery_evidence;v jsonb;u text;t text;begin
  select * into strict s from public.staged_guidelines where id=p_staged_id;
  select * into r from public.governance_rejections where staged_id=s.id;if not found then return;end if;
  for e in select * from public.staged_discovery_evidence where staged_id=s.id loop
@@ -337,9 +351,10 @@ declare s public.staged_guidelines;r public.governance_rejections;e public.stage
  for v in select value from jsonb_array_elements(coalesce(s.versions,'[]'::jsonb)) loop
   if v->>'url' is not null then
    u:=v->>'url';perform public._governance_key(u);
-   if not exists(select 1 from public.governance_rejection_sources where rejection_id=r.id and evidence_id is null and identity_key=public._governance_key(u)) then
+   t:=case when coalesce(v->>'label','') ~* '(fallback|index|resource centre)' then 'navigation-only; equivalence not established' else 'comparison-only; equivalence not established' end;
+   if not exists(select 1 from public.governance_rejection_sources where rejection_id=r.id and evidence_id is null and identity_key=public._governance_key(u) and trust_status=t) then
     insert into public.governance_rejection_sources(rejection_id,producer,candidate_class,source_url,observed_alias,identity_key,relationship,trust_status)
-    values(r.id,s.producer,s.change_reason,s.primary_url,u,public._governance_key(u),'staged-version',case when coalesce(v->>'label','') ~* '(fallback|index|resource centre)' then 'navigation-only; equivalence not established' else 'comparison-only; equivalence not established' end);
+    values(r.id,s.producer,s.change_reason,s.primary_url,u,public._governance_key(u),'staged-version',t);
    end if;
   end if;
  end loop;
@@ -350,7 +365,7 @@ create function public._governance_comparison_required(p_key text) returns boole
 $$;
 create function public._governance_evidence_lock() returns trigger language plpgsql security definer set search_path=public,pg_temp as $$
 declare a jsonb;v jsonb;begin
- perform pg_advisory_xact_lock(20261107,25);
+ perform public._governance_acquire_pipeline_lock();
  perform 1 from public.staged_guidelines where id=new.staged_id for update;
  perform public._governance_key(new.discovered_url);
  foreach a in array array[coalesce(new.observed_versions,'[]'::jsonb),coalesce(new.url_alternatives,'[]'::jsonb)] loop
@@ -406,7 +421,7 @@ declare
   v_relation  text;
   v_other     text;
 begin
-  perform pg_advisory_xact_lock(20261107,25);
+  perform public._governance_acquire_pipeline_lock();
   if p_run_id is null or length(btrim(p_run_id)) = 0 then
     raise exception 'stage_discovery_candidate: a run id is required for idempotency' using errcode = '22023';
   end if;
@@ -624,7 +639,7 @@ declare
   v_hold     public.discovery_staging_holds;
   v_evidence uuid;
 begin
-  perform pg_advisory_xact_lock(20261107,25);
+  perform public._governance_acquire_pipeline_lock();
   if coalesce(btrim(v_cid), '') = '' or coalesce(btrim(p_c->>'topic'), '') = ''
      or coalesce(btrim(p_c->>'provider'), '') = '' or p_c->>'discoveredAt' is null
      or jsonb_typeof(p_c->'versions') is distinct from 'array'
@@ -767,7 +782,7 @@ declare
   v_status  text;
   v_outcome text;
 begin
-  perform pg_advisory_xact_lock(20261107,25);
+  perform public._governance_acquire_pipeline_lock();
   -- NULL-safe: is_editor() is NULL when auth.uid() is NULL.
   if public.is_editor() is not true then
     raise exception 'resolve_discovery_candidate: not an approved editor' using errcode = '42501';
@@ -851,7 +866,7 @@ as $$
 declare
   v_staged public.staged_guidelines;
 begin
-  perform pg_advisory_xact_lock(20261107,25);
+  perform public._governance_acquire_pipeline_lock();
   -- `is not true`, NOT `if not public.is_editor()`: is_editor() is NULL for a
   -- caller with no JWT (auth.uid() NULL), and `not NULL` would let it through.
   if public.is_editor() is not true then
@@ -944,7 +959,7 @@ begin
       using errcode = '23514';
   end if;
 
-  perform pg_advisory_xact_lock(20261107,25);
+  perform public._governance_acquire_pipeline_lock();
   select * into v_staged
     from public.staged_guidelines
    where id = p_candidate_id
@@ -1113,7 +1128,7 @@ create policy named_editor_read on public.governance_reconsideration_signals for
 create trigger immutable_governance before update or delete or truncate on public.governance_reconsideration_signals for each statement execute function public.forbid_mutation();
 create function public.record_rejected_revision_signal(p_run_id text,p_producer text,p_url text,p_details jsonb) returns uuid language plpgsql security definer set search_path=public,pg_temp as $$
 declare r uuid;v uuid;k text;old_details jsonb;begin
- perform pg_advisory_xact_lock(20261107,25);k:=public._governance_key(p_url);
+ perform public._governance_acquire_pipeline_lock();k:=public._governance_key(p_url);
  if p_run_id is null or p_run_id !~ '\S' or p_producer is null or p_producer not in('discover','sync-providers','detect-changes') or jsonb_typeof(p_details) is distinct from 'object' then raise exception 'Explicit revision observation and producer required' using errcode='23514';end if;
  select id into r from public.governance_rejections where identity_key=k and not exists(select 1 from public.governance_rejection_releases x where x.rejection_id=governance_rejections.id) order by recorded_at limit 1;
  if r is null then raise exception 'An unreleased rejected identity is required' using errcode='GV006';end if;

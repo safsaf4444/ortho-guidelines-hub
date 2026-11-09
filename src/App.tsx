@@ -14,7 +14,7 @@ import { draftOwnerKey, DraftOwnerContext } from './lib/draft-owner'
 import { stagedService } from './lib/staged-service'
 import PublicationReceipts from './components/PublicationReceipts'
 import GovernanceReviewInbox from './components/GovernanceReviewInbox'
-import {directWritesDisabled} from './lib/editor-capabilities'
+import {directWritesDisabled,editorModalWritable} from './lib/editor-capabilities'
 import {publicationPayloadKey,type PublicationEvidence,type ReceiptSelection} from './lib/editor-receipts-model'
 import { canWrite, writeBlockedReason, type WriteGate } from './lib/write-access'
 import { validateGuidelineId, isPlaceholderGuidelineId } from './lib/guideline-id'
@@ -778,8 +778,8 @@ ${noteMsg}
    * the only way to retry was to retype the whole entry. A failure now leaves
    * the draft exactly where it was.
    */
-  const handleSave = async (updated: Guideline, note: string) => {
-    const saved = await persistGuideline(updated, isNewGuideline, note);
+  const handleSave = async (updated: Guideline, note: string, evidence?: PublicationEvidence) => {
+    const saved = await persistGuideline(updated, isNewGuideline, note, evidence);
     if (saved) setEditingGuideline(null);
   };
 
@@ -1532,7 +1532,7 @@ Add a note from the entry to restore the audit trail.`
       {editingGuideline && (
         <EditModal
           guideline={editingGuideline}
-          canEdit={canEdit && !directWritesDisabled()}
+          canEdit={editorModalWritable(canEdit, stagedCandidateId !== null)}
           blockedReason={writeBlockedReason(gate)}
           onSave={handleSave}
           onClose={() => { setEditingGuideline(null); setStagedCandidateId(null); }}
@@ -2973,6 +2973,9 @@ function EditModal({
               + Add version
             </button>
           </div>
+
+          {/* Inside the scrolling body: as a footer sibling it collapsed to an unusable strip. */}
+          {isStagedCandidate && stagedId && <PublicationReceipts candidateId={stagedId} guideline={form} enabled={canEdit && !submitting} onChange={setReceiptChoice} />}
         </div>
 
         {/* Footer */}
@@ -3005,7 +3008,6 @@ function EditModal({
             </div>
           </div>
         )}
-        {isStagedCandidate && stagedId && <PublicationReceipts candidateId={stagedId} guideline={form} enabled={canEdit && !submitting} onChange={setReceiptChoice} />}
         <div className="flex justify-between items-center gap-2 px-4 py-2.5 border-t border-slate-200 shrink-0">
           <div>
             {/* Delete is a write action too — same gate as Save. The actual

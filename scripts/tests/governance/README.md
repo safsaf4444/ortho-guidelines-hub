@@ -38,6 +38,25 @@ no publisher URL is fetched. The evidence freshness policy is initially unset;
 any one-day policy used in tests is explicitly synthetic and not a production
 policy decision. No verifier credential/membership is granted to application roles.
 
+## Transaction-isolation contract
+
+Every governance path that takes the shared pipeline lock (approval, rejection,
+resolution, staging, clinical review, rejection release, revision signals and the
+queue/evidence triggers) must run at READ COMMITTED. Each statement after the lock
+then takes a fresh snapshot, so evidence committed during the wait is seen.
+
+A REPEATABLE READ or SERIALIZABLE snapshot predates the wait, and an evidence append
+does not update the queue row, so it could validate stale evidence and publish. These
+modes and READ UNCOMMITTED are refused with SQLSTATE `GV007` before any lock or write;
+this includes a session or role `default_transaction_isolation` override.
+`stage_sync_candidates` reports it per candidate as `failed` with code `GV007`.
+Append-only evidence recorders and read-only receipt listings take no lock and make
+no pipeline decision. The target's role and PostgREST settings are not verified here.
+
+Comparison holds are order-independent: each trust classification of an alias is
+retained, and one document-level observation requires comparison. A hold never
+asserts that documents are equivalent, and navigation-only aliases create no hold.
+
 The proposed migration and read-only quarantine rollback are not in automatic
 migration discovery. Do not run them on production. Review the migration plan,
 legacy data, unknown live grants/functions, editor correction workflows, service

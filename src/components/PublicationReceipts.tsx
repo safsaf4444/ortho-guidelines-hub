@@ -18,7 +18,7 @@ export default function PublicationReceipts({candidateId,guideline,enabled,onCha
   }catch(e){if(current.current===requestedKey)setError(e instanceof Error?e.message:String(e));}finally{setBusy(false);}
  }
  const choose=(field:'clinical'|'verification',id:string)=>setChosen(p=>({key,clinical:p.key===key?p.clinical:'',verification:p.key===key?p.verification:'',[field]:id}));
- return <fieldset disabled={!enabled||busy} className="border border-slate-300 rounded p-3 space-y-2 text-sm max-h-72 overflow-y-auto" aria-label="Publication review evidence">
+ return <fieldset disabled={!enabled||busy} className="border border-slate-300 rounded p-3 space-y-2 text-sm" aria-label="Publication review evidence">
   <legend>Publication review evidence</legend>
   <p>Availability checks record URL access only. Human source review records withdrawal or supersession. Clinical review is your explicit assessment of this exact proposed entry. None is inferred from another.</p>
   <label className="block"><input type="checkbox" checked={statusKey===key} onChange={e=>setStatusKey(e.target.checked?key:'')} /> I explicitly reviewed the proposed publication status: {guideline.guidanceStatus}.</label>

@@ -24,6 +24,7 @@
     "release:check": "node scripts/release-gate.mjs",
     "test:release-gate": "node --test scripts/tests/release-gate.test.mjs",
     "test:ui": "tsx scripts/tests/public-ui.e2e.ts",
+    "test:actual-editor": "tsx scripts/tests/actual-app-editor.e2e.ts",
     "release": "node scripts/release-gate.mjs",
     "coverage-gap": "tsx scripts/coverage-gap.ts",
     "monitor-providers": "tsx scripts/monitor-providers.ts",
