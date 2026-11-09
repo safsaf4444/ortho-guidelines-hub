@@ -1,0 +1,7 @@
+import {useEffect,useState} from 'react';import {supabase} from '../lib/supabase';
+export default function GovernanceReviewInbox({enabled}:{enabled:boolean}){
+ const [load,setLoad]=useState<{lateEvidence:Array<{id:string;staged_id:string;closed_status:string}>;revisionSignals:Array<{id:string;source_url:string}>}|null>(null),[error,setError]=useState('');
+ useEffect(()=>{let active=true;if(!enabled||!supabase)return;supabase.rpc('list_governance_review_events').then(({data,error})=>{if(!active)return;if(error)setError(error.message);else setLoad(data);});return()=>{active=false;};},[enabled]);
+ if(!enabled)return null;
+ return <section aria-label="Unresolved governance review signals" className="border border-amber-300 rounded p-3 mb-3"><h2>Unresolved governance review signals</h2>{error?<p role="alert">Could not load review signals: {error}</p>:!load?<p role="status">Loading review signals...</p>:<><p>{load.lateEvidence.length} observations arrived after a closed decision; {load.revisionSignals.length} rejected-source revision signals remain review-only.</p><p>These observations were not included in the earlier approval. No clinical review, publication or reconsideration is implied. Resolution requires the approved editorial policy.</p><ul>{load.lateEvidence.map(e=><li key={e.id}>Candidate {e.staged_id}: new evidence after {e.closed_status}</li>)}{load.revisionSignals.map(e=><li key={e.id}>Rejected-source revision signal: {e.source_url}</li>)}</ul></>}</section>;
+}

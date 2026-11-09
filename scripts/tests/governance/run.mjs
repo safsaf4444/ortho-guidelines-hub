@@ -1,0 +1,5 @@
+/** Explicit isolated database gate. Never part of the default network-free offline gate. */
+import fs from 'node:fs';import {spawnSync} from 'node:child_process';
+const out='reports/f1-f5-remediation';fs.mkdirSync(out,{recursive:true});const suffix=Date.now().toString(36),lab='ortho-governance-f1-f5-'+suffix,compat='ortho-governance-f1-f5-compat-'+suffix;const outcomes=[];
+for(const [file,target] of [['rehearse.mjs',lab],['contracts.test.mjs',lab],['postgres.test.mjs',lab],['f1-f5.security.mjs',lab],['preflight-inventory.mjs',lab],['quarantine.test.mjs',lab],['preflight.security.mjs',compat]]){const r=spawnSync(process.execPath,['scripts/tests/governance/'+file,'--lab='+target],{encoding:'utf8',windowsHide:true,timeout:300000,maxBuffer:8*1024*1024});fs.writeFileSync(out+'/'+file+'.log',(r.stdout??'')+'\n'+(r.stderr??''));outcomes.push({file,lab:target,exitCode:r.status,error:r.error?.message});console.log(file+': '+(r.status===0?'PASS':'FAIL'));if(r.status!==0){process.exitCode=1;break;}}
+fs.writeFileSync(out+'/DATABASE-GATE.json',JSON.stringify({outcomes,labs:[lab,compat],network:'none; verified by harness',production:false},null,2)+'\n');

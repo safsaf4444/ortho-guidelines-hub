@@ -12,6 +12,10 @@ import EditorAuthControl from './components/EditorAuthControl'
 import { useEditorSession } from './lib/editor-session'
 import { draftOwnerKey, DraftOwnerContext } from './lib/draft-owner'
 import { stagedService } from './lib/staged-service'
+import PublicationReceipts from './components/PublicationReceipts'
+import GovernanceReviewInbox from './components/GovernanceReviewInbox'
+import {directWritesDisabled} from './lib/editor-capabilities'
+import {publicationPayloadKey,type PublicationEvidence,type ReceiptSelection} from './lib/editor-receipts-model'
 import { canWrite, writeBlockedReason, type WriteGate } from './lib/write-access'
 import { validateGuidelineId, isPlaceholderGuidelineId } from './lib/guideline-id'
 import {
@@ -603,7 +607,7 @@ export default function App() {
    *     it means a change landed unlogged. Closing that gap for ordinary
    *     edits needs a second RPC; see FOLLOW-UPS.md.
    */
-  const persistGuideline = async (updated: Guideline, isNew: boolean, note: string): Promise<boolean> => {
+  const persistGuideline = async (updated: Guideline, isNew: boolean, note: string, evidence: PublicationEvidence = {}): Promise<boolean> => {
     // Enforced at the source, not just by hiding the Save button: even if
     // something calls this directly, it must not reach Supabase unless all
     // three gate conditions hold. The database would refuse the write anyway;
@@ -612,6 +616,7 @@ export default function App() {
       console.warn(`[persistGuideline] Ignored — ${writeBlockedReason(gate)} No local or database change made.`);
       return false;
     }
+    if (!stagedCandidateId) { alert('Direct create, correction, archive and maintenance writes are disabled pending an audited replacement workflow.'); return false; }
     const prepared = prepareChangeNote(note);
     if (!prepared.ok) {
       console.warn(`[persistGuideline] Refused — ${prepared.error} No change made.`);
@@ -626,8 +631,10 @@ export default function App() {
     // those two states cannot disagree.
     if (stagedCandidateId) {
       try {
-        await stagedService.approve(stagedCandidateId, updated, prepared.note);
-        setGuidelines(prev => [...prev, updated]);
+        await stagedService.approve(stagedCandidateId, updated, prepared.note, evidence);
+        const refreshed = await guidelinesService.getAll();
+        if (refreshed.source === 'live') setGuidelines(refreshed.rows);
+        else alert('Publication succeeded, but the updated catalogue could not be reloaded. Reload before further actions.');
         setStagedCandidateId(null);
         return true;
       } catch (err) {
@@ -1316,6 +1323,7 @@ Add a note from the entry to restore the audit trail.`
 
           {/* Toolbar */}
           <div className="px-5 py-1.5 flex justify-between items-center gap-2 border-b border-slate-100 bg-white shrink-0">
+            {currentSection === REVIEW_QUEUE_VIEW && <GovernanceReviewInbox enabled={canEdit} />}
             {currentSection === DUPLICATES_VIEW ? (
               <span className="text-[11px] text-slate-500">
                 Heuristic matches only — nothing is merged or deleted automatically.
@@ -1393,6 +1401,8 @@ Add a note from the entry to restore the audit trail.`
                   {WRITES_ENABLED && canEdit && (
                     <button
                       onClick={handleAddNew}
+                      disabled={directWritesDisabled()}
+                      title="Direct creation is disabled; use a reviewed staged candidate."
                       className="flex items-center gap-1 px-2.5 py-1.5 bg-[#0F172A] text-white rounded text-[12px] font-medium hover:bg-slate-800 transition-colors shrink-0"
                     >
                       <Plus className="w-3 h-3" />
@@ -1419,7 +1429,7 @@ Add a note from the entry to restore the audit trail.`
             {currentSection === DUPLICATES_VIEW ? (
               <DuplicatesPanel
                 candidates={duplicateCandidates}
-                canEdit={canEdit}
+                canEdit={canEdit && !directWritesDisabled()}
                 onOpen={handleEdit}
                 onDismiss={handleDismissDuplicate}
                 onMerge={handleMergeDuplicates}
@@ -1501,7 +1511,7 @@ Add a note from the entry to restore the audit trail.`
                   items={grouped[section]}
                   allGuidelines={guidelines}
                   groupBy={groupBy}
-                  canEdit={canEdit}
+                  canEdit={canEdit && !directWritesDisabled()}
                   isCollapsed={collapsedSections.has(section)}
                   onToggleCollapse={() => toggleSection(section)}
                   onEdit={handleEdit}
@@ -1522,13 +1532,14 @@ Add a note from the entry to restore the audit trail.`
       {editingGuideline && (
         <EditModal
           guideline={editingGuideline}
-          canEdit={canEdit}
+          canEdit={canEdit && !directWritesDisabled()}
           blockedReason={writeBlockedReason(gate)}
           onSave={handleSave}
           onClose={() => { setEditingGuideline(null); setStagedCandidateId(null); }}
           onDelete={handleDelete}
           isNew={isNewGuideline}
           isStagedCandidate={stagedCandidateId !== null}
+          stagedId={stagedCandidateId}
           existingIds={existingIds}
         />
       )}
@@ -1906,7 +1917,7 @@ function SectionContainer({
         <div id={bodyId} className="px-3.5 pb-3.5 flex flex-col gap-2.5 border-t border-slate-100">
           <div className="h-1.5" />
           {items.map(g => (
-            <GuidelineCard key={g.id} item={g} sectionContext={section} groupBy={groupBy} allGuidelines={allGuidelines} canEdit={canEdit} onEdit={onEdit} onQuickUpdate={onQuickUpdate} />
+            <GuidelineCard key={g.id} item={g} sectionContext={section} groupBy={groupBy} allGuidelines={allGuidelines} canEdit={canEdit && !directWritesDisabled()} onEdit={onEdit} onQuickUpdate={onQuickUpdate} />
           ))}
         </div>
       )}
@@ -2288,7 +2299,7 @@ function GuidelineCard({
 
           {/* Feature 2 — append-only changelog for this guideline. Mounts (and
               fetches) only when the card is expanded. */}
-          <CardChangelog guidelineId={item.id} canEdit={canEdit} />
+          <CardChangelog guidelineId={item.id} canEdit={canEdit && !directWritesDisabled()} />
 
           {/* Provenance — four separate facts that used to be shown as one
               "Last checked" line, which made an automated link ping look like
@@ -2543,7 +2554,7 @@ function ChangelogPanel({ guidelines }: { guidelines: Guideline[] }) {
 
 function EditModal({
   guideline, canEdit, blockedReason, onSave, onClose, onDelete, isNew, isStagedCandidate,
-  existingIds,
+  existingIds, stagedId,
 }: {
   guideline: Guideline;
   canEdit: boolean;
@@ -2552,7 +2563,8 @@ function EditModal({
   /** Which of the three gate conditions is unmet, or null when writable. */
   blockedReason: string | null;
   /** Resolves when the write has been attempted; the modal stays open if it failed. */
-  onSave: (g: Guideline, note: string) => void | Promise<void>;
+  onSave: (g: Guideline, note: string, evidence?: PublicationEvidence) => void | Promise<void>;
+  stagedId: string | null;
   onClose: () => void;
   onDelete: (id: string) => void;
   isNew: boolean;
@@ -2597,6 +2609,7 @@ function EditModal({
   // src/lib/change-note.ts and the guideline_changelog not-blank CHECK), so
   // the form and the constraint can never disagree about what counts as empty.
   const [note, setNote] = useState('');
+  const [receiptChoice,setReceiptChoice] = useState<ReceiptSelection>({payloadKey:'',ready:false});
   // Prevents a second submit while the first is still in flight. The modal
   // now stays open until the write is confirmed, so the button is reachable
   // for as long as the request takes.
@@ -2625,7 +2638,8 @@ function EditModal({
   // the existing rows and the manual Add flow keep working unchanged.
   const idLooksPlaceholder = isNew && idOk && isPlaceholderGuidelineId(form.id);
 
-  const canSave = noteOk && reasonOk && idOk && !submitting;
+  const receiptReady = !isStagedCandidate || (receiptChoice.ready && receiptChoice.payloadKey === publicationPayloadKey(form));
+  const canSave = noteOk && reasonOk && idOk && !submitting && receiptReady;
 
   // `canEdit` is already canWrite(gate) from App, so it IS the writable
   // answer. blockedReason is passed in rather than recomputed because the
@@ -2991,6 +3005,7 @@ function EditModal({
             </div>
           </div>
         )}
+        {isStagedCandidate && stagedId && <PublicationReceipts candidateId={stagedId} guideline={form} enabled={canEdit && !submitting} onChange={setReceiptChoice} />}
         <div className="flex justify-between items-center gap-2 px-4 py-2.5 border-t border-slate-200 shrink-0">
           <div>
             {/* Delete is a write action too — same gate as Save. The actual
@@ -3019,7 +3034,7 @@ This archives the entry rather than deleting it: it disappears from the site, bu
                   if (!canSave) return;
                   setSubmitting(true);
                   try {
-                    await onSave(form, note);
+                    await onSave(form, note, {verificationEvidenceId:receiptChoice.verificationEvidenceId,clinicalReviewEvidenceId:receiptChoice.clinicalReviewEvidenceId});
                   } finally {
                     setSubmitting(false);
                   }
@@ -3203,7 +3218,7 @@ function DuplicatesPanel({
         <DuplicatePairCard
           key={`${c.a.id}::${c.b.id}`}
           candidate={c}
-          canEdit={canEdit}
+          canEdit={canEdit && !directWritesDisabled()}
           onOpen={onOpen}
           onDismiss={onDismiss}
           onMerge={onMerge}

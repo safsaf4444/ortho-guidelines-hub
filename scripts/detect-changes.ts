@@ -1,3 +1,5 @@
+import {assertDirectMaintenanceDisabled} from './lib/direct-maintenance-disabled';
+assertDirectMaintenanceDisabled('detect-changes.ts');
 /**
  * scripts/detect-changes.ts
  *

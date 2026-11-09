@@ -1,3 +1,5 @@
+import {assertDirectMaintenanceDisabled} from './lib/direct-maintenance-disabled';
+assertDirectMaintenanceDisabled('upsert-verified.ts');
 /**
  * upsert-verified.ts
  * ──────────────────

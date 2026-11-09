@@ -137,7 +137,7 @@ check('ordinary path: the catalogue updates after the awaited write, not before'
 
 // Staged path: same rule, measured against its own RPC call.
 const stagedWriteAt = persist.indexOf('await stagedService.approve(');
-const stagedRenderAt = persist.indexOf('setGuidelines(prev => [...prev, updated]);');
+const stagedRenderAt = persist.indexOf("if (refreshed.source === 'live') setGuidelines(refreshed.rows);");
 check('staged path: the catalogue updates after the awaited RPC, not before',
   stagedWriteAt > 0 && stagedRenderAt > 0 && stagedWriteAt < stagedRenderAt,
   `rpc at ${stagedWriteAt}, render at ${stagedRenderAt}`);
@@ -399,7 +399,7 @@ check('the modal is closed only when the write succeeded',
 check('the modal is no longer closed before persisting',
   !/setEditingGuideline\(null\);[\s\S]{0,80}persistGuideline/.test(handleSave));
 check('Save is blocked while a write is in flight (no double submit)',
-  app.includes('&& !submitting;') && app.includes('setSubmitting(true)'));
+  app.includes('&& !submitting && receiptReady;') && app.includes('setSubmitting(true)'));
 
 console.log(`\n──────────────\n${pass} passed, ${fail} failed\n`);
 process.exit(fail === 0 ? 0 : 1);

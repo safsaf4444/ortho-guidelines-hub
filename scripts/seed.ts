@@ -1,3 +1,5 @@
+import {assertDirectMaintenanceDisabled} from './lib/direct-maintenance-disabled';
+assertDirectMaintenanceDisabled('seed.ts');
 /**
  * Seed script — upserts all 128 guidelines from the static data file into Supabase.
  *

@@ -1,0 +1,26 @@
+import {spawnSync} from 'node:child_process';
+import {assertDirectMaintenanceDisabled} from '../lib/direct-maintenance-disabled';
+import assert from 'node:assert/strict';import fs from 'node:fs';
+import {receiptSelection,publicationPayloadKey,type ReceiptLoad} from '../../src/lib/editor-receipts-model';
+import type {Guideline} from '../../src/data/guidelines-data';
+let passed=0;function check(name:string,fn:()=>void){fn();passed++;console.log('PASS '+name);}
+const g:Guideline={id:'synthetic',topic:'Synthetic',section:'Synthetic',source:'Synthetic',type:'Synthetic',summary:'Synthetic only',regionalVariation:false,localOverlayNeeded:false,lastChecked:'',status:'Drafted',versions:[{url:'https://synthetic.example.test/source',label:'Synthetic'}],sourceType:'national',guidanceStatus:'current'};
+const load:ReceiptLoad={receipts:[{id:'review',kind:'clinical-review',outcome:null,observedAt:'2026-11-09',actor:'synthetic',note:'Synthetic',eligible:true}],availabilityPolicyConfigured:false,payloadFingerprint:'synthetic'};
+check('missing exact review refuses current',()=>assert.equal(receiptSelection(g,load,'','',true).ready,false));
+check('status must be explicitly reviewed',()=>assert.equal(receiptSelection(g,load,'review','',false).ready,false));
+check('matching exact review authorises only UI submission',()=>assert.equal(receiptSelection(g,load,'review','',true).ready,true));
+check('mismatched receipt refused',()=>assert.equal(receiptSelection(g,load,'other','',true).ready,false));
+check('expired/ineligible receipt refused',()=>assert.equal(receiptSelection(g,{...load,receipts:load.receipts.map(r=>({...r,eligible:false}))},'review','',true).ready,false));
+check('comparison hold blocks publication',()=>assert.equal(receiptSelection(g,{...load,comparisonRequired:true},'review','',true).ready,false));
+check('each payload edit changes selection binding',()=>{for(const patch of [{topic:'Changed'},{notes:'Changed'},{guidanceStatus:'needs-review' as const},{versions:[{url:'https://synthetic.example.test/other',label:'Synthetic'}]}])assert.notEqual(publicationPayloadKey({...g,...patch}),publicationPayloadKey(g));});
+check('human source review cannot stand in for clinical review',()=>assert.equal(receiptSelection(g,{...load,receipts:[{...load.receipts[0],kind:'human-source-review'}]},'review','',true).ready,false));
+check('verified requires separate matching availability receipt',()=>assert.equal(receiptSelection({...g,linkVerificationStatus:'verified'},load,'review','',true).ready,false));
+check('needs-review unchecked outcome is explicit and may omit availability proof',()=>assert.equal(receiptSelection({...g,guidanceStatus:'needs-review'},load,'','',true).ready,true));
+check('UI propagates selected evidence to actual approval call',()=>assert.ok(fs.readFileSync('src/App.tsx','utf8').includes('stagedService.approve(stagedCandidateId, updated, prepared.note, evidence)')));
+check('static UI gate remains disabled in static preview',()=>assert.match(fs.readFileSync('src/App.tsx','utf8'),/VITE_STATIC_PREVIEW !== 'true'/));
+check('unsupported direct maintenance has no environment override',()=>assert.throws(()=>assertDirectMaintenanceDisabled('synthetic'),/disabled pending an audited replacement/));
+for(const script of ['seed.ts','upsert-verified.ts','detect-changes.ts'])check(script+' stops before credentials or network',()=>{
+ const result=spawnSync(process.execPath,['node_modules/tsx/dist/cli.mjs','scripts/'+script],{encoding:'utf8',timeout:30000,env:{PATH:process.env.PATH,SYSTEMROOT:process.env.SYSTEMROOT,TEMP:process.env.TEMP,TMP:process.env.TMP}});
+ assert.notEqual(result.status,0);assert.match(result.stderr,/disabled pending an audited replacement workflow/);
+});
+console.log(passed+' passed, 0 failed');

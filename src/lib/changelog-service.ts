@@ -1,3 +1,5 @@
+import {markRefused} from './write-result';
+import {directWritesDisabled} from './editor-capabilities';
 import { supabase } from './supabase';
 import {
   type ChangelogEntry,
@@ -83,6 +85,7 @@ export const changelogService = {
 
   /** Append a note. Throws if Supabase is unconfigured or the insert fails. */
   async create({ guidelineId, description }: { guidelineId: string; description: string }): Promise<ChangelogEntry> {
+    if (directWritesDisabled()) throw markRefused(new Error('Standalone changelog writes are disabled; use an atomic editorial RPC.'));
     if (!supabase) {
       throw new Error('Changelog requires the live database — not available in static/offline mode.');
     }

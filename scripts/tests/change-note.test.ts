@@ -94,7 +94,7 @@ check('the static fallback excludes archived rows too',
 const app = readFileSync('src/App.tsx', 'utf8');
 check('App.tsx archives instead of removing', app.includes('guidelinesService.archive(') && !app.includes('guidelinesService.remove('));
 check('the merge path archives the losing row rather than deleting it', app.includes('archive(duplicate.id)'));
-check('every persist supplies a note (persistGuideline takes one)', /persistGuideline = async \(updated: Guideline, isNew: boolean, note: string\)/.test(app));
+check('every persist supplies a note (persistGuideline takes one)', /persistGuideline = async \(updated: Guideline, isNew: boolean, note: string, evidence: PublicationEvidence = \{\}\)/.test(app));
 // Save is gated on a conjunction, and each conjunct is asserted separately
 // rather than pinning the whole line. The previous version matched
 // `const canSave = noteOk && reasonOk;` exactly, so adding a third condition

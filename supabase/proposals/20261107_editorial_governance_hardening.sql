@@ -4,6 +4,42 @@
 begin;
 set local lock_timeout='5s';
 set local statement_timeout='60s';
+-- Read-only data/schema preflight: no rows or schema objects are modified.
+do $preflight$
+declare issues jsonb:='[]'::jsonb; r record; item jsonb; field text; link text; tab text; key text;begin
+ foreach tab in array array['guidelines','staged_guidelines','staged_discovery_evidence','staged_discovery_decisions','discovery_staging_holds'] loop
+  if to_regclass('public.'||tab) is null then issues:=issues||jsonb_build_array(jsonb_build_object('table',tab,'field','schema','problem','required table missing'));end if;
+ end loop;
+ foreach key in array array['document_identity_key(text)','document_match_key(text)','catalogue_entry_for_identity_key(text)','catalogue_entry_for_match_key(text)','is_editor()','forbid_mutation()','stage_discovery_candidate(text,text,jsonb)','stage_sync_candidates(text,jsonb)','reject_staged_candidate(uuid,text,boolean)','resolve_discovery_candidate(uuid,text,text)'] loop
+  if to_regprocedure('public.'||key) is null then issues:=issues||jsonb_build_array(jsonb_build_object('field','schema','problem','required function missing','function',key));end if;
+ end loop;
+ if jsonb_array_length(issues)>0 then raise exception 'Governance preflight failed: schema dependencies' using errcode='GV005',detail=issues::text;end if;
+ for r in select 'guidelines' tab,id::text id,'versions' field,versions value from public.guidelines
+  union all select 'staged_guidelines',id::text,'versions',versions from public.staged_guidelines
+  union all select 'staged_discovery_evidence',id::text,'observed_versions',coalesce(observed_versions,'[]'::jsonb) from public.staged_discovery_evidence
+  union all select 'staged_discovery_evidence',id::text,'url_alternatives',coalesce(url_alternatives,'[]'::jsonb) from public.staged_discovery_evidence loop
+  if jsonb_typeof(r.value) is distinct from 'array' then
+   issues:=issues||jsonb_build_array(jsonb_build_object('table',r.tab,'id',r.id,'field',r.field,'problem','array required'));
+  else
+   for item in select value from jsonb_array_elements(r.value) loop
+    link:=item->>'url';
+    if jsonb_typeof(item) is distinct from 'object' or jsonb_typeof(item->'url') is distinct from 'string' or link !~* '^https?://[^/?#@[:space:]]+([/?#]|$)' or link ~ '[[:space:]]' then
+     issues:=issues||jsonb_build_array(jsonb_build_object('table',r.tab,'id',r.id,'field',r.field,'problem','HTTP(S) URL object required'));end if;
+   end loop;
+  end if;
+ end loop;
+ for r in select id::text id,primary_url,identity_key,match_key from public.staged_guidelines where primary_url is not null loop
+  if r.primary_url !~* '^https?://[^/?#@[:space:]]+([/?#]|$)' or r.primary_url ~ '[[:space:]]' or r.identity_key is distinct from public.document_identity_key(r.primary_url) or r.match_key is distinct from public.document_match_key(r.primary_url) then
+   issues:=issues||jsonb_build_array(jsonb_build_object('table','staged_guidelines','id',r.id,'field','primary_url/identity_key/match_key','problem','invalid URL or derived key disagreement'));end if;
+ end loop;
+ for r in select id::text id,review_status,reviewed_by,reviewed_at,review_note from public.staged_guidelines loop
+  if r.review_status in('accepted','resolved') and (r.reviewed_by is null or r.reviewed_at is null) then
+   issues:=issues||jsonb_build_array(jsonb_build_object('table','staged_guidelines','id',r.id,'field','reviewed_by/reviewed_at','problem','closed acceptance/resolution requires recorded attribution'));end if;
+ end loop;
+ if jsonb_array_length(issues)>0 then raise exception 'Governance preflight failed: unsafe legacy data; authorised correction/quarantine required' using errcode='GV005',detail=issues::text;end if;
+ -- Legacy NULL primary and unattributed rejections are retained, not invented or certified.
+end $preflight$;
+
 do $$begin
  if to_regprocedure('public._url_decode_unreserved(text)') is null or to_regclass('public.staged_discovery_decisions') is null then
   raise exception 'Governance hardening requires URL-key v4 and discovery decision schema' using errcode='55000';
@@ -98,7 +134,7 @@ declare v_id uuid;v_key text;v_final text;v_outcome text;begin
  if p_note is null or p_note !~ '\S' or p_http_status is null or p_http_status not between 100 and 599 then raise exception 'Recorded checker result and notes required' using errcode='23514';end if;
  v_outcome:=case when p_http_status between 200 and 299 and v_final=v_key then 'verified'
   when p_http_status between 300 and 399 or (p_http_status between 200 and 299 and v_final<>v_key) then 'moved'
-  when p_http_status in(401,403) then 'blocked'
+  when p_http_status in(401,403,429) then 'blocked'
   when p_http_status>=500 or p_http_status<200 then 'needs-review' else 'broken' end;
  insert into public.governance_evidence(kind,source_url,identity_key,issuer,note,outcome,http_status,final_url)
  values('automated-link-check',p_url,v_key,'ortho_link_verifier',p_note,v_outcome,p_http_status,coalesce(p_final_url,p_url)) returning id into v_id;
@@ -109,6 +145,7 @@ language plpgsql security definer set search_path=public,pg_temp as $$
 declare v_id uuid;v_url text;begin
  if public.is_editor() is not true then raise exception 'Named database editor required' using errcode='42501';end if;
  if p_note is null or p_note !~ '\S' or jsonb_typeof(p_data) is distinct from 'object' then raise exception 'Explicit review payload and note required' using errcode='23514';end if;
+ perform pg_advisory_xact_lock(20261107,25);
  perform 1 from public.staged_guidelines where id=p_staged_id and review_status='pending' and change_reason='NEW_GUIDELINE';
  if not found then raise exception 'Pending new candidate required' using errcode='55000';end if;
  v_url:=p_data->'versions'->0->>'url';perform public._governance_key(v_url);
@@ -135,6 +172,7 @@ declare k text;begin
  end if;
  if new.review_status in('pending','deferred') then
   k:=public._governance_key(new.primary_url);
+
   if new.change_reason='NEW_GUIDELINE' and public._governance_rejected(k) then raise exception 'Document has an unreleased rejection; new producer or candidate ID cannot reset it' using errcode='GV006';end if;
  end if;
  if new.review_status='rejected' and (TG_OP='INSERT' or old.review_status is distinct from 'rejected') then
@@ -147,6 +185,7 @@ begin
  if new.review_status='rejected' and (TG_OP='INSERT' or old.review_status is distinct from 'rejected') then
   insert into public.governance_rejections(staged_id,identity_key,source_url,actor,note,identity_unavailable)
   values(new.id,new.identity_key,new.primary_url,auth.uid(),new.review_note,new.identity_key is null);
+  perform public._governance_snapshot_rejection(new.id);
  end if;return new;
 end$$;
 create trigger governance_queue_guard before insert or update on public.staged_guidelines for each row execute function public._governance_queue_guard();
@@ -211,6 +250,7 @@ declare s public.staged_guidelines;g public.guidelines;e public.governance_evide
     jsonb_array_elements(coalesce(ev.url_alternatives,'[]'::jsonb)) a where ev.staged_id=s.id
  ) links where u is not null loop
   k:=public._governance_key(v_url);
+  if public._governance_comparison_required(k) then raise exception 'Rejected-source comparison required; review-only until attributed reconsideration' using errcode='GV006';end if;
   if public._governance_rejected(k) then raise exception 'Published or staged source has an unreleased rejection' using errcode='GV006';end if;
   if exists(select 1 from public.discovery_staging_holds h where h.match_key=public.document_match_key(v_url)) then raise exception 'Source has an editorial hold' using errcode='RQ002';end if;
   holder:=public.catalogue_entry_for_identity_key(k);
@@ -242,6 +282,629 @@ declare s public.staged_guidelines;g public.guidelines;e public.governance_evide
  return p_data;
 end$$;
 
+
+-- F1/F2: shared transaction protocol. API paths acquire global lock BEFORE queue row.
+-- Comparison holds are derived from immutable signals; legacy queue rows are unchanged.
+create table public.governance_late_evidence (
+ id uuid primary key default gen_random_uuid(), evidence_id uuid not null unique references public.staged_discovery_evidence(id),
+ staged_id uuid not null references public.staged_guidelines(id), recorded_at timestamptz not null default clock_timestamp(),
+ closed_status text not null, producer text not null, review_required boolean not null default true check(review_required)
+);
+create table public.governance_rejection_sources (
+ id uuid primary key default gen_random_uuid(), rejection_id uuid not null references public.governance_rejections(id),
+ evidence_id uuid references public.staged_discovery_evidence(id), producer text, candidate_class text not null,
+ source_url text, observed_alias text not null, identity_key text not null, relationship text not null, trust_status text not null,
+ recorded_at timestamptz not null default clock_timestamp(), unique(rejection_id,evidence_id,identity_key,relationship)
+);
+create index governance_rejection_sources_key on public.governance_rejection_sources(identity_key);
+do $$declare t text;begin
+ foreach t in array array['governance_late_evidence','governance_rejection_sources'] loop
+  execute format('alter table public.%I enable row level security',t);
+  execute format('revoke all on public.%I from public,anon,authenticated,service_role',t);
+  execute format('grant select on public.%I to authenticated',t);
+  execute format('create policy named_editor_read on public.%I for select to authenticated using(public.is_editor())',t);
+  execute format('create trigger immutable_governance before update or delete or truncate on public.%I for each statement execute function public.forbid_mutation()',t);
+ end loop;
+end$$;
+create function public._governance_snapshot_rejection(p_staged_id uuid) returns void language plpgsql security definer set search_path=public,pg_temp as $$
+declare s public.staged_guidelines;r public.governance_rejections;e public.staged_discovery_evidence;v jsonb;u text;begin
+ select * into strict s from public.staged_guidelines where id=p_staged_id;
+ select * into r from public.governance_rejections where staged_id=s.id;if not found then return;end if;
+ for e in select * from public.staged_discovery_evidence where staged_id=s.id loop
+  if e.discovered_url is not null then
+   u:=e.discovered_url;perform public._governance_key(u);
+   insert into public.governance_rejection_sources(rejection_id,evidence_id,producer,candidate_class,source_url,observed_alias,identity_key,relationship,trust_status)
+   values(r.id,e.id,e.producer,s.change_reason,e.discovered_url,u,public._governance_key(u),'observed-source','comparison-only; equivalence not established') on conflict do nothing;
+  end if;
+  for v in select value from jsonb_array_elements(coalesce(e.url_alternatives,'[]'::jsonb)) loop
+   if v->>'url' is not null then
+    u:=v->>'url';perform public._governance_key(u);
+    insert into public.governance_rejection_sources(rejection_id,evidence_id,producer,candidate_class,source_url,observed_alias,identity_key,relationship,trust_status)
+    values(r.id,e.id,e.producer,s.change_reason,e.discovered_url,u,public._governance_key(u),coalesce(v->>'relation',v->>'kind','untyped-alternative'),case when v->>'scope' in('index','fallback','navigation') then 'navigation-only; equivalence not established' else 'comparison-only; equivalence not established' end) on conflict do nothing;
+   end if;
+  end loop;
+  for v in select value from jsonb_array_elements(coalesce(e.observed_versions,'[]'::jsonb)) loop
+   if v->>'url' is not null then
+    u:=v->>'url';perform public._governance_key(u);
+    insert into public.governance_rejection_sources(rejection_id,evidence_id,producer,candidate_class,source_url,observed_alias,identity_key,relationship,trust_status)
+    values(r.id,e.id,e.producer,s.change_reason,e.discovered_url,u,public._governance_key(u),'observed-version',case when coalesce(v->>'label','') ~* '(fallback|index|resource centre)' then 'navigation-only; equivalence not established' else 'comparison-only; equivalence not established' end) on conflict do nothing;
+   end if;
+  end loop;
+ end loop;
+ -- Initial staged versions may predate discovery evidence. Preserve these without invented evidence IDs.
+ for v in select value from jsonb_array_elements(coalesce(s.versions,'[]'::jsonb)) loop
+  if v->>'url' is not null then
+   u:=v->>'url';perform public._governance_key(u);
+   if not exists(select 1 from public.governance_rejection_sources where rejection_id=r.id and evidence_id is null and identity_key=public._governance_key(u)) then
+    insert into public.governance_rejection_sources(rejection_id,producer,candidate_class,source_url,observed_alias,identity_key,relationship,trust_status)
+    values(r.id,s.producer,s.change_reason,s.primary_url,u,public._governance_key(u),'staged-version',case when coalesce(v->>'label','') ~* '(fallback|index|resource centre)' then 'navigation-only; equivalence not established' else 'comparison-only; equivalence not established' end);
+   end if;
+  end if;
+ end loop;
+end$$;
+create function public._governance_comparison_required(p_key text) returns boolean language sql stable set search_path=public,pg_temp as $$
+ select exists(select 1 from public.governance_rejection_sources s join public.governance_rejections r on r.id=s.rejection_id where s.identity_key=p_key and s.identity_key is distinct from r.identity_key and s.trust_status like 'comparison-only%'
+ and not exists(select 1 from public.governance_rejection_releases x where x.rejection_id=s.rejection_id));
+$$;
+create function public._governance_evidence_lock() returns trigger language plpgsql security definer set search_path=public,pg_temp as $$
+begin
+ perform pg_advisory_xact_lock(20261107,25);
+ perform 1 from public.staged_guidelines where id=new.staged_id for update;
+ return new;
+end$$;
+create function public._governance_evidence_after() returns trigger language plpgsql security definer set search_path=public,pg_temp as $$
+declare s public.staged_guidelines;begin
+ select * into strict s from public.staged_guidelines where id=new.staged_id;
+ if s.review_status in('accepted','rejected','resolved') then
+  insert into public.governance_late_evidence(evidence_id,staged_id,closed_status,producer) values(new.id,s.id,s.review_status,new.producer) on conflict do nothing;
+  if s.review_status='rejected' then perform public._governance_snapshot_rejection(s.id);end if;
+ end if;return new;
+end$$;
+create trigger governance_evidence_lock before insert on public.staged_discovery_evidence for each row execute function public._governance_evidence_lock();
+create trigger governance_evidence_after after insert on public.staged_discovery_evidence for each row execute function public._governance_evidence_after();
+-- Backfill only recorded signals; no URLs, producers or decisions invented.
+do $$declare r record;begin for r in select staged_id from public.governance_rejections loop perform public._governance_snapshot_rejection(r.staged_id);end loop;end$$;
+
+create or replace function public.stage_discovery_candidate(
+  p_run_id    text,
+  p_producer  text,
+  p_candidate jsonb
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_class     text := p_candidate->>'classification';
+  v_url       text := p_candidate->>'discoveredUrl';
+  v_identity  text;
+  v_match     text;
+  v_matched   text := nullif(p_candidate->>'matchedGuidelineId', '');
+  v_cid       text := p_candidate->>'discoveryId';
+  v_id        uuid;
+  v_status    text;
+  v_basis     text;
+  v_file_cid  text;
+  v_collided  boolean;
+  v_row       public.staged_guidelines;
+  v_hold      public.discovery_staging_holds;
+  v_evidence  uuid;
+  v_soft      jsonb := nullif(p_candidate->'softMatch', 'null'::jsonb);
+  v_token     jsonb := nullif(p_candidate->'tokenChange', 'null'::jsonb);
+  v_alts      jsonb := coalesce(nullif(p_candidate->'urlAlternatives', 'null'::jsonb), '[]'::jsonb);
+  v_relation  text;
+  v_other     text;
+begin
+  perform pg_advisory_xact_lock(20261107,25);
+  if p_run_id is null or length(btrim(p_run_id)) = 0 then
+    raise exception 'stage_discovery_candidate: a run id is required for idempotency' using errcode = '22023';
+  end if;
+  if p_producer is distinct from 'discover' then
+    raise exception 'stage_discovery_candidate: producer must be ''discover''' using errcode = '22023';
+  end if;
+  -- Exactly the three discovery classes. Publisher retirement has no class and
+  -- can never arrive here; any other change_reason belongs to another pipeline.
+  if v_class is null or v_class not in ('NEW_GUIDELINE', 'POSSIBLE_NEW_EDITION', 'EDITION_TOKEN_CHANGED') then
+    raise exception 'stage_discovery_candidate: % is not a stageable discovery class (publisher retirement is report-only)',
+      coalesce(v_class, '(null)') using errcode = '22023';
+  end if;
+  if v_url is null or length(btrim(v_url)) = 0 or v_cid is null or length(btrim(v_cid)) = 0
+     or coalesce(btrim(p_candidate->>'topic'), '') = '' or coalesce(btrim(p_candidate->>'provider'), '') = ''
+     or coalesce(btrim(p_candidate->>'surfaceUrl'), '') = '' or p_candidate->>'observedAt' is null then
+    raise exception 'stage_discovery_candidate: discoveryId, discoveredUrl, topic, provider, surfaceUrl and observedAt are required'
+      using errcode = '22023';
+  end if;
+  if v_class = 'NEW_GUIDELINE' and v_matched is not null then
+    raise exception 'stage_discovery_candidate: a NEW_GUIDELINE candidate cannot name an existing entry (%)', v_matched
+      using errcode = '22023';
+  end if;
+  if v_class <> 'NEW_GUIDELINE' and v_matched is null then
+    raise exception 'stage_discovery_candidate: a % candidate must name the entry it concerns', v_class
+      using errcode = '22023';
+  end if;
+  -- Evidence must fit the class it is offered for (see "Discovery evidence
+  -- validation"). Checked on every call.
+  if jsonb_typeof(v_alts) <> 'array' then
+    raise exception 'stage_discovery_candidate: urlAlternatives must be an array' using errcode = '22023';
+  end if;
+  if v_class = 'NEW_GUIDELINE' and (v_soft is not null or v_token is not null) then
+    raise exception 'stage_discovery_candidate: a NEW_GUIDELINE candidate cannot carry softMatch or tokenChange evidence: it claims no relationship to an existing entry'
+      using errcode = '22023';
+  end if;
+  if v_class = 'POSSIBLE_NEW_EDITION' then
+    if v_token is not null then
+      raise exception 'stage_discovery_candidate: a POSSIBLE_NEW_EDITION candidate cannot carry tokenChange evidence (that is EDITION_TOKEN_CHANGED)'
+        using errcode = '22023';
+    end if;
+    if jsonb_typeof(v_soft) is distinct from 'object' or v_soft->>'guidelineId' is distinct from v_matched then
+      raise exception 'stage_discovery_candidate: a POSSIBLE_NEW_EDITION candidate needs softMatch evidence naming the same entry (%)', v_matched
+        using errcode = '22023';
+    end if;
+  end if;
+  if v_class = 'EDITION_TOKEN_CHANGED' then
+    if v_soft is not null then
+      raise exception 'stage_discovery_candidate: an EDITION_TOKEN_CHANGED candidate cannot carry softMatch evidence'
+        using errcode = '22023';
+    end if;
+    if jsonb_typeof(v_token) is distinct from 'object' or v_token->>'guidelineId' is distinct from v_matched
+       or coalesce(btrim(v_token->>'parameter'), '') = ''
+       or v_token->>'previousValue' is null or v_token->>'observedValue' is null
+       or v_token->>'previousValue' = v_token->>'observedValue' then
+      raise exception 'stage_discovery_candidate: an EDITION_TOKEN_CHANGED candidate needs tokenChange evidence naming the same entry (%), a parameter, and two different values', v_matched
+        using errcode = '22023';
+    end if;
+  end if;
+
+  v_identity := public.document_identity_key(v_url);
+  v_match    := public.document_match_key(v_url);
+  if (p_candidate->>'sourceUrlKey') is distinct from v_identity then
+    raise exception 'stage_discovery_candidate: identity disagreement — producer key % vs database key %',
+      coalesce(p_candidate->>'sourceUrlKey', '(none)'), v_identity using errcode = '22023';
+  end if;
+  v_relation := public._catalogue_relation(v_matched, v_identity, v_match, v_alts);
+
+  select * into v_hold from public.discovery_staging_holds where match_key = v_match;
+  if found then
+    return jsonb_build_object('status', 'held', 'evidence', 'none', 'identityKey', v_identity,
+                              'holdStatus', v_hold.status, 'reason', v_hold.reason);
+  end if;
+
+  select q.o_status, q.o_row_id, q.o_basis, q.o_cid, q.o_collided
+    into v_status, v_id, v_basis, v_file_cid, v_collided
+    from public._queue_row_for(v_cid, v_identity, v_match) q;
+  if v_status = 'none' then
+    v_id := null;
+    -- Relationship checks, against the DATABASE catalogue, only when a NEW
+    -- row would be filed: an existing or already-open row is never re-judged.
+    if v_matched is not null and not exists (select 1 from public.guidelines where id = v_matched) then
+      raise exception 'stage_discovery_candidate: % names entry %, which is not in the catalogue', v_cid, v_matched
+        using errcode = '22023';
+    end if;
+    if v_class = 'NEW_GUIDELINE' then
+      v_other := public.catalogue_entry_for_identity_key(v_identity);
+      if v_other is not null then
+        raise exception 'stage_discovery_candidate: % is already catalogued exactly as entry % — not a new guideline', v_cid, v_other
+          using errcode = '22023';
+      end if;
+      v_other := public.catalogue_entry_for_match_key(v_match);
+      if v_other is not null then
+        raise exception 'stage_discovery_candidate: % loosely matches catalogue entry % — it needs a document comparison, which the discovery path cannot file; not staged (it stays in the discovery report for a human)', v_cid, v_other
+          using errcode = '22023';
+      end if;
+      select g.id into v_other
+        from public.guidelines g, jsonb_array_elements(coalesce(g.versions, '[]'::jsonb)) v,
+             jsonb_array_elements(v_alts) a
+       where v ? 'url' and a->>'scope' = 'document' and a->>'relation' in ('redirect-target', 'canonical-host')
+         and coalesce(btrim(a->>'url'), '') <> ''
+         and public.document_match_key(v->>'url') = public.document_match_key(a->>'url')
+       order by g.id limit 1;
+      if v_other is not null then
+        raise exception 'stage_discovery_candidate: an observed alternative URL of % is catalogued as entry % — that contradicts NEW_GUIDELINE', v_cid, v_other
+          using errcode = '22023';
+      end if;
+    elsif v_class = 'POSSIBLE_NEW_EDITION' then
+      if v_relation = 'exact' then
+        raise exception 'stage_discovery_candidate: % is entry %''s own catalogued link, not a new edition of it', v_cid, v_matched
+          using errcode = '22023';
+      end if;
+      v_other := public._other_catalogue_entry(v_matched, v_identity, v_match, false);
+      if v_other is not null then
+        raise exception 'stage_discovery_candidate: % is catalogued exactly as a different entry (%), which contradicts a new edition of %', v_cid, v_other, v_matched
+          using errcode = '22023';
+      end if;
+      v_other := public._other_catalogue_entry(v_matched, v_identity, v_match, true);
+      if v_other is not null and v_relation <> 'loose' then
+        raise exception 'stage_discovery_candidate: % loosely matches a different entry (%) and not %, which contradicts a new edition of %', v_cid, v_other, v_matched, v_matched
+          using errcode = '22023';
+      end if;
+    elsif v_class = 'EDITION_TOKEN_CHANGED' then
+      if v_relation = 'none' then
+        raise exception 'stage_discovery_candidate: % has no URL relationship with entry % (neither its URL nor an observed alternative matches one of the entry''s links); a token change needs one', v_cid, v_matched
+          using errcode = '22023';
+      end if;
+      if v_relation <> 'exact' then
+        v_other := public._other_catalogue_entry(v_matched, v_identity, v_match, false);
+        if v_other is not null then
+          raise exception 'stage_discovery_candidate: % is catalogued exactly as a different entry (%), which contradicts a token change on %', v_cid, v_other, v_matched
+            using errcode = '22023';
+        end if;
+      end if;
+    end if;
+    -- DO NOTHING covers both unique rules (candidate_id and the document
+    -- slot); a concurrent inserter of the same document makes this statement
+    -- wait, then conflict — and the re-resolution below sees its row.
+    insert into public.staged_guidelines (
+      candidate_id, pipeline, provider, provider_name, topic, source, notes,
+      versions, primary_url, change_reason, review_status, discovered_at,
+      matched_guideline_id, changed_url, producer
+    ) values (
+      v_file_cid, 'discovery', p_candidate->>'provider', p_candidate->>'providerName',
+      p_candidate->>'topic', p_candidate->>'providerName', p_candidate->>'notes',
+      jsonb_build_array(jsonb_build_object('label', 'Discovered', 'url', v_url)),
+      v_url, v_class, 'pending', (p_candidate->>'observedAt')::timestamptz,
+      v_matched, case when v_class = 'NEW_GUIDELINE' then null else v_url end,
+      'discover'
+    )
+    on conflict do nothing
+    returning id into v_id;
+    if v_id is not null then
+      v_status := 'staged';
+    else
+      select q.o_status, q.o_row_id, q.o_basis, q.o_cid, q.o_collided
+        into v_status, v_id, v_basis, v_file_cid, v_collided
+        from public._queue_row_for(v_cid, v_identity, v_match) q;
+      if v_status = 'none' then
+        raise exception 'stage_discovery_candidate: insert conflicted but no row was found for %', v_cid
+          using errcode = '40001';
+      end if;
+    end if;
+  end if;
+  v_basis := coalesce(v_basis, 'identity');
+  select * into v_row from public.staged_guidelines where id = v_id;
+
+  insert into public.staged_discovery_evidence (
+    staged_id, discovery_run_id, producer, discovery_id, report_schema_version,
+    discovered_url, surface_url, observed_topic, stated_labels, url_alternatives,
+    soft_match, token_change, observed_at, row_match_basis, catalogue_relation
+  ) values (
+    v_row.id, p_run_id, 'discover', v_cid, coalesce((p_candidate->>'reportSchemaVersion')::integer, 1),
+    v_url, p_candidate->>'surfaceUrl', p_candidate->>'topic',
+    coalesce(p_candidate->'statedLabels', '[]'::jsonb),
+    v_alts, v_soft, v_token,
+    (p_candidate->>'observedAt')::timestamptz, v_basis, v_relation
+  )
+  on conflict (staged_id, discovery_run_id, discovery_id) do nothing
+  returning id into v_evidence;
+
+  return jsonb_build_object(
+    'status', v_status,
+    'evidence', case when v_evidence is not null then 'appended' else 'already_recorded' end,
+    'stagedId', v_row.id, 'identityKey', v_identity, 'reviewStatus', v_row.review_status,
+    'identityBasis', v_basis, 'catalogueRelation', v_relation)
+    || case when v_collided then jsonb_build_object('candidateIdCollision',
+         jsonb_build_object('requestedId', v_cid, 'filedAs', v_file_cid)) else '{}'::jsonb end
+    || case when v_status = 'already_open' then jsonb_build_object(
+         'heldByCandidateId', v_row.candidate_id, 'heldByProducer', v_row.producer,
+         'heldByStatus', v_row.review_status) else '{}'::jsonb end;
+end;
+$$;
+
+create or replace function public._stage_sync_candidate(p_run_id text, p_c jsonb)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_cid      text := p_c->>'candidateId';
+  v_url      text := p_c->'versions'->0->>'url';
+  v_class    text := p_c->>'changeReason';
+  v_matched  text := nullif(p_c->>'matchedGuidelineId', '');
+  v_cmp      jsonb := p_c->'documentComparison';
+  v_holder   text;
+  v_identity text;
+  v_match    text;
+  v_id       uuid;
+  v_status   text;
+  v_basis    text;
+  v_file_cid text;
+  v_collided boolean;
+  v_row      public.staged_guidelines;
+  v_hold     public.discovery_staging_holds;
+  v_evidence uuid;
+begin
+  perform pg_advisory_xact_lock(20261107,25);
+  if coalesce(btrim(v_cid), '') = '' or coalesce(btrim(p_c->>'topic'), '') = ''
+     or coalesce(btrim(p_c->>'provider'), '') = '' or p_c->>'discoveredAt' is null
+     or jsonb_typeof(p_c->'versions') is distinct from 'array'
+     or coalesce(btrim(v_url), '') = '' then
+    raise exception 'stage_sync_candidates: candidateId, provider, topic, discoveredAt and versions[0].url are required'
+      using errcode = '22023';
+  end if;
+  if p_c->>'pipeline' is distinct from 'sync-providers' then
+    raise exception 'stage_sync_candidates: pipeline must be ''sync-providers'', got %', coalesce(p_c->>'pipeline', '(null)')
+      using errcode = '22023';
+  end if;
+  -- sync-providers emits two classes: NEW_GUIDELINE (no catalogue match under
+  -- either key) and POSSIBLE_SAME_DOCUMENT (a loose-only match). Anything else
+  -- belongs to another producer's staging path.
+  if v_class is null or v_class not in ('NEW_GUIDELINE', 'POSSIBLE_SAME_DOCUMENT') then
+    raise exception 'stage_sync_candidates: % is not a sync-providers class', coalesce(v_class, '(null)')
+      using errcode = '22023';
+  end if;
+  if v_class = 'NEW_GUIDELINE' and (v_matched is not null or jsonb_typeof(v_cmp) = 'object') then
+    raise exception 'stage_sync_candidates: a NEW_GUIDELINE candidate cannot name an existing entry or a comparison'
+      using errcode = '22023';
+  end if;
+  if v_class = 'POSSIBLE_SAME_DOCUMENT'
+     and (v_matched is null or jsonb_typeof(v_cmp) is distinct from 'object'
+          or v_cmp->>'guidelineId' is distinct from v_matched
+          or coalesce(btrim(v_cmp->>'reason'), '') = '') then
+    raise exception 'stage_sync_candidates: a POSSIBLE_SAME_DOCUMENT candidate must name its matched entry and carry documentComparison with the same guidelineId and a reason'
+      using errcode = '22023';
+  end if;
+
+  -- versions[0].url is the href exactly as discovered: it is what is stored.
+  -- primaryUrl (match key) and sourceUrlKey (identity key) are the producer's
+  -- KEYS of it; both are re-derived here and must agree.
+  v_identity := public.document_identity_key(v_url);
+  v_match    := public.document_match_key(v_url);
+  if (p_c->>'primaryUrl') is distinct from v_match or (p_c->>'sourceUrlKey') is distinct from v_identity then
+    raise exception 'stage_sync_candidates: key disagreement for % — producer match/identity % / % vs database % / %',
+      v_cid, coalesce(p_c->>'primaryUrl', '(none)'), coalesce(p_c->>'sourceUrlKey', '(none)'), v_match, v_identity
+      using errcode = '22023';
+  end if;
+
+  select * into v_hold from public.discovery_staging_holds where match_key = v_match;
+  if found then
+    return jsonb_build_object('candidateId', v_cid, 'status', 'held', 'evidence', 'none',
+      'identityKey', v_identity, 'holdStatus', v_hold.status, 'reason', v_hold.reason);
+  end if;
+
+  select q.o_status, q.o_row_id, q.o_basis, q.o_cid, q.o_collided
+    into v_status, v_id, v_basis, v_file_cid, v_collided
+    from public._queue_row_for(v_cid, v_identity, v_match) q;
+  if v_status = 'none' then
+    v_id := null;
+    -- Only when a NEW row would be filed: an existing or already-open row is
+    -- never re-judged (a candidate approved last week is 'existing', not a
+    -- failure). The classification is checked against the DATABASE catalogue, which can
+    -- differ from the static file sync-providers matched against. Refused, not
+    -- re-labelled: the producer's view and the database's disagree, and that is
+    -- for a human to see.
+    v_holder := public.catalogue_entry_for_identity_key(v_identity);
+    if v_holder is not null then
+      raise exception 'stage_sync_candidates: % is already catalogued exactly as entry % — not a % candidate',
+        v_cid, v_holder, v_class using errcode = '22023';
+    end if;
+    if v_class = 'NEW_GUIDELINE' then
+      v_holder := public.catalogue_entry_for_match_key(v_match);
+      if v_holder is not null then
+        raise exception 'stage_sync_candidates: % loosely matches catalogue entry % — it must be staged as POSSIBLE_SAME_DOCUMENT, never as NEW_GUIDELINE',
+          v_cid, v_holder using errcode = '22023';
+      end if;
+    elsif not exists (
+        select 1 from public.guidelines g, jsonb_array_elements(coalesce(g.versions, '[]'::jsonb)) v
+         where g.id = v_matched and v ? 'url' and public.document_match_key(v->>'url') = v_match) then
+      raise exception 'stage_sync_candidates: % names entry %, which holds no link loosely matching %',
+        v_cid, v_matched, v_url using errcode = '22023';
+    end if;
+    insert into public.staged_guidelines (
+      candidate_id, schema_version, pipeline, provider, provider_name, topic, source,
+      summary, notes, versions, primary_url, change_reason, review_status,
+      discovered_at, provider_ref, matched_guideline_id, producer, changed_url
+    ) values (
+      v_file_cid, coalesce((p_c->>'schemaVersion')::integer, 1), 'sync-providers',
+      p_c->>'provider', p_c->>'providerName', p_c->>'topic', p_c->>'provider',
+      p_c->>'summary', p_c->>'notes', p_c->'versions', v_url, v_class, 'pending',
+      (p_c->>'discoveredAt')::timestamptz, nullif(p_c->>'providerRef', ''), v_matched, 'sync-providers',
+      case when v_class = 'POSSIBLE_SAME_DOCUMENT' then v_url end
+    )
+    on conflict do nothing
+    returning id into v_id;
+    if v_id is not null then
+      v_status := 'staged';
+    else
+      select q.o_status, q.o_row_id, q.o_basis, q.o_cid, q.o_collided
+        into v_status, v_id, v_basis, v_file_cid, v_collided
+        from public._queue_row_for(v_cid, v_identity, v_match) q;
+      if v_status = 'none' then
+        raise exception 'stage_sync_candidates: insert conflicted but no row was found for %', v_cid
+          using errcode = '40001';
+      end if;
+    end if;
+  end if;
+  v_basis := coalesce(v_basis, 'identity');
+  select * into v_row from public.staged_guidelines where id = v_id;
+
+  insert into public.staged_discovery_evidence (
+    staged_id, discovery_run_id, producer, discovery_id, report_schema_version,
+    discovered_url, surface_url, observed_topic, observed_versions, observed_at,
+    soft_match, row_match_basis
+  ) values (
+    v_row.id, p_run_id, 'sync-providers', v_cid, coalesce((p_c->>'schemaVersion')::integer, 1),
+    v_url, null, p_c->>'topic', p_c->'versions', (p_c->>'discoveredAt')::timestamptz,
+    case when jsonb_typeof(v_cmp) = 'object' then v_cmp end, v_basis
+  )
+  on conflict (staged_id, discovery_run_id, discovery_id) do nothing
+  returning id into v_evidence;
+
+  return jsonb_build_object('candidateId', v_cid, 'status', v_status,
+    'evidence', case when v_evidence is not null then 'appended' else 'already_recorded' end,
+    'stagedId', v_row.id, 'identityKey', v_identity, 'reviewStatus', v_row.review_status,
+    'identityBasis', v_basis)
+    || case when v_collided then jsonb_build_object('candidateIdCollision',
+         jsonb_build_object('requestedId', v_cid, 'filedAs', v_file_cid)) else '{}'::jsonb end
+    || case when v_status = 'already_open' then jsonb_build_object(
+         'heldByCandidateId', v_row.candidate_id, 'heldByProducer', v_row.producer,
+         'heldByStatus', v_row.review_status) else '{}'::jsonb end;
+end;
+$$;
+
+create or replace function public.resolve_discovery_candidate(
+  p_staged_id uuid,
+  p_action    text,
+  p_note      text
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_row     public.staged_guidelines;
+  v_status  text;
+  v_outcome text;
+begin
+  perform pg_advisory_xact_lock(20261107,25);
+  -- NULL-safe: is_editor() is NULL when auth.uid() is NULL.
+  if public.is_editor() is not true then
+    raise exception 'resolve_discovery_candidate: not an approved editor' using errcode = '42501';
+  end if;
+  -- `!~ '\S'`: no non-whitespace character. btrim() alone misses tabs/newlines.
+  if p_note is null or p_note !~ '\S' then
+    raise exception 'resolve_discovery_candidate: a note is required' using errcode = '23514';
+  end if;
+
+  select * into v_row from public.staged_guidelines where id = p_staged_id for update;
+  if not found then
+    raise exception 'resolve_discovery_candidate: no staged candidate %', p_staged_id using errcode = 'P0002';
+  end if;
+  if v_row.change_reason not in ('POSSIBLE_NEW_EDITION', 'EDITION_TOKEN_CHANGED', 'POSSIBLE_SAME_DOCUMENT') then
+    raise exception 'resolve_discovery_candidate: % rows are approved or rejected, not resolved', v_row.change_reason
+      using errcode = '42809';
+  end if;
+  if v_row.review_status not in ('pending', 'deferred') then
+    raise exception 'resolve_discovery_candidate: candidate % is already %', p_staged_id, v_row.review_status
+      using errcode = '55000';
+  end if;
+
+  v_outcome := v_row.review_outcome;
+  if v_row.change_reason = 'POSSIBLE_NEW_EDITION' and p_action in ('same-document', 'no-action') then
+    v_status := 'resolved'; v_outcome := p_action;
+  elsif v_row.change_reason = 'POSSIBLE_NEW_EDITION' and p_action = 'different-document' then
+    -- A separate document needs a follow-up and no re-filing path exists
+    -- yet: keep the row OPEN and visible rather than close it with nothing
+    -- tracking the separate document.
+    v_status := 'pending';  v_outcome := 'different-document-awaiting-refiling';  -- stays OPEN
+  elsif v_row.change_reason = 'POSSIBLE_NEW_EDITION' and p_action = 'new-edition' then
+    v_status := 'pending';  v_outcome := 'new-edition-awaiting-revision';   -- stays OPEN
+  elsif v_row.change_reason = 'POSSIBLE_SAME_DOCUMENT' and p_action = 'same-document' then
+    -- The catalogue already holds this document under its other link. Closed;
+    -- the catalogue is not changed (adding the variant link is a separate,
+    -- explicit editor action).
+    v_status := 'resolved'; v_outcome := p_action;
+  elsif v_row.change_reason = 'POSSIBLE_SAME_DOCUMENT' and p_action = 'different-document' then
+    -- A distinct document: stays OPEN until a re-filing path exists, exactly
+    -- like the edition case. Never becomes approvable as a new entry here.
+    v_status := 'pending';  v_outcome := 'different-document-awaiting-refiling';  -- stays OPEN
+  elsif v_row.change_reason = 'EDITION_TOKEN_CHANGED' and p_action = 'acknowledged' then
+    v_status := 'resolved'; v_outcome := p_action;
+  elsif v_row.change_reason = 'EDITION_TOKEN_CHANGED' and p_action = 'needs-document-check' then
+    v_status := 'pending';  v_outcome := 'needs-document-check';           -- stays OPEN
+  elsif p_action = 'defer' then
+    v_status := 'deferred';                                                -- stays OPEN
+  else
+    raise exception 'resolve_discovery_candidate: % is not a valid action for a % row', p_action, v_row.change_reason
+      using errcode = '22023';
+  end if;
+
+  -- Queue row only. guidelines and guideline_changelog are never touched.
+  -- Completion fields are set only by a closing action. An open action is
+  -- attributed in the decision log below (decided_by, decided_at), not here.
+  update public.staged_guidelines
+     set review_status  = v_status,
+         review_outcome = v_outcome,
+         reviewed_by    = case when v_status = 'resolved' then auth.uid() else null end,
+         reviewed_at    = case when v_status = 'resolved' then now()      else null end
+   where id = p_staged_id;
+
+  insert into public.staged_discovery_decisions (staged_id, action, from_status, to_status, note, decided_by)
+  values (p_staged_id, p_action, v_row.review_status, v_status, btrim(p_note, E' \t\r\n'), auth.uid());
+
+  return jsonb_build_object('stagedId', p_staged_id, 'reviewStatus', v_status,
+                            'reviewOutcome', v_outcome, 'open', v_status in ('pending', 'deferred'));
+end;
+$$;
+
+create or replace function public.reject_staged_candidate(
+  p_candidate_id           uuid,
+  p_reason                 text,
+  p_confirm_open_follow_up boolean default false
+)
+returns text
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_staged public.staged_guidelines;
+begin
+  perform pg_advisory_xact_lock(20261107,25);
+  -- `is not true`, NOT `if not public.is_editor()`: is_editor() is NULL for a
+  -- caller with no JWT (auth.uid() NULL), and `not NULL` would let it through.
+  if public.is_editor() is not true then
+    raise exception 'reject_staged_candidate: not an approved editor'
+      using errcode = '42501';
+  end if;
+
+  -- `!~ '\S'`: no non-whitespace character. btrim() alone misses tabs/newlines.
+  if p_reason is null or p_reason !~ '\S' then
+    raise exception 'reject_staged_candidate: a reason is required'
+      using errcode = '23514';
+  end if;
+
+  -- LOCK BEFORE TESTING STATE, so concurrent decisions on one row serialise.
+  select * into v_staged
+    from public.staged_guidelines
+   where id = p_candidate_id
+     for update;
+
+  if not found then
+    raise exception 'reject_staged_candidate: no staged candidate %', p_candidate_id
+      using errcode = 'P0002';
+  end if;
+
+  -- Only an OPEN row may be rejected: pending, or deferred. accepted (published),
+  -- rejected and resolved are decisions already made.
+  if v_staged.review_status not in ('pending', 'deferred') then
+    raise exception 'reject_staged_candidate: candidate % is already %',
+      p_candidate_id, v_staged.review_status
+      using errcode = '55000';
+  end if;
+
+  -- Rejecting an open follow-up closes it. Require that to be explicit.
+  if v_staged.review_outcome in ('different-document-awaiting-refiling',
+                                 'new-edition-awaiting-revision',
+                                 'needs-document-check')
+     and p_confirm_open_follow_up is not true then
+    raise exception using
+      errcode = 'RQ001',
+      message = format('reject_staged_candidate: candidate %s has an open follow-up (%s); confirmation is required',
+                       p_candidate_id, v_staged.review_outcome),
+      hint    = 'Call again with p_confirm_open_follow_up = true to reject it and close the follow-up. Nothing was changed.';
+  end if;
+
+  -- Queue row only. resulting_guideline_id stays NULL: nothing was published.
+  update public.staged_guidelines
+     set review_status  = 'rejected',
+         review_note    = btrim(p_reason, E' \t\r\n'),
+         review_outcome = null,
+         reviewed_at    = now(),
+         reviewed_by    = auth.uid()
+   where id = p_candidate_id;
+
+  insert into public.staged_discovery_decisions
+    (staged_id, action, from_status, to_status, from_outcome, note, decided_by)
+  values
+    (p_candidate_id, 'reject', v_staged.review_status, 'rejected', v_staged.review_outcome,
+     btrim(p_reason, E' \t\r\n'), auth.uid());
+
+  return v_staged.candidate_id;
+end;
+$$;
+
 create or replace function public.approve_staged_guideline(
   p_candidate_id         uuid,
   p_final_guideline_data jsonb,
@@ -271,6 +934,7 @@ begin
       using errcode = '23514';
   end if;
 
+  perform pg_advisory_xact_lock(20261107,25);
   select * into v_staged
     from public.staged_guidelines
    where id = p_candidate_id
@@ -423,15 +1087,65 @@ begin
 end;
 $$;
 
+
+
+-- Changed material at a rejected unpublished URL has a review-only inbox, never a fabricated catalogue target.
+create table public.governance_reconsideration_signals (
+ id uuid primary key default gen_random_uuid(), rejection_id uuid not null references public.governance_rejections(id),
+ run_id text not null, producer text not null, source_url text not null, identity_key text not null,
+ details jsonb not null check(jsonb_typeof(details)='object'), recorded_at timestamptz not null default clock_timestamp(),
+ review_only boolean not null default true check(review_only), unique(rejection_id,run_id,producer,identity_key)
+);
+alter table public.governance_reconsideration_signals enable row level security;
+revoke all on public.governance_reconsideration_signals from public,anon,authenticated,service_role;
+grant select on public.governance_reconsideration_signals to authenticated;
+create policy named_editor_read on public.governance_reconsideration_signals for select to authenticated using(public.is_editor());
+create trigger immutable_governance before update or delete or truncate on public.governance_reconsideration_signals for each statement execute function public.forbid_mutation();
+create function public.record_rejected_revision_signal(p_run_id text,p_producer text,p_url text,p_details jsonb) returns uuid language plpgsql security definer set search_path=public,pg_temp as $$
+declare r uuid;v uuid;k text;old_details jsonb;begin
+ perform pg_advisory_xact_lock(20261107,25);k:=public._governance_key(p_url);
+ if p_run_id is null or p_run_id !~ '\S' or p_producer is null or p_producer not in('discover','sync-providers','detect-changes') or jsonb_typeof(p_details) is distinct from 'object' then raise exception 'Explicit revision observation and producer required' using errcode='23514';end if;
+ select id into r from public.governance_rejections where identity_key=k and not exists(select 1 from public.governance_rejection_releases x where x.rejection_id=governance_rejections.id) order by recorded_at limit 1;
+ if r is null then raise exception 'An unreleased rejected identity is required' using errcode='GV006';end if;
+ insert into public.governance_reconsideration_signals(rejection_id,run_id,producer,source_url,identity_key,details) values(r,p_run_id,p_producer,p_url,k,p_details) on conflict do nothing returning id into v;
+ if v is null then
+  select id,details into v,old_details from public.governance_reconsideration_signals where rejection_id=r and run_id=p_run_id and producer=p_producer and identity_key=k;
+  if old_details is distinct from p_details then raise exception 'Revision observation replay changed its evidence' using errcode='GV006';end if;
+ end if;return v;
+end$$;
+
+create function public.list_publication_receipts(p_staged_id uuid,p_data jsonb) returns jsonb language plpgsql security definer set search_path=public,pg_temp as $$
+declare k text;h text;age interval;receipts jsonb;begin
+ if public.is_editor() is not true then raise exception 'Named database editor required' using errcode='42501';end if;
+ if not exists(select 1 from public.staged_guidelines where id=p_staged_id and review_status='pending' and change_reason='NEW_GUIDELINE') then raise exception 'Pending new candidate required' using errcode='55000';end if;
+ k:=public._governance_key(p_data->'versions'->0->>'url');h:=public._governance_payload_hash(p_data);
+ select maximum_age into age from public.governance_verification_policy where singleton;
+ select coalesce(jsonb_agg(jsonb_build_object('id',e.id,'kind',e.kind,'outcome',e.outcome,'observedAt',e.observed_at,'actor',e.actor,'note',e.note,
+ 'eligible',case when e.kind='clinical-review' then e.staged_id=p_staged_id and e.payload_sha256=h
+ when e.kind='automated-link-check' then age is not null and e.observed_at<=clock_timestamp() and e.observed_at>=clock_timestamp()-age and e.outcome=p_data->>'link_verification_status'
+ else e.outcome=p_data->>'link_verification_status' end) order by e.observed_at desc),'[]'::jsonb)
+ into receipts from public.governance_evidence e where e.identity_key=k and (e.kind<>'clinical-review' or e.staged_id=p_staged_id);
+ return jsonb_build_object('receipts',receipts,'availabilityPolicyConfigured',age is not null,'payloadFingerprint',h,'comparisonRequired',public._governance_comparison_required(k) or exists(select 1 from public.staged_guidelines where id=p_staged_id and public._governance_comparison_required(identity_key)));
+end$$;
+
+
+create function public.list_governance_review_events() returns jsonb language plpgsql security definer set search_path=public,pg_temp as $$
+begin
+ if public.is_editor() is not true then raise exception 'Named database editor required' using errcode='42501';end if;
+ return jsonb_build_object('lateEvidence',coalesce((select jsonb_agg(to_jsonb(e) order by recorded_at desc) from public.governance_late_evidence e),'[]'::jsonb),'revisionSignals',coalesce((select jsonb_agg(to_jsonb(s) order by recorded_at desc) from public.governance_reconsideration_signals s),'[]'::jsonb));
+end$$;
+
 -- Every helper and evidence ledger starts closed to API callers.
 revoke create on schema public from public,anon,authenticated,service_role;
 do $$declare r record;begin
  for r in select p.oid::regprocedure signature from pg_proc p join pg_namespace n on n.oid=p.pronamespace
- where n.nspname='public' and (p.proname like '_governance_%' or p.proname in('record_automated_link_evidence','record_clinical_review','record_human_source_review','release_rejected_document','approve_staged_guideline')) loop
+ where n.nspname='public' and (p.proname like '_governance_%' or p.proname in('record_automated_link_evidence','record_clinical_review','record_human_source_review','release_rejected_document','approve_staged_guideline','list_publication_receipts','record_rejected_revision_signal','list_governance_review_events')) loop
   execute format('revoke all on function %s from public,anon,authenticated,service_role',r.signature);
  end loop;
 end$$;
 grant execute on function public.record_automated_link_evidence(text,integer,text,text) to ortho_link_verifier;
-grant execute on function public.record_clinical_review(uuid,jsonb,text),public.record_human_source_review(text,text,text),public.release_rejected_document(text,text),public.approve_staged_guideline(uuid,jsonb,text) to authenticated;
+revoke all on function public.record_rejected_revision_signal(text,text,text,jsonb) from public,anon,authenticated,service_role;
+grant execute on function public.record_rejected_revision_signal(text,text,text,jsonb) to service_role;
+grant execute on function public.list_governance_review_events(),public.list_publication_receipts(uuid,jsonb),public.record_clinical_review(uuid,jsonb,text),public.record_human_source_review(text,text,text),public.release_rejected_document(text,text),public.approve_staged_guideline(uuid,jsonb,text) to authenticated;
 comment on function public.approve_staged_guideline(uuid,jsonb,text) is 'Named DB-editor publication only: explicit clinical status, immutable evidence, final/staged/observed URL comparison, rejection memory, serialised atomic publication and audit. Not callable by service_role. Direct catalogue writes blocked.';
 commit;

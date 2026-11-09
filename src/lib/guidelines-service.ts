@@ -1,3 +1,4 @@
+import {directWritesDisabled} from './editor-capabilities';
 import { supabase } from './supabase';
 import { GUIDELINES_DATA } from '../data/guidelines-data';
 import type { Guideline } from '../data/guidelines-data';
@@ -89,6 +90,7 @@ export const guidelinesService = {
 
   /** Persist a new guideline to Supabase. Throws if Supabase is unconfigured or write fails. */
   async create(guideline: Guideline): Promise<void> {
+    if (directWritesDisabled()) throw markRefused(new Error('Direct catalogue writes are disabled pending an audited correction workflow.'));
     if (!supabase) throw new Error('Supabase client is not initialized. Check your connection / environment variables.');
     const { error } = await supabase.from('guidelines').insert(toDbRow(guideline));
     if (error) throw asPersistError('create', error);
@@ -111,6 +113,7 @@ export const guidelinesService = {
    * throw.
    */
   async update(guideline: Guideline): Promise<void> {
+    if (directWritesDisabled()) throw markRefused(new Error('Direct catalogue writes are disabled pending an audited correction workflow.'));
     if (!supabase) throw new Error('Supabase client is not initialized. Check your connection / environment variables.');
     const { data, error } = await supabase
       .from('guidelines')
@@ -141,6 +144,7 @@ export const guidelinesService = {
    * make a row vanish from the UI while remaining live in the database.
    */
   async archive(id: string): Promise<void> {
+    if (directWritesDisabled()) throw markRefused(new Error('Direct catalogue writes are disabled pending an audited correction workflow.'));
     if (!supabase) throw new Error('Supabase client is not initialized. Check your connection / environment variables.');
     const { data, error } = await supabase
       .from('guidelines')
