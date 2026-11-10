@@ -57,6 +57,23 @@ Comparison holds are order-independent: each trust classification of an alias is
 retained, and one document-level observation requires comparison. A hold never
 asserts that documents are equivalent, and navigation-only aliases create no hold.
 
+## Scope-classification contract
+
+Whether an alias is document-level or navigation-only is decided ONLY by an explicit
+`scope` on the alternative or version, never by its label. A genuine document titled
+"Oswestry Disability Index" or "Index finger fracture management" keeps its comparison
+hold. Allowed values are `document`, `surface`, `index`, `fallback` and `navigation`;
+any other value, including case variants, is refused with `GV005` at staging. A
+signal with no scope, which includes all legacy rows, is comparison-only, so legacy
+navigation pages may be over-held for review, never under-held.
+
+`index`, `fallback` and `navigation` are navigation-only. `surface` (a publisher
+index-page redirect) is navigation-only only when its `derivedFrom` is that evidence
+row's own recorded `surface_url`. Any other surface claim is unverified and stays
+comparison-only. This exempts nothing from duplicate checks: a candidate's own surface
+URLs are still checked against the catalogue and unreleased rejections at
+publication. `scope-classification.security.mjs` holds the regressions.
+
 The proposed migration and read-only quarantine rollback are not in automatic
 migration discovery. Do not run them on production. Review the migration plan,
 legacy data, unknown live grants/functions, editor correction workflows, service

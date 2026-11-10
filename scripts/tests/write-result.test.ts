@@ -389,6 +389,11 @@ check('the not-an-editor refusal is tagged as refused',
   /throw keepRefusal\(new Error\(NOT_AN_EDITOR_MESSAGE\)\)/.test(rejectFn));
 check('an answered failure with any other code is tagged as refused too',
   rejectFn.includes('throw keepRefusal(') && rejectFn.includes('new Error(`Reject failed'));
+// K2: approve() had the same gap, so a revoked editor at publication saw "PUBLISH NOT CONFIRMED".
+const approveStart = staged.indexOf('async approve(');
+const approveFn = approveStart < 0 ? '' : staged.slice(approveStart, staged.indexOf('async reject(', approveStart));
+check('the approve not-an-editor refusal is tagged as refused, not unconfirmed',
+  /throw markRefused\(new Error\(NOT_AN_EDITOR_MESSAGE\)\)/.test(approveFn));
 
 console.log('\n[5] The editor’s unsaved draft survives a failure');
 

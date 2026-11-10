@@ -33,6 +33,14 @@ const executable=[chromium.executablePath(),'C:/Program Files/Google/Chrome/Appl
 assert(executable,'No installed browser; no browser download is performed.');
 const browser=await chromium.launch({executablePath:executable,headless:true});
 const external:string[]=[];let databaseWrites=0;
+// Direct create is intentionally disabled, so the modal requirements are exercised through the supported
+// staged review path. Its two read-only list RPCs are POSTs; they are allowlisted by exact name and
+// counted separately, so any other POST/PATCH/DELETE still counts as a database write.
+const READ_ONLY_RPCS=new Set(['/rest/v1/rpc/list_publication_receipts','/rest/v1/rpc/list_governance_review_events']);let readOnlyRpcPosts=0;
+const STAGED_ROW={id:'00000000-0000-4000-8000-000000000099',candidate_id:'synthetic-final-ui',schema_version:1,pipeline:'discovery',provider:'SYNTHETIC',provider_name:'Synthetic',source:'Synthetic',topic:'Synthetic final UI candidate',summary:'Synthetic',notes:'Synthetic',versions:[{url:'https://synthetic.example.test/final-ui',label:'Synthetic'}],primary_url:'https://synthetic.example.test/final-ui',identity_key:'https://synthetic.example.test/final-ui',match_key:'https://synthetic.example.test/final-ui',change_reason:'NEW_GUIDELINE',review_status:'pending',producer:'discover',discovered_at:'2026-11-09T00:00:00Z',review_outcome:null,review_note:null,reviewed_by:null,reviewed_at:null,matched_guideline_id:null,resulting_guideline_id:null,changed_url:null};
+const mockBody=(pathname:string)=>pathname.startsWith('/auth/')?null:pathname.endsWith('/staged_guidelines')?[STAGED_ROW]
+  :pathname.endsWith('/list_governance_review_events')?{lateEvidence:[],revisionSignals:[]}
+  :pathname.endsWith('/list_publication_receipts')?{receipts:[],availabilityPolicyConfigured:false,payloadFingerprint:'synthetic',comparisonRequired:false}:[];
 try {
   const user={id:'synthetic-ui-editor',email:'editor@example.invalid',aud:'authenticated',app_metadata:{provider:'email'},user_metadata:{},created_at:'2026-01-01T00:00:00Z'};
   const expiry=Math.floor(Date.now()/1000)+3600;
@@ -43,8 +51,9 @@ try {
       const url=new URL(route.request().url()),method=route.request().method();
       if(url.origin===origin)return route.continue();
       if(url.origin==='http://127.0.0.1:54321'){
-        if(url.pathname.startsWith('/rest/v1/')&&!['GET','OPTIONS'].includes(method))databaseWrites++;
-        return route.fulfill({status:method==='OPTIONS'?204:200,contentType:'application/json',headers:{'access-control-allow-origin':'*','access-control-allow-headers':'authorization,apikey,content-type,x-client-info,prefer','access-control-allow-methods':'GET,POST,OPTIONS'},body:method==='OPTIONS'?'':JSON.stringify(url.pathname.startsWith('/auth/')?user:[])});
+        if(method==='POST'&&READ_ONLY_RPCS.has(url.pathname))readOnlyRpcPosts++;
+        else if(url.pathname.startsWith('/rest/v1/')&&!['GET','OPTIONS'].includes(method))databaseWrites++;
+        return route.fulfill({status:method==='OPTIONS'?204:200,contentType:'application/json',headers:{'access-control-allow-origin':'*','access-control-allow-headers':'authorization,apikey,content-type,x-client-info,prefer','access-control-allow-methods':'GET,POST,OPTIONS'},body:method==='OPTIONS'?'':JSON.stringify(mockBody(url.pathname)??user)});
       }
       if(!['fonts.googleapis.com','fonts.gstatic.com'].includes(url.hostname))external.push(url.origin);
       return route.abort();
@@ -57,8 +66,12 @@ try {
   try {
     await editor.addInitScript(session=>localStorage.setItem('sb-127-auth-token',JSON.stringify(session)),{access_token:token,refresh_token:'SYNTHETIC_REFRESH',expires_at:expiry,expires_in:3600,token_type:'bearer',user});
     const page=await editor.newPage();await page.goto(server.origin+base);
-    const add=page.getByRole('button',{name:'Add guideline',exact:true});await add.waitFor();
-    await add.click();const dialog=page.getByRole('dialog',{name:'Add Guideline',exact:true});await dialog.waitFor();
+    // Obsolete expectation, recorded rather than hidden: direct create stays disabled pending an audited workflow.
+    const direct=page.getByRole('button',{name:'Add guideline',exact:true});await direct.waitFor();
+    check('direct Add guideline remains intentionally disabled',await direct.isDisabled());
+    await page.getByRole('button',{name:'Review Staged Guidelines',exact:true}).click();
+    const add=page.getByRole('button',{name:/Review & publish/}).first();await add.waitFor();
+    await add.click();const dialog=page.getByRole('dialog',{name:'Review & Publish Candidate',exact:true});await dialog.waitFor();await page.waitForTimeout(400);
     check('mock-session editor form has a labelled modal dialog',await dialog.getAttribute('aria-modal')==='true');
     check('opening the editor form moves focus inside',await dialog.evaluate((element:any)=>element.contains(document.activeElement)));
     const controls=dialog.locator('button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled])');
@@ -71,7 +84,7 @@ try {
     check('dynamic viewport height matches the browser viewport',await page.evaluate(()=>Math.abs(document.querySelector('#root > div').getBoundingClientRect().height-window.innerHeight)<2));
     // Exercise the retained component only through an ignored, local test
     // entry. The public application does not import or mount this view.
-    const fixture=path.join(root,'reports/final-integration');
+    const fixture=path.join(root,'reports/final-integration');fs.mkdirSync(fixture,{recursive:true});
     fs.writeFileSync(path.join(fixture,'freshness-browser-fixture.html'),'<html><body><div id="root"></div><script type="module" src="./freshness-browser-fixture.tsx"></script></body></html>');
     fs.writeFileSync(path.join(fixture,'freshness-browser-fixture.tsx'),[
       "import React from 'react'; import {createRoot} from 'react-dom/client';",
@@ -110,6 +123,7 @@ try {
     check('the production public build does not expose the freshness fixture view',await page.getByTestId('freshness-dashboard').count()===0);
   } finally {await publicContext.close();stop(preview.child);}
   check('mock editor interactions issue no database writes',databaseWrites===0);
+  check('the staged review path was exercised (allowlisted read-only RPC posts observed)',readOnlyRpcPosts>0);
   check('no unexpected external or Supabase connection was attempted',external.length===0);
 } finally {await browser.close();}
-console.log(passed+' passed, 0 failed');
+console.log(passed+' passed, 0 failed (19 original requirements + 2 path checks); readOnlyRpcPosts='+readOnlyRpcPosts);

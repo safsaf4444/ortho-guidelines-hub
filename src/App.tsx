@@ -413,6 +413,16 @@ export default function App() {
    * next unrelated edit against the wrong queue row.
    */
   const [stagedCandidateId, setStagedCandidateId] = useState<string | null>(null);
+  /**
+   * The open modal SESSION, by identity. Every path that opens the modal builds
+   * a new draft object and every close sets null, so the object a publication
+   * started from identifies that session. An asynchronous result may change
+   * modal state only while the same session is still open: after Escape,
+   * Cancel, sign-out or opening another candidate it must never close or clear
+   * a different draft (including a reopened copy of the same candidate).
+   */
+  const editingSessionRef = useRef<Guideline | null>(null);
+  editingSessionRef.current = editingGuideline;
   const [dismissedPairs, setDismissedPairs] = useState<Set<string>>(() => loadDismissedPairs());
 
   /**
@@ -630,11 +640,23 @@ export default function App() {
     // row was still pending, and the whole point of the transaction is that
     // those two states cannot disagree.
     if (stagedCandidateId) {
+      // Bound to the session that started it; see editingSessionRef.
+      const session = editingSessionRef.current;
+      const isCurrent = () => session !== null && editingSessionRef.current === session;
+      const earlier = (text: string) => isCurrent() ? text
+        : `EARLIER REQUEST: "${updated.topic}"\n\nThis result belongs to a publication whose form was closed before it finished. `
+          + `Any form open now was not changed.\n\n${text}`;
       try {
         await stagedService.approve(stagedCandidateId, updated, prepared.note, evidence);
         const refreshed = await guidelinesService.getAll();
         if (refreshed.source === 'live') setGuidelines(refreshed.rows);
-        else alert('Publication succeeded, but the updated catalogue could not be reloaded. Reload before further actions.');
+        const reloaded = refreshed.source === 'live';
+        if (!isCurrent()) {
+          alert(earlier('PUBLISHED\n\nThe database confirmed this publication.'
+            + (reloaded ? '' : ' The updated catalogue could not be reloaded. Reload before further actions.')));
+          return true;
+        }
+        if (!reloaded) alert('Publication succeeded, but the updated catalogue could not be reloaded. Reload before further actions.');
         setStagedCandidateId(null);
         return true;
       } catch (err) {
@@ -645,7 +667,7 @@ export default function App() {
         // nothing about a lost response: the transaction may have committed and
         // the reply never arrived, in which case the candidate IS published and
         // retrying would publish a second copy under a new id.
-        alert(
+        alert(earlier(
           classifyWriteFailure(err) !== 'refused'
             ? `PUBLISH NOT CONFIRMED
 
@@ -675,7 +697,7 @@ ${msg}
 `
                 + 'Nothing was saved: the guideline, the change note and the queue entry were all '
                 + 'rolled back together, so the candidate is still pending and can be retried.'
-        );
+        ));
         return false;
       }
     }
@@ -779,7 +801,10 @@ ${noteMsg}
    * the draft exactly where it was.
    */
   const handleSave = async (updated: Guideline, note: string, evidence?: PublicationEvidence) => {
+    const session = editingSessionRef.current;
     const saved = await persistGuideline(updated, isNewGuideline, note, evidence);
+    // Only the session that saved may be closed; a dismissed request never closes a later draft.
+    if (session === null || editingSessionRef.current !== session) return;
     if (saved) setEditingGuideline(null);
   };
 

@@ -131,9 +131,16 @@ export type ReviewStatus = 'pending' | 'accepted' | 'rejected' | 'deferred';
 
 /** One link attached to a candidate. Mirrors the catalogue's versions[] shape. */
 export interface CandidateVersionLink {
+  /** Display text only. Never classified: a label cannot make a link navigation-only. */
   label: string;
   url: string;
   date?: string;
+  /**
+   * Explicit, database-validated scope. Omitted means document-level (the
+   * conservative default). Only 'index' | 'fallback' | 'navigation' mark a link
+   * as navigation-only in rejection memory; see scripts/tests/governance/README.md.
+   */
+  scope?: 'document' | 'index' | 'fallback' | 'navigation';
 }
 
 /**

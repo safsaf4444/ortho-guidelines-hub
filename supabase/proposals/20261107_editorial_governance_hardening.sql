@@ -185,6 +185,9 @@ declare k text;begin
  if new.review_status in('pending','deferred') then
   if jsonb_typeof(new.versions) is distinct from 'array' then raise exception 'Incoming staged versions must be an array' using errcode='GV005';end if;
   if exists(select 1 from jsonb_array_elements(new.versions) v where jsonb_typeof(v) is distinct from 'object' or jsonb_typeof(v->'url') is distinct from 'string' or v->>'url' !~* '^https?://[^/?#@[:space:]]+([/?#]|$)' or v->>'url' ~ '[[:space:]]') then raise exception 'Incoming staged versions require HTTP(S) URL objects' using errcode='GV005';end if;
+  if TG_OP='INSERT' or new.versions is distinct from old.versions then
+   if exists(select 1 from jsonb_array_elements(new.versions) v where not public._governance_scope_valid(v)) then raise exception 'Incoming staged version scope must be document, surface, index, fallback or navigation; labels are never classified' using errcode='GV005';end if;
+  end if;
   k:=public._governance_key(new.primary_url);
 
   if new.change_reason='NEW_GUIDELINE' and public._governance_rejected(k) then raise exception 'Document has an unreleased rejection; new producer or candidate ID cannot reset it' using errcode='GV006';end if;
@@ -322,6 +325,27 @@ do $$declare t text;begin
   execute format('create trigger immutable_governance before update or delete or truncate on public.%I for each statement execute function public.forbid_mutation()',t);
  end loop;
 end$$;
+-- R1/R2: rejection-memory trust derives ONLY from explicit, validated scope. Free-text labels are
+-- never classified: a genuine document titled "... Index ..." must keep its comparison hold.
+-- Unscoped or malformed (legacy) signals are comparison-only. A 'surface' signal is navigation-only
+-- solely when its derivedFrom is the evidence row's own recorded surface_url (a publisher index
+-- page redirect); any other surface claim is unverified and stays review-only.
+create function public._governance_scope_valid(p_signal jsonb) returns boolean language sql immutable set search_path=public,pg_temp as $$
+ select not(p_signal ? 'scope') or (jsonb_typeof(p_signal->'scope')='string' and p_signal->>'scope' in('document','surface','index','fallback','navigation'));
+$$;
+create function public._governance_alias_trust(p_signal jsonb,p_surface_url text) returns text language plpgsql stable set search_path=public,pg_temp as $$
+declare v_scope text:=case when jsonb_typeof(p_signal->'scope')='string' then p_signal->>'scope' end;begin
+ if v_scope in('index','fallback','navigation') then return 'navigation-only; equivalence not established';end if;
+ if v_scope='surface' and p_surface_url is not null and jsonb_typeof(p_signal->'derivedFrom')='string' then
+  begin
+   if public.document_identity_key(p_signal->>'derivedFrom')=public.document_identity_key(p_surface_url) then
+    return 'navigation-only; surface provenance; equivalence not established';
+   end if;
+  exception when others then null; -- unkeyable provenance is unverified, never a licence
+  end;
+ end if;
+ return 'comparison-only; equivalence not established';
+end$$;
 create function public._governance_snapshot_rejection(p_staged_id uuid) returns void language plpgsql security definer set search_path=public,pg_temp as $$
 declare s public.staged_guidelines;r public.governance_rejections;e public.staged_discovery_evidence;v jsonb;u text;t text;begin
  select * into strict s from public.staged_guidelines where id=p_staged_id;
@@ -336,14 +360,14 @@ declare s public.staged_guidelines;r public.governance_rejections;e public.stage
    if v->>'url' is not null then
     u:=v->>'url';perform public._governance_key(u);
     insert into public.governance_rejection_sources(rejection_id,evidence_id,producer,candidate_class,source_url,observed_alias,identity_key,relationship,trust_status)
-    values(r.id,e.id,e.producer,s.change_reason,e.discovered_url,u,public._governance_key(u),coalesce(v->>'relation',v->>'kind','untyped-alternative'),case when v->>'scope' in('index','fallback','navigation') then 'navigation-only; equivalence not established' else 'comparison-only; equivalence not established' end) on conflict do nothing;
+    values(r.id,e.id,e.producer,s.change_reason,e.discovered_url,u,public._governance_key(u),coalesce(v->>'relation',v->>'kind','untyped-alternative'),public._governance_alias_trust(v,e.surface_url)) on conflict do nothing;
    end if;
   end loop;
   for v in select value from jsonb_array_elements(coalesce(e.observed_versions,'[]'::jsonb)) loop
    if v->>'url' is not null then
     u:=v->>'url';perform public._governance_key(u);
     insert into public.governance_rejection_sources(rejection_id,evidence_id,producer,candidate_class,source_url,observed_alias,identity_key,relationship,trust_status)
-    values(r.id,e.id,e.producer,s.change_reason,e.discovered_url,u,public._governance_key(u),'observed-version',case when coalesce(v->>'label','') ~* '(fallback|index|resource centre)' then 'navigation-only; equivalence not established' else 'comparison-only; equivalence not established' end) on conflict do nothing;
+    values(r.id,e.id,e.producer,s.change_reason,e.discovered_url,u,public._governance_key(u),'observed-version',public._governance_alias_trust(v,e.surface_url)) on conflict do nothing;
    end if;
   end loop;
  end loop;
@@ -351,7 +375,7 @@ declare s public.staged_guidelines;r public.governance_rejections;e public.stage
  for v in select value from jsonb_array_elements(coalesce(s.versions,'[]'::jsonb)) loop
   if v->>'url' is not null then
    u:=v->>'url';perform public._governance_key(u);
-   t:=case when coalesce(v->>'label','') ~* '(fallback|index|resource centre)' then 'navigation-only; equivalence not established' else 'comparison-only; equivalence not established' end;
+   t:=public._governance_alias_trust(v,null);
    if not exists(select 1 from public.governance_rejection_sources where rejection_id=r.id and evidence_id is null and identity_key=public._governance_key(u) and trust_status=t) then
     insert into public.governance_rejection_sources(rejection_id,producer,candidate_class,source_url,observed_alias,identity_key,relationship,trust_status)
     values(r.id,s.producer,s.change_reason,s.primary_url,u,public._governance_key(u),'staged-version',t);
@@ -372,6 +396,7 @@ declare a jsonb;v jsonb;begin
   if jsonb_typeof(a) is distinct from 'array' then raise exception 'Incoming evidence versions/alternatives must be arrays' using errcode='GV005';end if;
   for v in select value from jsonb_array_elements(a) loop
    if jsonb_typeof(v) is distinct from 'object' or jsonb_typeof(v->'url') is distinct from 'string' then raise exception 'Incoming evidence requires explicit URL objects; malformed signals cannot be skipped' using errcode='GV005';end if;
+   if not public._governance_scope_valid(v) then raise exception 'Incoming evidence scope must be document, surface, index, fallback or navigation; labels are never classified' using errcode='GV005';end if;
    perform public._governance_key(v->>'url');
   end loop;
  end loop;

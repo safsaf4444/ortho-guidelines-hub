@@ -68,7 +68,8 @@ for(const order of orders){
 }
 for(const labels of permutations(['Fallback / index page','Synthetic document'])){
  const slug=labels[0].startsWith('F')?'fallback-first':'document-first',a=u('sync-a-'+slug),b=u('sync-b-'+slug);
- const r=sync('sync-a-'+slug+run,[{url:a,label:'Synthetic'},...labels.map(label=>({url:b,label}))]);reject(r.stagedId);const rows=sources(r.stagedId).filter(x=>x.alias===b);const c=sync('sync-b-'+slug+run,[{url:b,label:'Synthetic'}]);
+ // R1: navigation is declared by explicit scope; the label alone is never classified (see scope-classification.security.mjs).
+ const r=sync('sync-a-'+slug+run,[{url:a,label:'Synthetic'},...labels.map(label=>label.startsWith('F')?{url:b,label,scope:'fallback'}:{url:b,label})]);reject(r.stagedId);const rows=sources(r.stagedId).filter(x=>x.alias===b);const c=sync('sync-b-'+slug+run,[{url:b,label:'Synthetic'}]);
  await test(`F2 sync ${slug} holds the alias`,()=>refused(()=>approve(c.stagedId,payload('sync-b-'+slug+run,b)),/comparison required/));
  await test(`F2 sync ${slug} retains both classes for observed and staged versions`,()=>['observed-version','staged-version'].every(rel=>new Set(rows.filter(x=>x.relationship===rel).map(x=>x.trust)).size===2)&&rows.length===4);
 }

@@ -351,7 +351,9 @@ export const stagedService = {
 
     if (error) {
       console.error('[staged-service] approve failed — raw error:', error);
-      if (isNotAnEditorError(error)) throw new Error(NOT_AN_EDITOR_MESSAGE);
+      // A 42501 is the server's definite refusal (the RPC rolled back), so it is a
+      // REFUSAL, never "not confirmed"; the reject/resolve paths below already do this.
+      if (isNotAnEditorError(error)) throw markRefused(new Error(NOT_AN_EDITOR_MESSAGE));
       if (['GV002','GV003','GV004','GV006','GV007'].includes(error.code)) {
         throw markRefused(new Error('Not published: ' + error.message));
       }
