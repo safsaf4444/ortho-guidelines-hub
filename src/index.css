@@ -64,3 +64,9 @@
 @media (prefers-reduced-motion: reduce) {
   .animate-pulse { animation: none; }
 }
+
+/* At high browser zoom or in landscape, sticky search can occupy most of the
+   reading viewport. Let native focus scrolling move every control into view. */
+@media (max-height: 480px) {
+  .public-search { position: static; }
+}

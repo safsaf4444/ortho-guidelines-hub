@@ -1125,7 +1125,7 @@ Add a note from the entry to restore the audit trail.`
               <button
                 type="button"
                 aria-current={currentSection === 'All' ? 'page' : undefined}
-                onClick={() => { setCurrentSection('All'); setIsSidebarOpen(false); }}
+                onClick={() => { setCurrentSection('All'); setIsSidebarOpen(false); window.location.hash = '#/'; }}
                 className={cn(
                   "flex justify-between items-center px-2.5 py-1.5 min-h-[44px] md:min-h-0 rounded transition-colors",
                   currentSection === 'All'
@@ -1147,7 +1147,7 @@ Add a note from the entry to restore the audit trail.`
               <button
                 type="button"
                 aria-current={currentSection === CATALOGUE_VIEW ? 'page' : undefined}
-                onClick={() => { setCurrentSection(CATALOGUE_VIEW); setIsSidebarOpen(false); }}
+                onClick={() => { setCurrentSection(CATALOGUE_VIEW); setIsSidebarOpen(false); window.location.hash = CATALOGUE_HASH; }}
                 title="Dense table of every entry — provider, then section, then title"
                 className={cn(
                   "flex justify-between items-center gap-1.5 px-2.5 py-1.5 min-h-[44px] md:min-h-0 rounded transition-colors",
@@ -1234,6 +1234,25 @@ Add a note from the entry to restore the audit trail.`
           // Reading-surface sizing and wrapping from the public UI review (browse views only).
           ![DUPLICATES_VIEW, CHANGELOG_VIEW, REVIEW_QUEUE_VIEW, CATALOGUE_VIEW, ABOUT_VIEW].includes(currentSection) && "public-browse")}>
 
+          {/* Keep the snapshot disclosure in the reading flow: a fixed notice
+              can cover every focused control in a short, highly zoomed viewport.
+              It remains present until live data returns, never timed out or hidden. */}
+          {dataState === 'fallback' && (
+            <div
+              role="status"
+              className="shrink-0 bg-amber-50 border-b border-amber-200 px-4 py-2"
+            >
+              <div className="max-w-4xl mx-auto flex items-start gap-2">
+                <WifiOff className="w-3.5 h-3.5 text-amber-700 shrink-0 mt-0.5" />
+                <p className="text-[11px] text-amber-900 leading-relaxed m-0">
+                  <strong>Showing the built-in snapshot, not live data.</strong>{' '}
+                  {fallbackReason} Entries are the ones compiled into this build, so recent
+                  edits may be missing. Everything still works; only freshness is affected.
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* Search hero. Sticky within `main`'s own scroll area (main is the
               nearest scrolling ancestor, so top-0 here means "top of the
               scrollable content", not the viewport) — stays visible while
@@ -1245,7 +1264,7 @@ Add a note from the entry to restore the audit trail.`
               Ankle/Paediatrics) that used to sit here was removed at the
               user's request. */}
           {currentSection !== DUPLICATES_VIEW && currentSection !== CHANGELOG_VIEW && currentSection !== REVIEW_QUEUE_VIEW && currentSection !== CATALOGUE_VIEW && currentSection !== ABOUT_VIEW && (
-            <div role="search" className="sticky top-0 z-10 bg-[#F8FAFC] px-5 pt-3 pb-2 border-b border-slate-100 shrink-0">
+            <div role="search" className="public-search sticky top-0 z-10 bg-[#F8FAFC] px-5 pt-3 pb-2 border-b border-slate-100 shrink-0">
               <div className="relative">
                 {/* A real label: the placeholder alone was the input's only
                     name, and it disappears as soon as anyone types. */}
@@ -1394,11 +1413,7 @@ Add a note from the entry to restore the audit trail.`
           {/* The catalogue is a wide dense table and needs the full panel
               width; every other view keeps the readable max-w-4xl measure. */}
           <div className={cn(
-            "px-4 pt-3 w-full",
-            // The fixed offline-snapshot banner (bottom of the viewport) is up
-            // to ~70px tall on a phone; without room for it the last card sits
-            // underneath and cannot be scrolled into view.
-            dataState === 'fallback' ? "pb-28" : "pb-8",
+            "px-4 pt-3 pb-8 w-full",
             currentSection !== CATALOGUE_VIEW && "max-w-4xl"
           )}>
             {currentSection === DUPLICATES_VIEW ? (
@@ -1518,26 +1533,6 @@ Add a note from the entry to restore the audit trail.`
           stagedId={stagedCandidateId}
           existingIds={existingIds}
         />
-      )}
-
-      {/* Offline-snapshot notice. Persistent, not a toast: the reader is looking
-          at data of unknown age and that stays true until the database comes
-          back. It says WHY, because "Static Mode" alone never told anyone
-          whether that was a build setting or an outage. */}
-      {dataState === 'fallback' && (
-        <div
-          role="status"
-          className="fixed bottom-0 inset-x-0 z-40 bg-amber-50 border-t border-amber-200 px-4 py-2"
-        >
-          <div className="max-w-4xl mx-auto flex items-start gap-2">
-            <WifiOff className="w-3.5 h-3.5 text-amber-700 shrink-0 mt-0.5" />
-            <p className="text-[11px] text-amber-900 leading-relaxed m-0">
-              <strong>Showing the built-in snapshot, not live data.</strong>{' '}
-              {fallbackReason} Entries are the ones compiled into this build, so recent
-              edits may be missing. Everything still works; only freshness is affected.
-            </p>
-          </div>
-        </div>
       )}
 
       {/* Update prompt. Raised ONLY by onNeedRefresh — i.e. the browser has a
