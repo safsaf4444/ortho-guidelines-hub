@@ -9,6 +9,7 @@ import { computeMerge } from './lib/dedupe'
 import { cn } from './lib/utils'
 import ReviewDashboard from './components/ReviewDashboard'
 import EditorAuthControl from './components/EditorAuthControl'
+import NavigationDrawer from './components/NavigationDrawer'
 import { useEditorSession } from './lib/editor-session'
 import { draftOwnerKey, DraftOwnerContext } from './lib/draft-owner'
 import { stagedService } from './lib/staged-service'
@@ -253,24 +254,6 @@ function useOnlineStatus(): boolean {
   return online;
 }
 
-// True at Tailwind's `md` breakpoint and above, where the sections sidebar is
-// a permanent column rather than an off-canvas drawer.
-function useIsDesktop(): boolean {
-  const query = '(min-width: 768px)';
-  const [matches, setMatches] = useState(
-    typeof window === 'undefined' || !window.matchMedia ? true : window.matchMedia(query).matches
-  );
-  useEffect(() => {
-    if (!window.matchMedia) return;
-    const mq = window.matchMedia(query);
-    const update = () => setMatches(mq.matches);
-    update();
-    mq.addEventListener('change', update);
-    return () => mq.removeEventListener('change', update);
-  }, []);
-  return matches;
-}
-
 /**
  * Screen-reader-only cue for a link that opens a new tab. The visible
  * ExternalLink icon is decorative (aria-hidden), so without this a
@@ -368,51 +351,7 @@ export default function App() {
   // same underlying data, no schema change, just a different lens on it.
   const [groupBy, setGroupBy] = useState<'section' | 'provider'>('section');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
-  const isDesktop = useIsDesktop();
-  // Below md the sidebar is an off-canvas drawer. While it is closed it is
-  // `inert`, so its buttons are no longer Tab stops sitting invisibly off the
-  // left edge of the screen (measured: 5 of the first 9 Tab stops at 375px).
-  const drawerHidden = !isDesktop && !isSidebarOpen;
-  // While the drawer is open below md it is a modal navigation panel: the
-  // background (header actions, offline notice, main) is `inert` and Tab cycles
-  // between the menu button and the drawer's controls, so keyboard focus can no
-  // longer escape to the dimmed search field (public UI review, ported from
-  // fix/public-ui-drawer-focus fc1b44a).
-  const drawerModal = !isDesktop && isSidebarOpen;
   const menuButtonRef = useRef<HTMLButtonElement>(null);
-  const drawerRef = useRef<HTMLElement>(null);
-  useEffect(() => {
-    if (isDesktop || !isSidebarOpen) return;
-    // Opening moves focus into the drawer; Escape closes it and returns focus
-    // to the button that opened it.
-    drawerRef.current?.querySelector<HTMLElement>('nav button')?.focus();
-    const controls = () => Array.from(drawerRef.current?.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), [tabindex="0"]') ?? []);
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Tab') {
-        const menu = menuButtonRef.current, items = controls();
-        if (!menu || items.length === 0) return;
-        const first = items[0], last = items[items.length - 1], here = document.activeElement;
-        const inside = here === menu || (drawerRef.current?.contains(here) ?? false);
-        if (e.shiftKey ? (here === menu || !inside) : (here === last || !inside)) { e.preventDefault(); (e.shiftKey ? last : menu).focus(); }
-        else if (e.shiftKey ? here === first : here === menu) { e.preventDefault(); (e.shiftKey ? menu : first).focus(); }
-        return;
-      }
-      if (e.key !== 'Escape') return;
-      setIsSidebarOpen(false);
-      menuButtonRef.current?.focus();
-    };
-    document.addEventListener('keydown', onKey);
-    const drawer = drawerRef.current;
-    const menuButton = menuButtonRef.current;
-    return () => {
-      document.removeEventListener('keydown', onKey);
-      // Closing by any route (a section chosen, the backdrop, the menu button)
-      // makes the drawer inert; focus left inside it falls to <body> (the
-      // browser may already have moved it there by the time this runs).
-      const active = document.activeElement;
-      if (!active || active === document.body || drawer?.contains(active)) menuButton?.focus();
-    };
-  }, [isDesktop, isSidebarOpen]);
   const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
   const [editingGuideline, setEditingGuideline] = useState<Guideline | null>(null);
   const [isNewGuideline, setIsNewGuideline] = useState(false);
@@ -1078,7 +1017,7 @@ Add a note from the entry to restore the audit trail.`
           </div>
         </div>
 
-        <div className="flex items-center gap-3 shrink-0" inert={drawerModal}>
+        <div className="flex items-center gap-3 shrink-0">
           {/* Supabase connection badge.
               lg: not md: — at md (768px) this badge, the since-removed
               "Editor sign in" control, and both button text labels together
@@ -1168,7 +1107,7 @@ Add a note from the entry to restore the audit trail.`
 
       {/* Offline notice — honest signal that this is a cached copy, not live data */}
       {!isOnline && (
-        <div role="status" inert={drawerModal} className="bg-amber-50 border-b border-amber-200 px-5 py-1.5 flex items-center gap-2 text-[11px] text-amber-800 shrink-0">
+        <div role="status" className="bg-amber-50 border-b border-amber-200 px-5 py-1.5 flex items-center gap-2 text-[11px] text-amber-800 shrink-0">
           <WifiOff aria-hidden="true" className="w-3 h-3 shrink-0" />
           <span>Offline — showing a cached copy. Always confirm against the live source guidance.</span>
         </div>
@@ -1177,25 +1116,7 @@ Add a note from the entry to restore the audit trail.`
       {/* Body */}
       <div className="flex flex-1 overflow-hidden">
 
-        {isSidebarOpen && (
-          <div
-            aria-hidden="true"
-            className="fixed inset-0 top-[56px] bg-black/40 z-30 md:hidden"
-            onClick={() => setIsSidebarOpen(false)}
-          />
-        )}
-
-        {/* Sidebar */}
-        <aside
-          ref={drawerRef}
-          id="sections-drawer"
-          aria-label="Sections"
-          inert={drawerHidden}
-          className={cn(
-          "w-[240px] bg-white border-r border-slate-200 flex flex-col justify-between overflow-y-auto shrink-0 transition-transform duration-300 z-40",
-          "fixed md:relative top-[56px] md:top-0 bottom-0 left-0",
-          isSidebarOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
-        )}>
+        <NavigationDrawer open={isSidebarOpen} setOpen={setIsSidebarOpen} triggerRef={menuButtonRef}>
           <div className="p-4">
             <div className="text-[10px] font-semibold text-slate-500 tracking-wider mb-2 uppercase">
               Sections
@@ -1306,10 +1227,10 @@ Add a note from the entry to restore the audit trail.`
           <div className="p-4 text-[10px] text-slate-500 border-t border-slate-100 leading-relaxed">
             National reference only. Not a substitute for clinical judgement or local trust policy.
           </div>
-        </aside>
+        </NavigationDrawer>
 
         {/* Main */}
-        <main id="main-content" tabIndex={-1} inert={drawerModal} className={cn("min-w-0 flex-1 flex flex-col bg-[#F8FAFC] overflow-y-auto relative focus:outline-none",
+        <main id="main-content" tabIndex={-1} className={cn("min-w-0 flex-1 flex flex-col bg-[#F8FAFC] overflow-y-auto relative focus:outline-none",
           // Reading-surface sizing and wrapping from the public UI review (browse views only).
           ![DUPLICATES_VIEW, CHANGELOG_VIEW, REVIEW_QUEUE_VIEW, CATALOGUE_VIEW, ABOUT_VIEW].includes(currentSection) && "public-browse")}>
 

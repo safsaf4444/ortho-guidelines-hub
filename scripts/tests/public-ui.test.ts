@@ -11,7 +11,6 @@
  * Exit:  0 = all assertions passed, 1 = at least one failure.
  */
 import fs from 'node:fs';
-import path from 'node:path';
 import {
   filterGuidelines, hasActiveFilters, normaliseQuery, resultCountText, emptyResultText, NEW_TAB_REL,
 } from '../../src/lib/guideline-filter';
@@ -77,7 +76,7 @@ console.log('\n[4] Source guards on src/App.tsx');
 // Comments are stripped first: several explain the old markup in words
 // ("role=\"button\" with the provider <a> nested inside it"), which must not
 // count as the markup itself.
-const app = fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '../../src/App.tsx'), 'utf8')
+const app = fs.readFileSync(new URL('../../src/App.tsx', import.meta.url), 'utf8')
   .replace(/\{\/\*[\s\S]*?\*\/\}/g, '')
   .replace(/\/\*[\s\S]*?\*\//g, '')
   .replace(/^\s*\/\/.*$/gm, '');
@@ -93,7 +92,8 @@ check('no role="button" elements remain (nested-interactive rows replaced by rea
 check('the search input has a programmatic label', /htmlFor="guideline-search"/.test(app) && /id="guideline-search"/.test(app));
 check('the link-status filter has an accessible name', /aria-label="Filter by link-check status"/.test(app));
 check('section headers are buttons with aria-expanded', /onClick=\{onToggleCollapse\}\s*\n\s*aria-expanded=\{!isCollapsed\}/.test(app));
-check('the closed mobile drawer is inert', /inert=\{drawerHidden\}/.test(app));
+const drawer = fs.readFileSync(new URL('../../src/components/NavigationDrawer.tsx', import.meta.url), 'utf8');
+check('mobile navigation delegates to a native modal dialog (closed dialogs are hidden and untabbable)', /<NavigationDrawer/.test(app) && /<dialog/.test(drawer) && /dialog.showModal\(\)/.test(drawer) && /aria-modal="true"/.test(drawer));
 check('the result count is a live region', /id="guideline-result-count"\s*\n\s*role="status"/.test(app));
 check('exactly one <h1>', (app.match(/<h1[\s>]/g) ?? []).length === 1);
 check('editorial controls stay behind the write gate (Add, Edit, quick link-status)',
