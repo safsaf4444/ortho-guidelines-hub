@@ -89,6 +89,7 @@ import { pathToFileURL } from 'node:url';
 import { createClient } from '@supabase/supabase-js';
 import { ALL_DISCOVERY_CLASSES, DISCOVERY_SCHEMA_VERSION, type DiscoveryCandidate } from './lib/discovery-classification';
 import { documentIdentityKey } from './lib/ingestion';
+import { DISCOVER_ALTERNATIVE_SCOPES, isDiscoverAlternativeScope } from './lib/scope-contract';
 import { checkOwnership, STAGING_OWNERSHIP } from './lib/staging-ownership';
 
 // ── Report shape (the parts this adapter reads) ──────────────────────────
@@ -253,8 +254,8 @@ export function validateCandidate(c: unknown): string[] {
   });
   if (!Array.isArray(c.urlAlternatives)) e.push('urlAlternatives must be an array');
   else c.urlAlternatives.forEach((a, i) => {
-    if (!isObj(a) || !httpUrl(a.url) || !nonEmpty(a.relation) || (a.scope !== 'document' && a.scope !== 'surface')) {
-      e.push(`urlAlternatives[${i}] must be { url: http(s), relation, scope: document|surface, … }`);
+    if (!isObj(a) || !httpUrl(a.url) || !nonEmpty(a.relation) || !isDiscoverAlternativeScope(a.scope)) {
+      e.push(`urlAlternatives[${i}] must be { url: http(s), relation, scope: ${DISCOVER_ALTERNATIVE_SCOPES.join('|')}, … }`);
     }
   });
   const cls = c.classification;

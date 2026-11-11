@@ -9,7 +9,9 @@ let alias;
 test('F2 actual service discovery retains rejected alias as review-only',()=>{alias=discover('alias-refiled-'+run,u('alias-target'));return alias.status==='staged'&&deny(()=>approve(alias.stagedId,payload('fix-alias-'+run,u('alias-target'))),/comparison required/);});
 test('F2 cross-producer sync cannot publish rejected alias',()=>{const result=sync('sync-alias-'+run,u('alias-target'));return ['already_open','existing'].includes(result.status)&&deny(()=>approve(result.stagedId,payload('fix-sync-alias-'+run,u('alias-target'))),/comparison required/);});
 test('F2 immutable signal retains provenance without asserted equivalence',()=>sql(`select count(*) from public.governance_rejection_sources where evidence_id is not null and producer='discover' and candidate_class='NEW_GUIDELINE' and observed_alias='${u('alias-target')}' and relationship='redirect-target' and trust_status like 'comparison-only%'`)==='1');
-test('F2 shared index is not automatically a rejected document alias',()=>{const x=discover('fallback-'+run,u('fallback'));approve(x.stagedId,payload('fallback-'+run,u('fallback')));return true;});
+// P2-2 (962fca4 review): a producer-declared index role is an unverifiable claim, so the shared page is held for
+// review rather than exempted (previously asserted to publish).
+test('F2 producer-declared shared index requires review, never an automatic exemption (P2-2)',()=>{const x=discover('fallback-'+run,u('fallback'));return deny(()=>approve(x.stagedId,payload('fallback-'+run,u('fallback'))),/comparison required/);});
 test('F2 alias cannot be hidden in a final alternate URL',()=>{const c=stage('fix-alt-'+run,u('new'));return deny(()=>approve(c,payload('fix-alt-'+run,u('new'),{versions:[{url:u('new'),label:'Synthetic'},{url:u('alias-target'),label:'Synthetic document'}]})),/comparison required/);});
 test('F2 rejected unpublished revision remains review-only with no fabricated target',()=>{const id=value('service_role',null,`select public.record_rejected_revision_signal('${run}','discover','${u('alias-source')}',${literal({publisherVersion:'Synthetic next revision',reviewOnly:true})})`);return sql(`select review_only::text from public.governance_reconsideration_signals where id='${id}'`)==='true';});
 test('F2 unlisted actor cannot release a rejected source',()=>deny(()=>value('authenticated',outsider,`select public.release_rejected_document('${u('alias-source')}','Synthetic')`),/Named editor/));
@@ -61,7 +63,7 @@ test('F2 actual service comparison class remains review-only and cannot publish 
  return row.status==='staged'&&deny(()=>approve(row.stagedId,payload('forbidden-class-'+run,u('class-target'))),/must not be published as a new entry/);
 });
 
-﻿for(const alternative of [u('owner'),{label:'Missing URL'}])test('F5 malformed incoming alternative is refused atomically '+JSON.stringify(alternative),()=>{
+for(const alternative of [u('owner'),{label:'Missing URL'}])test('F5 malformed incoming alternative is refused atomically '+JSON.stringify(alternative),()=>{
  const name='bad-evidence-'+run+'-'+(++sequence),source=u(name);const rejected=deny(()=>discover(name,source,[alternative]),/Incoming evidence/);
  return rejected&&sql(`select count(*) from public.staged_guidelines where candidate_id='${name}'`)==='0';
 });

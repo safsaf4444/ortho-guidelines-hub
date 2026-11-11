@@ -414,6 +414,13 @@ export default function App() {
    */
   const [stagedCandidateId, setStagedCandidateId] = useState<string | null>(null);
   /**
+   * Bumped after every database-confirmed publication (current or earlier
+   * session) so the review queue re-reads its open rows: a just-published
+   * candidate must not stay offered for publication until a manual refresh
+   * (P3-4, 962fca4 review). The queue keeps its drafts; it is not remounted.
+   */
+  const [queueVersion, setQueueVersion] = useState(0);
+  /**
    * The open modal SESSION, by identity. Every path that opens the modal builds
    * a new draft object and every close sets null, so the object a publication
    * started from identifies that session. An asynchronous result may change
@@ -648,6 +655,7 @@ export default function App() {
           + `Any form open now was not changed.\n\n${text}`;
       try {
         await stagedService.approve(stagedCandidateId, updated, prepared.note, evidence);
+        setQueueVersion(v => v + 1);
         const refreshed = await guidelinesService.getAll();
         if (refreshed.source === 'live') setGuidelines(refreshed.rows);
         const reloaded = refreshed.source === 'live';
@@ -800,12 +808,14 @@ ${noteMsg}
    * the only way to retry was to retype the whole entry. A failure now leaves
    * the draft exactly where it was.
    */
-  const handleSave = async (updated: Guideline, note: string, evidence?: PublicationEvidence) => {
+  const handleSave = async (updated: Guideline, note: string, evidence?: PublicationEvidence): Promise<boolean> => {
     const session = editingSessionRef.current;
     const saved = await persistGuideline(updated, isNewGuideline, note, evidence);
     // Only the session that saved may be closed; a dismissed request never closes a later draft.
-    if (session === null || editingSessionRef.current !== session) return;
+    if (session === null || editingSessionRef.current !== session) return saved;
     if (saved) setEditingGuideline(null);
+    // Reported to the modal so it can restore focus and announce a non-completion (P2-1).
+    return saved;
   };
 
   // Fast, in-card update path for link verification review — no modal round-trip.
@@ -1467,6 +1477,7 @@ Add a note from the entry to restore the audit trail.`
                 // Remounted when the draft owner changes, which discards every
                 // reject reason, decision note and open panel it holds.
                 key={draftOwner}
+                refreshToken={queueVersion}
                 signedIn={session.signedIn}
                 onEditCandidate={handleReviewCandidate}
                 lookupEntry={id => {
@@ -2588,7 +2599,7 @@ function EditModal({
   /** Which of the three gate conditions is unmet, or null when writable. */
   blockedReason: string | null;
   /** Resolves when the write has been attempted; the modal stays open if it failed. */
-  onSave: (g: Guideline, note: string, evidence?: PublicationEvidence) => void | Promise<void>;
+  onSave: (g: Guideline, note: string, evidence?: PublicationEvidence) => void | boolean | Promise<void | boolean>;
   stagedId: string | null;
   onClose: () => void;
   onDelete: (id: string) => void;
@@ -2639,6 +2650,30 @@ function EditModal({
   // now stays open until the write is confirmed, so the button is reachable
   // for as long as the request takes.
   const [submitting, setSubmitting] = useState(false);
+  /**
+   * P2-1 (962fca4 review): Publish disables itself while the request is in
+   * flight, which would drop a keyboard user's focus to <body> with the dialog
+   * still open. Focus is parked on the publication status line (focusable,
+   * inside the dialog, never disabled), and after a result that leaves the form
+   * open it returns to Publish (or the change note), unless the user has
+   * deliberately moved it elsewhere inside the dialog. The status line also
+   * announces the state. A successful publication closes the dialog, and its
+   * focus restoration (to the invoking control) is unchanged.
+   */
+  const [publication, setPublication] = useState<'idle' | 'pending' | 'incomplete'>('idle');
+  const publicationStatusRef = useRef<HTMLParagraphElement>(null);
+  const publishRef = useRef<HTMLButtonElement>(null);
+  const restorePublishFocus = useRef(false);
+  useEffect(() => {
+    if (submitting || !restorePublishFocus.current) return;
+    restorePublishFocus.current = false;
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    const here = document.activeElement;
+    if (here && here !== document.body && here !== publicationStatusRef.current && dialog.contains(here)) return;
+    const publish = publishRef.current;
+    (publish && !publish.disabled ? publish : document.getElementById('change-note') ?? dialog).focus();
+  }, [submitting, publication]);
   const noteOk = isValidChangeNote(note);
 
   // A non-current status has to be explained. Mirrors the database CHECK, so
@@ -2692,7 +2727,9 @@ function EditModal({
   const inp = "w-full px-2.5 py-1.5 border border-slate-200 rounded text-[12px] bg-white focus:outline-none focus:ring-1 focus:ring-slate-300";
 
   return (
-    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-3" onClick={onClose}>
+    // A stray backdrop click must not dismiss an in-flight publication (P3-5). Escape and Cancel stay
+    // available as explicit dismissals; a late result is then reported as an earlier request.
+    <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-3" onClick={() => { if (!submitting) onClose(); }}>
       <div
         ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={dialogTitle} tabIndex={-1}
         className="bg-white rounded-lg w-full max-w-[500px] max-h-[88dvh] flex flex-col shadow-xl"
@@ -3033,6 +3070,16 @@ function EditModal({
             </div>
           </div>
         )}
+        {writable && (
+          <p ref={publicationStatusRef} tabIndex={-1} role="status" data-testid="publication-status"
+            className="px-4 pt-1.5 text-[11px] text-slate-700 shrink-0 focus:outline-none">
+            {publication === 'pending'
+              ? (isStagedCandidate ? 'Publishing… keep this form open until the database answers.' : 'Saving… keep this form open until the database answers.')
+              : publication === 'incomplete'
+                ? (isStagedCandidate ? 'Publication did not complete. Your draft is still open; the message explains what happened.' : 'The save did not complete. Your draft is still open; the message explains what happened.')
+                : ''}
+          </p>
+        )}
         <div className="flex justify-between items-center gap-2 px-4 py-2.5 border-t border-slate-200 shrink-0">
           <div>
             {/* Delete is a write action too — same gate as Save. The actual
@@ -3057,12 +3104,18 @@ This archives the entry rather than deleting it: it disappears from the site, bu
           <div className="flex gap-2">
             {writable ? (
               <button
+                ref={publishRef}
                 onClick={async () => {
                   if (!canSave) return;
+                  publicationStatusRef.current?.focus();
+                  setPublication('pending');
                   setSubmitting(true);
+                  let completed: boolean | void = undefined;
                   try {
-                    await onSave(form, note, {verificationEvidenceId:receiptChoice.verificationEvidenceId,clinicalReviewEvidenceId:receiptChoice.clinicalReviewEvidenceId});
+                    completed = await onSave(form, note, {verificationEvidenceId:receiptChoice.verificationEvidenceId,clinicalReviewEvidenceId:receiptChoice.clinicalReviewEvidenceId});
                   } finally {
+                    if (completed !== true) restorePublishFocus.current = true;
+                    setPublication(completed === true ? 'idle' : 'incomplete');
                     setSubmitting(false);
                   }
                 }}

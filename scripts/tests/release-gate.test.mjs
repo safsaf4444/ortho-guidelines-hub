@@ -209,6 +209,33 @@ test('a restored source edit is observed while the main thread is synchronous', 
   } finally { observer.stop(); }
 }));
 
+// P3-6 (962fca4 review): on Windows, reading a file can raise a metadata-only "change" notification
+// (access time / antivirus), which made the release-gate control run fail with an unchanged tree.
+const settle=(observer)=>{for(let i=0;i<10;i++)Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,30);return observer.changed();};
+test('a metadata-only notification (access time) is not reported as a source edit', () => temp((root) => {
+  fs.mkdirSync(path.join(root,'src'));const file=path.join(root,'src/source.ts');fs.writeFileSync(file,'original');
+  const fixed=new Date('2026-01-01T00:00:00Z');fs.utimesSync(file,fixed,fixed);
+  const observer=observeCandidate(root);
+  try {
+    fs.utimesSync(file,new Date('2026-06-01T00:00:00Z'),fixed);fs.readFileSync(file);
+    assert.equal(settle(observer),false,'access-time-only change counted as an edit');assert.equal(observer.failed(),false);
+    fs.writeFileSync(file,'original');
+    for(let i=0;i<100&&!observer.changed();i++)Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,20);
+    assert.equal(observer.changed(),true,'an identical-content rewrite is still a write and must be observed');
+  } finally { observer.stop(); }
+}));
+
+test('a write that restores size and content but not the timestamp is still observed', () => temp((root) => {
+  fs.mkdirSync(path.join(root,'src'));const file=path.join(root,'src/source.ts');fs.writeFileSync(file,'AAAA');
+  const fixed=new Date('2026-01-01T00:00:00Z');fs.utimesSync(file,fixed,fixed);
+  const observer=observeCandidate(root);
+  try {
+    execFileSync(process.execPath,['-e',"const fs=require('fs');fs.writeFileSync(process.argv[1],'BBBB');fs.writeFileSync(process.argv[1],'AAAA');",file]);
+    for(let i=0;i<100&&!observer.changed();i++)Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,20);
+    assert.equal(observer.changed(),true);assert.equal(observer.failed(),false);
+  } finally { observer.stop(); }
+}));
+
 test('sensitive rename scope includes the original path with --no-renames', () => temp((root) => {
   const source=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../..');
   const gitDir=execFileSync('git',['rev-parse','--absolute-git-dir'],{cwd:source,encoding:'utf8'}).trim();

@@ -79,6 +79,7 @@ export default function ReviewDashboard({
   signedIn,
   onEditCandidate,
   lookupEntry,
+  refreshToken = 0,
 }: {
   /**
    * Drives a refetch on sign-in/sign-out. Not a permission check — the
@@ -95,6 +96,12 @@ export default function ReviewDashboard({
   onEditCandidate: (candidate: DisplayCandidate) => void;
   /** Read-only lookup of a catalogue entry by id, for showing what a row matched. */
   lookupEntry?: (id: string) => CatalogueEntryRef | undefined;
+  /**
+   * Bumped by App after a database-confirmed publication, so a just-published
+   * row is re-read instead of staying offered until a manual Refresh (P3-4).
+   * A refetch only: drafts and open panels are kept.
+   */
+  refreshToken?: number;
 }) {
   const [load, setLoad] = useState<StagedLoad | 'loading'>('loading');
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
@@ -156,7 +163,7 @@ export default function ReviewDashboard({
       if (!cancelled) setLoad(result);
     });
     return () => { cancelled = true; };
-  }, [signedIn, reloadToken]);
+  }, [signedIn, reloadToken, refreshToken]);
 
   // Clear any pending timer on unmount so a fired timeout cannot setState on an
   // unmounted component.

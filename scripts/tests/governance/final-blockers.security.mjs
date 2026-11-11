@@ -64,7 +64,10 @@ for(const order of orders){
  const slug=order.join('-'),a=u('a-'+slug),b=u('b-'+slug),alts=order.map(s=>s==='document'?doc(b):nav(b,s));
  const r=discover('a-'+slug+run,a,alts);reject(r.stagedId);const rows=sources(r.stagedId).filter(x=>x.alias===b);const c=discover('b-'+slug+run,b);
  await test(`F2 discover ${order.join(' then ')} holds the alias`,()=>refused(()=>approve(c.stagedId,payload('b-'+slug+run,b)),/comparison required/));
- await test(`F2 discover ${order.join(' then ')} keeps each classification once`,()=>new Set(rows.map(x=>x.trust)).size===2&&rows.length===2&&rows.every(x=>x.evidence&&x.relationship==='redirect-target'&&x.trust.endsWith('equivalence not established')));
+ // P2-2: each declared role is now retained as its own provenance (index and fallback no longer collapse into one
+ // "navigation-only" class), so "once" means exactly one row per distinct declared role, regardless of order.
+ const expected=new Set(order.map(s=>s==='document'?'comparison-only; equivalence not established':`comparison-only; producer-declared ${s} role unverified; equivalence not established`));
+ await test(`F2 discover ${order.join(' then ')} keeps each classification once`,()=>new Set(rows.map(x=>x.trust)).size===expected.size&&rows.length===expected.size&&rows.every(x=>expected.has(x.trust)&&x.evidence&&x.relationship==='redirect-target'&&x.trust.endsWith('equivalence not established')));
 }
 for(const labels of permutations(['Fallback / index page','Synthetic document'])){
  const slug=labels[0].startsWith('F')?'fallback-first':'document-first',a=u('sync-a-'+slug),b=u('sync-b-'+slug);
@@ -75,7 +78,9 @@ for(const labels of permutations(['Fallback / index page','Synthetic document'])
 }
 for(const order of permutations(['index','fallback'])){
  const slug=order.join('-'),a=u('nav-a-'+slug),b=u('nav-b-'+slug),r=discover('nav-a-'+slug+run,a,order.map(s=>nav(b,s)));reject(r.stagedId);const c=discover('nav-b-'+slug+run,b);
- await test(`F2 shared navigation page (${slug}) is not treated as the rejected document`,()=>{approve(c.stagedId,payload('nav-b-'+slug+run,b));return sources(r.stagedId).filter(x=>x.alias===b).every(x=>x.trust.startsWith('navigation-only'));});
+ // P2-2 (962fca4 review): producer-declared navigation roles are unverifiable, so the shared page requires review
+ // instead of being exempted (previously asserted to publish). The claims are kept, never discarded.
+ await test(`F2 producer-declared shared navigation page (${slug}) requires review and keeps both claims`,()=>refused(()=>approve(c.stagedId,payload('nav-b-'+slug+run,b)),/comparison required/)&&sources(r.stagedId).filter(x=>x.alias===b).map(x=>x.trust).sort().join('|')===order.map(s=>`comparison-only; producer-declared ${s} role unverified; equivalence not established`).sort().join('|'));
 }
 for(const [first,second,slug] of [[nav,doc,'index-then-document'],[doc,nav,'document-then-index']]){
  const a=u('late-a-'+slug),b=u('late-b-'+slug),name='late-a-'+slug+run,mk=f=>f===doc?doc(b):nav(b,'index');

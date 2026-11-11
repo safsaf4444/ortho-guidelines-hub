@@ -28,7 +28,9 @@ titles.forEach((label,i)=>{
 {const a=u('r1-doc-a'),b=u('r1-doc-b'),r=sync('r1-doc-a'+run,[{url:a,label:'Synthetic'},{url:b,label:'Index finger fracture management',scope:'document'}]);reject(r.stagedId);const c=sync('r1-doc-b'+run,[{url:b,label:'Synthetic'}]);
  test('R1 explicit document scope with an index-like title keeps the comparison hold',()=>outcome(c.stagedId,'r1-doc-b'+run,b)==='held: comparison');}
 for(const scope of ['index','fallback','navigation']){const a=u('r1-nav-a-'+scope),b=u('r1-nav-b-'+scope),r=sync('r1-nav-a-'+scope+run,[{url:a,label:'Synthetic'},{url:b,label:'Synthetic',scope}]);reject(r.stagedId);const c=sync('r1-nav-b-'+scope+run,[{url:b,label:'Synthetic'}]);
- test(`R1 explicit ${scope} scope on a version is navigation-only, so an unrelated document is not held`,()=>outcome(c.stagedId,'r1-nav-b-'+scope+run,b)==='published'&&trust(r.stagedId,b)==='navigation-only; equivalence not established');}
+ // P2-2 (962fca4 review): previously asserted 'published' + navigation-only. A producer-declared role cannot be
+ // substantiated, so it is retained as provenance and the document still requires review.
+ test(`R1 explicit ${scope} scope on a version is a recorded producer claim and still requires review`,()=>outcome(c.stagedId,'r1-nav-b-'+scope+run,b)==='held: comparison'&&trust(r.stagedId,b)===`comparison-only; producer-declared ${scope} role unverified; equivalence not established`);}
 for(const bad of ['Index','INDEX',' index','doc','',7,null,{kind:'index'}]){const slug=(++sequence)+'',a=u('r1-bad-'+slug);
  test(`R1 sync version scope ${JSON.stringify(bad)} is refused atomically`,()=>{let r;try{r=sync('r1-bad-'+slug+run,[{url:a,label:'Synthetic',scope:bad}]);}catch(e){return /GV005|scope/i.test(e.message)&&staged('r1-bad-'+slug+run)==='0';}return r.status==='failed'&&r.code==='GV005'&&staged('r1-bad-'+slug+run)==='0';});
  test(`R1 discovery alternative scope ${JSON.stringify(bad)} is refused atomically`,()=>refused(()=>discover('r1-badalt-'+slug+run,u('r1-badalt-'+slug),[{url:u('r1-badalt-target-'+slug),scope:bad,relation:'redirect-target'}]),/GV005|scope/i)&&staged('r1-badalt-'+slug+run)==='0');}
@@ -44,11 +46,14 @@ for(const bad of ['Index','INDEX',' index','doc','',7,null,{kind:'index'}]){cons
 const surface=u('publisher-index'),requested=u('publisher-index-requested');
 const bound={url:surface,scope:'surface',relation:'redirect-target',derivedFrom:requested};
 {const a=u('r2-a'),b=u('r2-b'),r=discover('r2-a'+run,a,[bound],requested);reject(r.stagedId);const c=discover('r2-b'+run,b,[bound],requested);
- test('R2 unrelated document sharing only a recorded publisher-index redirect is not held',()=>outcome(c.stagedId,'r2-b'+run,b)==='published');
- test('R2 shared surface provenance is retained, never discarded, and asserts no equivalence',()=>trust(r.stagedId,surface)==='navigation-only; surface provenance; equivalence not established');}
+ // P2-2 (962fca4 review): previously asserted 'published'. derivedFrom and surfaceUrl are both producer-chosen, so
+ // the "binding" is self-consistency, not provenance; the shared page requires review (over-hold, D3 decides).
+ test('R2 a self-consistent surface claim cannot exempt an unrelated document (requires review)',()=>outcome(c.stagedId,'r2-b'+run,b)==='held: comparison');
+ test('R2 shared surface provenance is retained, never discarded, and asserts no equivalence',()=>trust(r.stagedId,surface)==='comparison-only; producer-declared surface role unverified; equivalence not established');}
 for(const [slug,alt,surfaceUrl] of [['unbound',{url:surface,scope:'surface',relation:'redirect-target'},requested],['mismatched',{url:surface,scope:'surface',relation:'redirect-target',derivedFrom:u('some-other-page')},requested],['document-derived',{url:surface,scope:'surface',relation:'redirect-target',derivedFrom:u('r2u-a-document-derived')},requested]]){
  const a=u('r2u-a-'+slug),b=u('r2u-b-'+slug),r=discover('r2u-a-'+slug+run,a,[alt],surfaceUrl);reject(r.stagedId);const c=discover('r2u-b-'+slug+run,b,[{url:surface,scope:'document',relation:'redirect-target'}],surfaceUrl);
- test(`R2 ${slug} surface claim is not provenance-verified, so it stays review-only`,()=>outcome(c.stagedId,'r2u-b-'+slug+run,b)==='held: comparison'&&trust(r.stagedId,surface)==='comparison-only; equivalence not established');}
+ // Trust text now names the unverified declared role (P2-2); the hold assertion is unchanged.
+ test(`R2 ${slug} surface claim is not provenance-verified, so it stays review-only`,()=>outcome(c.stagedId,'r2u-b-'+slug+run,b)==='held: comparison'&&trust(r.stagedId,surface)==='comparison-only; producer-declared surface role unverified; equivalence not established');}
 for(const order of [['surface','document'],['document','surface']]){const slug=order.join('-'),a=u('r2o-a-'+slug),x=u('r2o-x-'+slug);
  const alts=order.map(s=>s==='surface'?{url:x,scope:'surface',relation:'redirect-target',derivedFrom:requested}:{url:x,scope:'document',relation:'redirect-target'});
  const r=discover('r2o-a-'+slug+run,a,alts,requested);reject(r.stagedId);const c=discover('r2o-b-'+slug+run,x);

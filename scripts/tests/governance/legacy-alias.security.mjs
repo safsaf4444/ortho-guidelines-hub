@@ -16,7 +16,9 @@ sql(fs.readFileSync('supabase/proposals/20261107_editorial_governance_hardening.
 test('backfill leaves original evidence unchanged',evidence()===before);
 for(const [slug] of cases){
  const alias=u('b-'+slug),rows=sql(`select s.trust_status from public.governance_rejection_sources s join public.governance_rejections r on r.id=s.rejection_id where r.staged_id='${ids[slug]}' and s.observed_alias='${alias}' order by 1`).split('\n');
- test(`${slug}: legacy rejection keeps both classifications`,rows.length===2&&rows[0].startsWith('comparison-only')&&rows[1].startsWith('navigation-only'));
+ // P2-2/P3-2 (962fca4 review): the legacy index declaration is retained as an unverified producer claim
+ // (comparison-only) instead of navigation-only; both classifications are still kept, in order.
+ test(`${slug}: legacy rejection keeps both classifications`,rows.length===2&&rows[0]==='comparison-only; equivalence not established'&&rows[1]==='comparison-only; producer-declared index role unverified; equivalence not established');
  test(`${slug}: legacy alias requires comparison`,sql(`select public._governance_comparison_required(public.document_identity_key('${alias}'))`)==='t');
 }
 fs.writeFileSync(out+'/legacy-alias-runtime.json',JSON.stringify({container,passed,failed,outcomes},null,2)+'\n');console.log(passed+' passed, '+failed+' failed');process.exitCode=failed?1:0;

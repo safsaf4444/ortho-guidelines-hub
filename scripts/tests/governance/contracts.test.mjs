@@ -1,5 +1,5 @@
 ﻿/** Same security contracts on the original and hardened schemas; red before/green after. */
-import fs from 'node:fs';import {sql,actor,editor,payload,literal,stage,approve,container} from './db-harness.mjs';
+import fs from 'node:fs';import {sql,actor,editor,payload,stage,approve,container} from './db-harness.mjs';
 let passed=0,failed=0;const outcomes=[],prefix='contract-'+Date.now().toString(36),base='https://synthetic.example.test/'+prefix;function test(name,fn){try{if(!fn())throw Error('Vulnerability allowed the forbidden operation');passed++;outcomes.push({name,status:'passed'});console.log('PASS '+name);}catch(e){failed++;outcomes.push({name,status:'failed',error:e.message});console.log('FAIL '+name+': '+e.message);}}function denied(fn){try{fn();return false;}catch{return true;}}
 const existing=stage(prefix+'-existing',base+'/published');approve(existing,payload(prefix+'-published',base+'/published'));
 test('final published URL duplicate is refused',()=>{const c=stage(prefix+'-duplicate',base+'/new');return denied(()=>approve(c,payload(prefix+'-duplicate',base+'/published')));});

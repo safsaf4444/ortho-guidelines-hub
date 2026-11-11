@@ -187,6 +187,8 @@ declare k text;begin
   if exists(select 1 from jsonb_array_elements(new.versions) v where jsonb_typeof(v) is distinct from 'object' or jsonb_typeof(v->'url') is distinct from 'string' or v->>'url' !~* '^https?://[^/?#@[:space:]]+([/?#]|$)' or v->>'url' ~ '[[:space:]]') then raise exception 'Incoming staged versions require HTTP(S) URL objects' using errcode='GV005';end if;
   if TG_OP='INSERT' or new.versions is distinct from old.versions then
    if exists(select 1 from jsonb_array_elements(new.versions) v where not public._governance_scope_valid(v)) then raise exception 'Incoming staged version scope must be document, surface, index, fallback or navigation; labels are never classified' using errcode='GV005';end if;
+   -- A queue row records no surface_url, so a surface role on a staged version can never be substantiated.
+   if exists(select 1 from jsonb_array_elements(new.versions) v where v->>'scope'='surface') then raise exception 'Staged versions cannot carry a surface scope; only discovery evidence with a recorded surface_url can' using errcode='GV005';end if;
   end if;
   k:=public._governance_key(new.primary_url);
 
@@ -325,27 +327,22 @@ do $$declare t text;begin
   execute format('create trigger immutable_governance before update or delete or truncate on public.%I for each statement execute function public.forbid_mutation()',t);
  end loop;
 end$$;
--- R1/R2: rejection-memory trust derives ONLY from explicit, validated scope. Free-text labels are
--- never classified: a genuine document titled "... Index ..." must keep its comparison hold.
--- Unscoped or malformed (legacy) signals are comparison-only. A 'surface' signal is navigation-only
--- solely when its derivedFrom is the evidence row's own recorded surface_url (a publisher index
--- page redirect); any other surface claim is unverified and stays review-only.
+-- Scope contract (R1, P2-2, P2-3). Free-text labels are never classified. Scope is validated at
+-- staging against one shared set (mirrored by scripts/lib/scope-contract.ts; cross-checked by
+-- scripts/tests/scope-contract.test.ts). No producer-supplied value can establish that a link is
+-- navigation rather than document evidence: every in-system input to such a claim (scope,
+-- derivedFrom, surfaceUrl) is chosen by the same producer, so a claim is recorded as provenance
+-- and stays comparison-only (review required). Unscoped, malformed and legacy signals are
+-- comparison-only too. An exemption needs a verified role or an attributed editor decision; that
+-- is the unsigned D3 policy decision, so no exemption path exists here (fail closed).
 create function public._governance_scope_valid(p_signal jsonb) returns boolean language sql immutable set search_path=public,pg_temp as $$
  select not(p_signal ? 'scope') or (jsonb_typeof(p_signal->'scope')='string' and p_signal->>'scope' in('document','surface','index','fallback','navigation'));
 $$;
-create function public._governance_alias_trust(p_signal jsonb,p_surface_url text) returns text language plpgsql stable set search_path=public,pg_temp as $$
-declare v_scope text:=case when jsonb_typeof(p_signal->'scope')='string' then p_signal->>'scope' end;begin
- if v_scope in('index','fallback','navigation') then return 'navigation-only; equivalence not established';end if;
- if v_scope='surface' and p_surface_url is not null and jsonb_typeof(p_signal->'derivedFrom')='string' then
-  begin
-   if public.document_identity_key(p_signal->>'derivedFrom')=public.document_identity_key(p_surface_url) then
-    return 'navigation-only; surface provenance; equivalence not established';
-   end if;
-  exception when others then null; -- unkeyable provenance is unverified, never a licence
-  end;
- end if;
- return 'comparison-only; equivalence not established';
-end$$;
+create function public._governance_alias_trust(p_signal jsonb) returns text language sql immutable set search_path=public,pg_temp as $$
+ select case when jsonb_typeof(p_signal->'scope')='string' and p_signal->>'scope' in('surface','index','fallback','navigation')
+  then 'comparison-only; producer-declared '||(p_signal->>'scope')||' role unverified; equivalence not established'
+  else 'comparison-only; equivalence not established' end;
+$$;
 create function public._governance_snapshot_rejection(p_staged_id uuid) returns void language plpgsql security definer set search_path=public,pg_temp as $$
 declare s public.staged_guidelines;r public.governance_rejections;e public.staged_discovery_evidence;v jsonb;u text;t text;begin
  select * into strict s from public.staged_guidelines where id=p_staged_id;
@@ -360,14 +357,14 @@ declare s public.staged_guidelines;r public.governance_rejections;e public.stage
    if v->>'url' is not null then
     u:=v->>'url';perform public._governance_key(u);
     insert into public.governance_rejection_sources(rejection_id,evidence_id,producer,candidate_class,source_url,observed_alias,identity_key,relationship,trust_status)
-    values(r.id,e.id,e.producer,s.change_reason,e.discovered_url,u,public._governance_key(u),coalesce(v->>'relation',v->>'kind','untyped-alternative'),public._governance_alias_trust(v,e.surface_url)) on conflict do nothing;
+    values(r.id,e.id,e.producer,s.change_reason,e.discovered_url,u,public._governance_key(u),coalesce(v->>'relation',v->>'kind','untyped-alternative'),public._governance_alias_trust(v)) on conflict do nothing;
    end if;
   end loop;
   for v in select value from jsonb_array_elements(coalesce(e.observed_versions,'[]'::jsonb)) loop
    if v->>'url' is not null then
     u:=v->>'url';perform public._governance_key(u);
     insert into public.governance_rejection_sources(rejection_id,evidence_id,producer,candidate_class,source_url,observed_alias,identity_key,relationship,trust_status)
-    values(r.id,e.id,e.producer,s.change_reason,e.discovered_url,u,public._governance_key(u),'observed-version',public._governance_alias_trust(v,e.surface_url)) on conflict do nothing;
+    values(r.id,e.id,e.producer,s.change_reason,e.discovered_url,u,public._governance_key(u),'observed-version',public._governance_alias_trust(v)) on conflict do nothing;
    end if;
   end loop;
  end loop;
@@ -375,7 +372,7 @@ declare s public.staged_guidelines;r public.governance_rejections;e public.stage
  for v in select value from jsonb_array_elements(coalesce(s.versions,'[]'::jsonb)) loop
   if v->>'url' is not null then
    u:=v->>'url';perform public._governance_key(u);
-   t:=public._governance_alias_trust(v,null);
+   t:=public._governance_alias_trust(v);
    if not exists(select 1 from public.governance_rejection_sources where rejection_id=r.id and evidence_id is null and identity_key=public._governance_key(u) and trust_status=t) then
     insert into public.governance_rejection_sources(rejection_id,producer,candidate_class,source_url,observed_alias,identity_key,relationship,trust_status)
     values(r.id,s.producer,s.change_reason,s.primary_url,u,public._governance_key(u),'staged-version',t);
@@ -397,6 +394,7 @@ declare a jsonb;v jsonb;begin
   for v in select value from jsonb_array_elements(a) loop
    if jsonb_typeof(v) is distinct from 'object' or jsonb_typeof(v->'url') is distinct from 'string' then raise exception 'Incoming evidence requires explicit URL objects; malformed signals cannot be skipped' using errcode='GV005';end if;
    if not public._governance_scope_valid(v) then raise exception 'Incoming evidence scope must be document, surface, index, fallback or navigation; labels are never classified' using errcode='GV005';end if;
+   if v->>'scope'='surface' and coalesce(btrim(new.surface_url),'')='' then raise exception 'A surface scope needs the recorded surface_url of the discovery producer; this evidence has none' using errcode='GV005';end if;
    perform public._governance_key(v->>'url');
   end loop;
  end loop;
@@ -545,7 +543,8 @@ begin
       select g.id into v_other
         from public.guidelines g, jsonb_array_elements(coalesce(g.versions, '[]'::jsonb)) v,
              jsonb_array_elements(v_alts) a
-       where v ? 'url' and a->>'scope' = 'document' and a->>'relation' in ('redirect-target', 'canonical-host')
+       -- P3-1: an omitted scope is document-level here too (the shared contract's conservative default).
+       where v ? 'url' and coalesce(a->>'scope', 'document') = 'document' and a->>'relation' in ('redirect-target', 'canonical-host')
          and coalesce(btrim(a->>'url'), '') <> ''
          and public.document_match_key(v->>'url') = public.document_match_key(a->>'url')
        order by g.id limit 1;
@@ -1175,7 +1174,19 @@ declare k text;h text;age interval;receipts jsonb;begin
  when e.kind='automated-link-check' then age is not null and e.observed_at<=clock_timestamp() and e.observed_at>=clock_timestamp()-age and e.outcome=p_data->>'link_verification_status'
  else e.outcome=p_data->>'link_verification_status' end) order by e.observed_at desc),'[]'::jsonb)
  into receipts from public.governance_evidence e where e.identity_key=k and (e.kind<>'clinical-review' or e.staged_id=p_staged_id);
- return jsonb_build_object('receipts',receipts,'availabilityPolicyConfigured',age is not null,'payloadFingerprint',h,'comparisonRequired',public._governance_comparison_required(k) or exists(select 1 from public.staged_guidelines where id=p_staged_id and public._governance_comparison_required(identity_key)));
+ -- P3-5: a UI hint only (approval enforces), but it now considers every URL approval would check:
+ -- proposed versions, staged versions, observed versions and alternatives. Unkeyable URLs are skipped
+ -- here because approval refuses them anyway.
+ return jsonb_build_object('receipts',receipts,'availabilityPolicyConfigured',age is not null,'payloadFingerprint',h,'comparisonRequired',public._governance_comparison_required(k)
+  or exists(select 1 from public.staged_guidelines where id=p_staged_id and public._governance_comparison_required(identity_key))
+  or exists(select 1 from (
+    select v->>'url' u from jsonb_array_elements(case when jsonb_typeof(p_data->'versions')='array' then p_data->'versions' else '[]'::jsonb end) v
+    union all select v->>'url' from public.staged_guidelines s,jsonb_array_elements(coalesce(s.versions,'[]'::jsonb)) v where s.id=p_staged_id
+    union all select ev.discovered_url from public.staged_discovery_evidence ev where ev.staged_id=p_staged_id
+    union all select v->>'url' from public.staged_discovery_evidence ev,jsonb_array_elements(coalesce(ev.observed_versions,'[]'::jsonb)) v where ev.staged_id=p_staged_id
+    union all select v->>'url' from public.staged_discovery_evidence ev,jsonb_array_elements(coalesce(ev.url_alternatives,'[]'::jsonb)) v where ev.staged_id=p_staged_id
+   ) links where links.u ~* '^https?://[^/?#@[:space:]]+([/?#]|$)' and links.u !~ '[[:space:]]'
+     and public._governance_comparison_required(public.document_identity_key(links.u))));
 end$$;
 
 
@@ -1185,6 +1196,10 @@ begin
  return jsonb_build_object('lateEvidence',coalesce((select jsonb_agg(to_jsonb(e) order by recorded_at desc) from public.governance_late_evidence e),'[]'::jsonb),'revisionSignals',coalesce((select jsonb_agg(to_jsonb(s) order by recorded_at desc) from public.governance_reconsideration_signals s),'[]'::jsonb));
 end$$;
 
+-- P3-5: forbid_mutation (20261024) is a SECURITY INVOKER trigger function that only raises; its
+-- callers are the append-only/immutable triggers. Pinning search_path removes caller-controlled
+-- name resolution without changing behaviour or privileges.
+alter function public.forbid_mutation() set search_path=pg_catalog,pg_temp;
 -- Every helper and evidence ledger starts closed to API callers.
 revoke create on schema public from public,anon,authenticated,service_role;
 do $$declare r record;begin

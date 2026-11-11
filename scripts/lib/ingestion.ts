@@ -46,6 +46,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import type { VersionScope } from './scope-contract';
 
 /**
  * Bumped when a field is added, removed, or changes meaning.
@@ -131,16 +132,17 @@ export type ReviewStatus = 'pending' | 'accepted' | 'rejected' | 'deferred';
 
 /** One link attached to a candidate. Mirrors the catalogue's versions[] shape. */
 export interface CandidateVersionLink {
-  /** Display text only. Never classified: a label cannot make a link navigation-only. */
+  /** Display text only. Never classified: a label cannot change how a link is treated. */
   label: string;
   url: string;
   date?: string;
   /**
-   * Explicit, database-validated scope. Omitted means document-level (the
-   * conservative default). Only 'index' | 'fallback' | 'navigation' mark a link
-   * as navigation-only in rejection memory; see scripts/tests/governance/README.md.
+   * Optional, database-validated scope from the shared contract
+   * (scripts/lib/scope-contract.ts). Omitted means document-level, the
+   * conservative default. A declared index/fallback/navigation role is recorded
+   * as provenance but never exempts a link from rejected-source comparison.
    */
-  scope?: 'document' | 'index' | 'fallback' | 'navigation';
+  scope?: VersionScope;
 }
 
 /**

@@ -42,8 +42,8 @@ export default function PublicationReceipts({candidateId,guideline,enabled,onCha
   <label className="block" htmlFor={uid+'note'}>Review evidence note</label><textarea ref={noteRef} id={uid+'note'} value={note} onChange={e=>setNote(e.target.value)} />
   <button type="button" disabled={!note.trim()||attestedKey!==key||statusKey!==key} onClick={()=>void record('clinical')}>Record clinical review of this payload</button>
   {['withdrawn','superseded'].includes(guideline.linkVerificationStatus??'')&&<button type="button" disabled={!note.trim()||attestedKey!==key||statusKey!==key} onClick={()=>void record('source')}>Record human source review</button>}
-  <p role="status">{!busy&&announced.key===key?announced.text:''}</p>
-  <p ref={statusRef} tabIndex={-1} role="status">{busy?'Recording review...':selection.ready?'Required evidence selected; database will revalidate at publication.':'Publication is blocked until status and required matching evidence are reviewed.'}</p>
+  {/* One live region (P3-5): the recording outcome and the readiness state are announced together. */}
+  <p ref={statusRef} tabIndex={-1} role="status">{!busy&&announced.key===key&&announced.text?<span>{announced.text} </span>:null}<span>{busy?'Recording review...':selection.ready?'Required evidence selected; database will revalidate at publication.':'Publication is blocked until status and required matching evidence are reviewed.'}</span></p>
   <p>Changing any proposed entry field invalidates the selected review and status confirmation.</p>
  </fieldset>;
 }

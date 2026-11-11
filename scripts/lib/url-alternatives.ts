@@ -66,6 +66,7 @@
  * a caller attaches one to an item anyway, `matchKeys` ignores it.
  */
 import { normaliseCandidateUrl } from './ingestion';
+import type { DiscoverAlternativeScope } from './scope-contract';
 
 /**
  * How an alternative relates to the discovered URL.
@@ -92,8 +93,12 @@ export type UrlRelation = 'redirect-target' | 'canonical-host' | 'co-publisher-h
  *             itself. MUST NOT participate in document matching — see the
  *             module header. Carried anyway so the provenance is still
  *             reported rather than thrown away.
+ *
+ * The values come from the shared contract (scripts/lib/scope-contract.ts). In
+ * the database's rejection memory, a 'surface' declaration is recorded but stays
+ * comparison-only (review required); it never exempts a link.
  */
-export type AlternativeScope = 'document' | 'surface';
+export type AlternativeScope = DiscoverAlternativeScope;
 
 /**
  * What a probe of a URL actually observed. Every field is as REPORTED by the
