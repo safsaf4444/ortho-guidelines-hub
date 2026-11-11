@@ -439,7 +439,7 @@ check('GitHub acknowledgement explicitly disclaims database or publication autho
 // ════════════════════════════════════════════════════════════════════════════
 console.log('\n[I] Trust boundaries in GitHub workflows');
 // ════════════════════════════════════════════════════════════════════════════
-const WF = ['approve-change', 'dead-link-check', 'deploy', 'detect-changes', 'guideline-sync'];
+const WF = ['approve-change', 'dead-link-check', 'deploy', 'guideline-sync'];
 const wf = Object.fromEntries(WF.map((n) => [n, read(`.github/workflows/${n}.yml`)]));
 const UNTRUSTED = /\$\{\{\s*github\.event\.(comment\.body|issue\.title|issue\.body|pull_request\.(title|body|head\.ref))\s*\}\}/;
 /** Every line of shell a workflow runs: inline `run: x` and the body of `run: |` blocks. */
@@ -475,7 +475,7 @@ check('approve-change.yml: acts only on OWNER / COLLABORATOR / MEMBER comments',
   && !/author_association == '(CONTRIBUTOR|NONE|FIRST_TIME_CONTRIBUTOR)'/.test(approveWf));
 check('approve-change.yml: the comment reaches the script as an env var', /COMMENT_BODY: \$\{\{ github\.event\.comment\.body \}\}/.test(approveWf));
 const serviceRoleUsers = WF.filter((n) => /SUPABASE_SERVICE_ROLE_KEY/.test(wf[n].split('\n').filter((l) => !/^\s*#/.test(l)).join('\n')));
-eq('only these workflows hold the service-role key (a new one must be a deliberate change)', serviceRoleUsers, ['detect-changes', 'guideline-sync']);
+eq('only these workflows hold the service-role key (a new one must be a deliberate change)', serviceRoleUsers, ['guideline-sync']);
 check('deploy.yml: the build never sees the service-role key', !/SERVICE_ROLE/.test(wf.deploy.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n')));
 gap('approve-change.yml: COLLABORATOR includes read-only collaborators; the gate is GitHub association, not the database editor allowlist (owner decision: restrict to OWNER)',
   /author_association == 'COLLABORATOR'/.test(approveWf) && serviceRoleUsers.includes('approve-change'));
