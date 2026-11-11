@@ -373,6 +373,12 @@ export default function App() {
   // `inert`, so its buttons are no longer Tab stops sitting invisibly off the
   // left edge of the screen (measured: 5 of the first 9 Tab stops at 375px).
   const drawerHidden = !isDesktop && !isSidebarOpen;
+  // While the drawer is open below md it is a modal navigation panel: the
+  // background (header actions, offline notice, main) is `inert` and Tab cycles
+  // between the menu button and the drawer's controls, so keyboard focus can no
+  // longer escape to the dimmed search field (public UI review, ported from
+  // fix/public-ui-drawer-focus fc1b44a).
+  const drawerModal = !isDesktop && isSidebarOpen;
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const drawerRef = useRef<HTMLElement>(null);
   useEffect(() => {
@@ -380,7 +386,17 @@ export default function App() {
     // Opening moves focus into the drawer; Escape closes it and returns focus
     // to the button that opened it.
     drawerRef.current?.querySelector<HTMLElement>('nav button')?.focus();
+    const controls = () => Array.from(drawerRef.current?.querySelectorAll<HTMLElement>('button:not([disabled]), a[href], input:not([disabled]), select:not([disabled]), [tabindex="0"]') ?? []);
     const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Tab') {
+        const menu = menuButtonRef.current, items = controls();
+        if (!menu || items.length === 0) return;
+        const first = items[0], last = items[items.length - 1], here = document.activeElement;
+        const inside = here === menu || (drawerRef.current?.contains(here) ?? false);
+        if (e.shiftKey ? (here === menu || !inside) : (here === last || !inside)) { e.preventDefault(); (e.shiftKey ? last : menu).focus(); }
+        else if (e.shiftKey ? here === first : here === menu) { e.preventDefault(); (e.shiftKey ? menu : first).focus(); }
+        return;
+      }
       if (e.key !== 'Escape') return;
       setIsSidebarOpen(false);
       menuButtonRef.current?.focus();
@@ -1062,7 +1078,7 @@ Add a note from the entry to restore the audit trail.`
           </div>
         </div>
 
-        <div className="flex items-center gap-3 shrink-0">
+        <div className="flex items-center gap-3 shrink-0" inert={drawerModal}>
           {/* Supabase connection badge.
               lg: not md: — at md (768px) this badge, the since-removed
               "Editor sign in" control, and both button text labels together
@@ -1152,7 +1168,7 @@ Add a note from the entry to restore the audit trail.`
 
       {/* Offline notice — honest signal that this is a cached copy, not live data */}
       {!isOnline && (
-        <div role="status" className="bg-amber-50 border-b border-amber-200 px-5 py-1.5 flex items-center gap-2 text-[11px] text-amber-800 shrink-0">
+        <div role="status" inert={drawerModal} className="bg-amber-50 border-b border-amber-200 px-5 py-1.5 flex items-center gap-2 text-[11px] text-amber-800 shrink-0">
           <WifiOff aria-hidden="true" className="w-3 h-3 shrink-0" />
           <span>Offline — showing a cached copy. Always confirm against the live source guidance.</span>
         </div>
@@ -1293,7 +1309,9 @@ Add a note from the entry to restore the audit trail.`
         </aside>
 
         {/* Main */}
-        <main id="main-content" tabIndex={-1} className="flex-1 flex flex-col bg-[#F8FAFC] overflow-y-auto relative focus:outline-none">
+        <main id="main-content" tabIndex={-1} inert={drawerModal} className={cn("min-w-0 flex-1 flex flex-col bg-[#F8FAFC] overflow-y-auto relative focus:outline-none",
+          // Reading-surface sizing and wrapping from the public UI review (browse views only).
+          ![DUPLICATES_VIEW, CHANGELOG_VIEW, REVIEW_QUEUE_VIEW, CATALOGUE_VIEW, ABOUT_VIEW].includes(currentSection) && "public-browse")}>
 
           {/* Search hero. Sticky within `main`'s own scroll area (main is the
               nearest scrolling ancestor, so top-0 here means "top of the
@@ -1407,7 +1425,8 @@ Add a note from the entry to restore the audit trail.`
                   {/* Group-by toggle: same filtered data, different lens on the main panel.
                       Sidebar section filtering is untouched — this only changes how the
                       resulting cards are bucketed and labelled below. */}
-                  <div role="group" aria-label="Group cards" className="hidden md:flex items-center border border-slate-200 rounded overflow-hidden shrink-0">
+                  {/* Available at every width (public UI review): grouping was unreachable on mobile. */}
+                  <div role="group" aria-label="Group cards" className="flex items-center border border-slate-200 rounded overflow-hidden shrink-0">
                     <button
                       type="button"
                       aria-pressed={groupBy === 'section'}

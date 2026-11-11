@@ -45,6 +45,21 @@
   }
 }
 
+/* Public browse reading surface (ported from the public UI review, 336b08a). Search V2's own
+   :focus-visible indicator above is kept; only sizing, wrapping and small-text contrast are added. */
+.public-browse {
+  overflow-wrap: anywhere;
+}
+.public-browse input,
+.public-browse select {
+  min-height: 44px;
+  max-width: 100%;
+  font-size: 16px; /* 16px avoids iOS zoom-on-focus */
+}
+.public-browse .text-slate-500 {
+  color: #475569;
+}
+
 /* Loading feedback stays visible without nonessential pulsing when motion is reduced. */
 @media (prefers-reduced-motion: reduce) {
   .animate-pulse { animation: none; }

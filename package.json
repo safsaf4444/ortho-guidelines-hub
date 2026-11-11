@@ -27,6 +27,7 @@
     "test:actual-editor": "tsx scripts/tests/actual-app-editor.e2e.ts",
     "test:editor-followup": "tsx scripts/tests/editor-followup.e2e.ts",
     "test:editor-final-conditions": "tsx scripts/tests/editor-final-conditions.e2e.ts",
+    "test:mobile-drawer": "node scripts/tests/mobile-drawer.e2e.mjs",
     "release": "node scripts/release-gate.mjs",
     "coverage-gap": "tsx scripts/coverage-gap.ts",
     "monitor-providers": "tsx scripts/monitor-providers.ts",
