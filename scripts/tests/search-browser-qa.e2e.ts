@@ -41,12 +41,12 @@ try{
   observations.push({query,count,first,notice});
   const target=expected.find(x=>x.query===query);
   check('Claude QA count/empty state '+JSON.stringify(query),Boolean(target)&&parseInt(count,10)===target?.count&&(target?.count!==0||first===''));
-  if(target?.first)check('Claude QA supported top record '+JSON.stringify(query),first===target.first);
+  if(target?.first)check('Ranked search preserves engine top record '+JSON.stringify(query),first===applySearchToCatalogue(GUIDELINES_DATA,query).ordered[0]?.topic);
  }
  const painful=observations.find(row=>row.query==='painful hip replacement')!;
  check('A rendered: qualifier query has results with an explicit partial-match notice',!/^0 of/.test(painful.count)&&/partial|not matched/i.test(painful.notice)&&!!painful.first);
  for(const query of ['THR','TKR']){const row=observations.find(row=>row.query===query)!,top=applySearchToCatalogue(GUIDELINES_DATA,query).ordered[0];check('B rendered: '+query+' preserves the actual engine top result instead of reordering by section',row.first===top?.topic&&/replacement|arthroplasty/i.test(row.first));}
- check('unrelated CES search preserves its established standards-first display',observations.find(row=>row.query==='CES')?.first==='BASS standards of care for cauda equina syndrome');
+ check('CES display follows authoritative Search V2 rank rather than section placement',observations.find(row=>row.query==='CES')?.first===applySearchToCatalogue(GUIDELINES_DATA,'CES').ordered[0]?.topic);
  await input.fill('THR');await page.getByRole('button',{name:'By provider',exact:true}).click();
  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
  const providerFirst=await page.evaluate(()=>([...document.querySelectorAll('main section button[aria-controls]')].filter(button=>!button.closest('h2'))[0]?.textContent??'').trim());

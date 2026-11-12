@@ -47,7 +47,7 @@ try{
   if(u.pathname.startsWith('/rest/v1/'))return reply([]);
   return reply({message:'Unexpected synthetic path'},404);});
  const page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));page.on('dialog',onDialog);
- await page.goto(origin+'/ortho-guidelines-hub/');await page.getByRole('button',{name:'Review Staged Guidelines',exact:true}).waitFor();
+ await page.goto(origin+'/ortho-guidelines-hub/');await page.getByRole('button',{name:'Administration',exact:true}).click();await page.getByRole('button',{name:'Review Staged Guidelines',exact:true}).waitFor();
 
  // Unsupported direct maintenance stays closed in the same signed-in session.
  check('direct card editing remains unavailable',await page.getByRole('button',{name:/^Edit\b/}).count()===0);

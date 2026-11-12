@@ -42,7 +42,7 @@ async function fresh():Promise<{ctx:BrowserContext;page:Page;m:Mock}>{
   if(u.pathname.endsWith('/staged_guidelines')){const id=u.searchParams.get('id');if(id){const row=m.rows.find(r=>'eq.'+r.id===id);return (req.headers()['accept']??'').includes('object')?reply(row?{review_status:row.review_status,resulting_guideline_id:row.resulting_guideline_id}:null):reply(row?[row]:[]);}m.queueReads++;return reply(m.rows.filter(r=>r.review_status==='pending'));}
   if(u.pathname.startsWith('/rest/v1/'))return reply([]);return reply({message:'Unexpected'},404);});
  const page=await ctx.newPage();page.on('pageerror',e=>m.errors.push(e.message));page.on('dialog',d=>{m.alerts.push(d.message());void d.accept();});
- await page.goto(origin+'/ortho-guidelines-hub/');await page.getByRole('button',{name:'Review Staged Guidelines',exact:true}).click();await page.getByRole('button',{name:/Review & publish/}).first().waitFor();
+ await page.goto(origin+'/ortho-guidelines-hub/');await page.getByRole('button',{name:'Administration',exact:true}).click();await page.getByRole('button',{name:'Review Staged Guidelines',exact:true}).click();await page.getByRole('button',{name:/Review & publish/}).first().waitFor();
  return {ctx,page,m};
 }
 const dlg=(p:Page)=>p.getByRole('dialog',{name:'Review & Publish Candidate',exact:true});

@@ -32,7 +32,7 @@ import { splitPublishers, canonicalProvider, providerUrl } from './lib/providers
 import { findGapNote } from './lib/gap-detection'
 import { buildCatalogue, catalogueRowCount } from './lib/catalogue'
 import { filterGuidelinesOutcome, hasActiveFilters, resultCountText, emptyResultText, NEW_TAB_REL } from './lib/guideline-filter'
-import { rankSearchGroups } from './lib/search/app-adapter'
+import { editionLabel, uniqueRankedResults, associatedSections, primarySourceShortcut, linkCheckContext, sortSections } from './lib/public-presentation'
 import { usePwaUpdate } from './lib/pwa-update'
 import { prepareChangeNote, isValidChangeNote, archiveNote, linkStatusNote, mergeNote, MAX_NOTE_LENGTH } from './lib/change-note'
 
@@ -41,6 +41,7 @@ const CHANGELOG_VIEW = '__changelog__';
 const REVIEW_QUEUE_VIEW = '__review-queue__';
 const CATALOGUE_VIEW = '__catalogue__';
 const ABOUT_VIEW = '__about__';
+const ADMIN_VIEW = '__admin__';
 
 // Build-time kill switch for every write control (Add / Edit / Delete / Merge /
 // link-verification / changelog "Add note").
@@ -77,7 +78,7 @@ const WRITES_ENABLED: boolean = import.meta.env.VITE_STATIC_PREVIEW !== 'true';
 
 const LINK_STATUS_OPTIONS: { value: NonNullable<Guideline['linkVerificationStatus']>; label: string; hint: string }[] = [
   { value: 'unchecked',    label: 'Not checked',    hint: 'No automated check has run against this link yet.' },
-  { value: 'verified',     label: 'Reachable',      hint: 'The link responded when last checked automatically. This says nothing about the content.' },
+  { value: 'verified',     label: 'Reachable',      hint: 'Recorded as reachable at the stored check date. Not a clinical review; this may not cover every version link.' },
   { value: 'moved',        label: 'Moved',          hint: 'The link still works but now redirects to a different document.' },
   { value: 'needs-review', label: 'Check failed',   hint: 'The server errored or timed out. May be temporary — worth re-checking.' },
   { value: 'broken',       label: 'Link failure',   hint: 'The link did not resolve: the page is gone or the host does not answer.' },
@@ -109,7 +110,7 @@ function linkStatusBadgeClass(status: Guideline['linkVerificationStatus']): stri
 }
 
 const GUIDANCE_STATUS_OPTIONS: { value: GuidanceStatus; label: string; hint: string }[] = [
-  { value: 'current',             label: 'Current',              hint: 'The most recent version an editor is aware of.' },
+  { value: 'current',             label: 'Recorded as current',  hint: 'Catalogue status only; clinical currency has not been independently confirmed here. Check the publisher and local policy.' },
   { value: 'superseded',          label: 'Superseded',           hint: 'A newer version of this guidance exists.' },
   { value: 'needs-review',        label: 'Under review',         hint: 'The publisher has this under review, or an editor has flagged it.' },
   { value: 'link-unavailable',    label: 'Source unavailable',   hint: 'The guidance exists but cannot currently be reached — for example it sits behind a members-only login.' },
@@ -186,13 +187,6 @@ function saveDismissedPairs(pairs: Set<string>) {
   }
 }
 
-const SECTION_ORDER = [
-  "Emergencies", "Trauma", "Elective", "Bone Health",
-  "Hand & Wrist", "Shoulder & Elbow", "Knee", "Foot & Ankle",
-  "Spine", "Paediatrics", "Infection / Tumour", "Quick Reference",
-  "Local Overlay"
-];
-
 const SECTION_SUBTITLES: Record<string, string> = {
   'Emergencies': 'Time-critical, on-call',
   'Trauma': 'Fractures and acute injuries',
@@ -204,15 +198,15 @@ const SECTION_SUBTITLES: Record<string, string> = {
   'Foot & Ankle': 'Lower limb — distal',
   'Spine': 'Spinal pathology and referral',
   'Paediatrics': 'Paediatric orthopaedics',
-  'Infection / Tumour': 'Bone infection and neoplasia',
+  'Infection & Tumour': 'Bone infection and neoplasia',
   'Quick Reference': 'Clinical reference tables',
-  'Local Overlay': 'Trust-specific protocols',
+  'Local Overlay': 'Material relevant to local pathway review',
 };
 
 const SECTION_OPTIONS = [
   "Emergencies", "Trauma", "Elective", "Bone Health",
   "Hand & Wrist", "Shoulder & Elbow", "Knee", "Foot & Ankle",
-  "Spine", "Paediatrics", "Infection / Tumour", "Quick Reference", "Local Overlay"
+  "Spine", "Paediatrics", "Infection & Tumour", "Quick Reference", "Local Overlay"
 ];
 
 const TYPE_OPTIONS = [
@@ -222,19 +216,6 @@ const TYPE_OPTIONS = [
 const STATUS_OPTIONS = [
   "Live", "To source", "Drafted", "Reviewed", "Under review", "Archived"
 ];
-
-function sortSections(names: string[]): string[] {
-  return [...names].sort((a, b) => {
-    const ia = SECTION_ORDER.indexOf(a);
-    const ib = SECTION_ORDER.indexOf(b);
-    if (ia !== -1 && ib !== -1) return ia - ib;
-    if (ia !== -1) return -1;
-    if (ib !== -1) return 1;
-    return a.localeCompare(b);
-  });
-}
-
-
 
 // Tracks connectivity so the UI can flag when the user is viewing the cached
 // (installed/offline) copy rather than a live-loaded page.
@@ -283,6 +264,10 @@ function sectionFromHash(): string | null {
   if (h === '' || h === '#') return 'All';
   if (h === CATALOGUE_HASH) return CATALOGUE_VIEW;
   if (h === ABOUT_HASH) return ABOUT_VIEW;
+  if (h === '#/admin') return ADMIN_VIEW;
+  if (h === '#/admin/review') return REVIEW_QUEUE_VIEW;
+  if (h === '#/admin/duplicates') return DUPLICATES_VIEW;
+  if (h === '#/admin/history') return CHANGELOG_VIEW;
   return null;
 }
 
@@ -427,7 +412,8 @@ export default function App() {
   // Pure filter (src/lib/guideline-filter.ts) so it is tested offline.
   const activeFilter = { section: currentSection, linkStatus: linkStatusFilter, query: searchQuery };
   const searchOutcome = filterGuidelinesOutcome(guidelines, activeFilter);
-  const filteredData = searchOutcome.ordered;
+  const isSearching = searchQuery.trim().length > 0;
+  const filteredData = isSearching ? uniqueRankedResults(searchOutcome.ordered) : searchOutcome.ordered;
 
   // Phase 4 item E — "Clear filters" is shown only when something is actually
   // narrowing the list: free-text search, the link-check filter, or a
@@ -468,11 +454,7 @@ export default function App() {
     });
   }
 
-  // Fix the reported prosthesis-abbreviation display order without changing
-  // established clinical ordering for unrelated searches (for example CES).
-  // Object insertion order follows the strongest ranked hit in each group.
-  const useRankedGroups = Boolean(searchOutcome.notice) || rankSearchGroups(searchQuery);
-  const sortedSections = useRankedGroups ? Object.keys(grouped) : groupBy === 'section'
+  const sortedSections = groupBy === 'section'
     ? sortSections(Object.keys(grouped))
     : Object.keys(grouped).sort((a, b) => a.localeCompare(b));
 
@@ -1060,48 +1042,6 @@ Add a note from the entry to restore the audit trail.`
           </div>
 
 
-          {/* Editor sign-in. Required for any write now that RLS gates them on
-              public.is_editor() — without a session every write control would
-              be offered and then refused. Icon-only below xl on purpose; see
-              the header-width note in EditorAuthControl.tsx before giving it a
-              label at a smaller breakpoint. */}
-          {isSupabaseEnabled && WRITES_ENABLED && <EditorAuthControl session={session} />}
-
-          {/* Review Staged Guidelines — manual review tool. The BUTTON stays
-              visible to everyone; the queue behind it is editor-only at the
-              database layer and says so when signed out. Unaffected by
-              canEdit — this component writes nothing itself. See
-              ReviewDashboard.tsx. */}
-          <button
-            type="button"
-            onClick={() => setCurrentSection(REVIEW_QUEUE_VIEW)}
-            title="Manually review discovered guideline candidates awaiting editorial completion"
-            // The text label is display:none below lg, which left only the
-            // title attribute as this icon button's name.
-            aria-label="Review Staged Guidelines"
-            aria-current={currentSection === REVIEW_QUEUE_VIEW ? 'page' : undefined}
-            className={cn(
-              "flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors",
-              currentSection === REVIEW_QUEUE_VIEW
-                ? "bg-[#0F172A] text-white"
-                : "text-slate-700 bg-slate-100 hover:bg-slate-200"
-            )}
-          >
-            <ClipboardList aria-hidden="true" className="w-3.5 h-3.5" />
-            <span className="hidden lg:inline">Review Staged Guidelines</span>
-          </button>
-
-          {/* Export JSON backup button */}
-          <button
-            type="button"
-            onClick={handleExportJSON}
-            title="Download current guidelines as JSON backup"
-            aria-label="Export JSON"
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-md transition-colors"
-          >
-            <Download aria-hidden="true" className="w-3.5 h-3.5" />
-            <span className="hidden lg:inline">Export JSON</span>
-          </button>
         </div>
       </header>
 
@@ -1170,41 +1110,6 @@ Add a note from the entry to restore the audit trail.`
 
               <button
                 type="button"
-                aria-current={currentSection === DUPLICATES_VIEW ? 'page' : undefined}
-                onClick={() => { setCurrentSection(DUPLICATES_VIEW); setIsSidebarOpen(false); }}
-                className={cn(
-                  "flex justify-between items-center px-2.5 py-1.5 min-h-[44px] md:min-h-0 rounded transition-colors",
-                  currentSection === DUPLICATES_VIEW
-                    ? "bg-[#0F172A] text-white"
-                    : "text-slate-600 hover:bg-slate-50"
-                )}
-              >
-                <span className="text-[12px] font-medium">Possible duplicates</span>
-                <span className={cn(
-                  "px-1.5 py-px rounded text-[11px] font-medium",
-                  currentSection === DUPLICATES_VIEW ? "bg-white/20 text-white" : "bg-amber-100 text-amber-800"
-                )}>
-                  {countGuidelinesWithDuplicates(duplicateCandidates)}
-                </span>
-              </button>
-
-              <button
-                type="button"
-                aria-current={currentSection === CHANGELOG_VIEW ? 'page' : undefined}
-                onClick={() => { setCurrentSection(CHANGELOG_VIEW); setIsSidebarOpen(false); }}
-                className={cn(
-                  "flex items-center gap-1.5 px-2.5 py-1.5 min-h-[44px] md:min-h-0 rounded transition-colors",
-                  currentSection === CHANGELOG_VIEW
-                    ? "bg-[#0F172A] text-white"
-                    : "text-slate-600 hover:bg-slate-50"
-                )}
-              >
-                <History aria-hidden="true" className="w-3 h-3 shrink-0" />
-                <span className="text-[12px] font-medium">Changelog</span>
-              </button>
-
-              <button
-                type="button"
                 aria-current={currentSection === ABOUT_VIEW ? 'page' : undefined}
                 onClick={() => { setCurrentSection(ABOUT_VIEW); setIsSidebarOpen(false); window.location.hash = ABOUT_HASH; }}
                 className={cn(
@@ -1221,6 +1126,7 @@ Add a note from the entry to restore the audit trail.`
               {/* Per-topic links (Emergencies, Trauma, …) were removed at the
                   user's request: "All guidelines" already groups every entry
                   by topic in collapsible sections, so the list duplicated it. */}
+              <button type="button" onClick={() => { setCurrentSection(ADMIN_VIEW); setIsSidebarOpen(false); window.location.hash = '#/admin'; }} aria-current={[ADMIN_VIEW, REVIEW_QUEUE_VIEW, DUPLICATES_VIEW, CHANGELOG_VIEW].includes(currentSection) ? 'page' : undefined} className="mt-4 border-t border-slate-200 pt-3 px-2.5 py-2 text-left text-[12px] text-slate-600 hover:text-slate-900">Administration</button>
             </nav>
           </div>
 
@@ -1232,7 +1138,15 @@ Add a note from the entry to restore the audit trail.`
         {/* Main */}
         <main id="main-content" tabIndex={-1} className={cn("min-w-0 flex-1 flex flex-col bg-[#F8FAFC] overflow-y-auto relative focus:outline-none",
           // Reading-surface sizing and wrapping from the public UI review (browse views only).
-          ![DUPLICATES_VIEW, CHANGELOG_VIEW, REVIEW_QUEUE_VIEW, CATALOGUE_VIEW, ABOUT_VIEW].includes(currentSection) && "public-browse")}>
+          ![ADMIN_VIEW, DUPLICATES_VIEW, CHANGELOG_VIEW, REVIEW_QUEUE_VIEW, CATALOGUE_VIEW, ABOUT_VIEW].includes(currentSection) && "public-browse")}>
+
+          {[ADMIN_VIEW, REVIEW_QUEUE_VIEW, DUPLICATES_VIEW, CHANGELOG_VIEW].includes(currentSection) && (
+            <div className="bg-slate-800 text-white px-4 py-3 text-[12px]">
+              <strong>Administration — maintenance and editorial tools</strong>
+              <p className="mt-1">Unreviewed candidates are not published guidance. Tool visibility does not grant editing permission.</p>
+              {currentSection !== ADMIN_VIEW && <a href="#/admin" className="underline">Back to administration</a>}
+            </div>
+          )}
 
           {/* Keep the snapshot disclosure in the reading flow: a fixed notice
               can cover every focused control in a short, highly zoomed viewport.
@@ -1247,7 +1161,7 @@ Add a note from the entry to restore the audit trail.`
                 <p className="text-[11px] text-amber-900 leading-relaxed m-0">
                   <strong>Showing the built-in snapshot, not live data.</strong>{' '}
                   {fallbackReason} Entries are the ones compiled into this build, so recent
-                  edits may be missing. Everything still works; only freshness is affected.
+                  edits may be missing. Source links may have changed. Check the publisher before relying on an entry.
                 </p>
               </div>
             </div>
@@ -1263,7 +1177,7 @@ Add a note from the entry to restore the audit trail.`
               The quick-access chip row (Emergency/Trauma/Spine/Foot &
               Ankle/Paediatrics) that used to sit here was removed at the
               user's request. */}
-          {currentSection !== DUPLICATES_VIEW && currentSection !== CHANGELOG_VIEW && currentSection !== REVIEW_QUEUE_VIEW && currentSection !== CATALOGUE_VIEW && currentSection !== ABOUT_VIEW && (
+          {currentSection !== ADMIN_VIEW && currentSection !== DUPLICATES_VIEW && currentSection !== CHANGELOG_VIEW && currentSection !== REVIEW_QUEUE_VIEW && currentSection !== CATALOGUE_VIEW && currentSection !== ABOUT_VIEW && (
             <div role="search" className="public-search sticky top-0 z-10 bg-[#F8FAFC] px-5 pt-3 pb-2 border-b border-slate-100 shrink-0">
               <div className="relative">
                 {/* A real label: the placeholder alone was the input's only
@@ -1317,7 +1231,7 @@ Add a note from the entry to restore the audit trail.`
           {/* Toolbar */}
           <div className="px-5 py-1.5 flex justify-between items-center gap-2 border-b border-slate-100 bg-white shrink-0">
             {currentSection === REVIEW_QUEUE_VIEW && <GovernanceReviewInbox enabled={canEdit} />}
-            {currentSection === DUPLICATES_VIEW ? (
+            {currentSection === ADMIN_VIEW ? (<span className="text-[12px] text-slate-600">Existing permissions still apply. Production editorial remains on hold.</span>) : currentSection === DUPLICATES_VIEW ? (
               <span className="text-[11px] text-slate-500">
                 Heuristic matches only — nothing is merged or deleted automatically.
               </span>
@@ -1362,11 +1276,12 @@ Add a note from the entry to restore the audit trail.`
                     <option value="All">All link-check statuses</option>
                     {LINK_STATUS_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                   </select>
+                  {isSearching && <span className="text-[11px] text-slate-600">Search stays ranked; browse layout:</span>}
                   {/* Group-by toggle: same filtered data, different lens on the main panel.
                       Sidebar section filtering is untouched — this only changes how the
                       resulting cards are bucketed and labelled below. */}
                   {/* Available at every width (public UI review): grouping was unreachable on mobile. */}
-                  <div role="group" aria-label="Group cards" className="flex items-center border border-slate-200 rounded overflow-hidden shrink-0">
+                  <div role="group" aria-label="Category browsing layout" className="flex items-center border border-slate-200 rounded overflow-hidden shrink-0">
                     <button
                       type="button"
                       aria-pressed={groupBy === 'section'}
@@ -1392,18 +1307,7 @@ Add a note from the entry to restore the audit trail.`
                       By provider
                     </button>
                   </div>
-                  {WRITES_ENABLED && canEdit && (
-                    <button
-                      onClick={handleAddNew}
-                      disabled={directWritesDisabled()}
-                      title="Direct creation is disabled; use a reviewed staged candidate."
-                      className="flex items-center gap-1 px-2.5 py-1.5 bg-[#0F172A] text-white rounded text-[12px] font-medium hover:bg-slate-800 transition-colors shrink-0"
-                    >
-                      <Plus className="w-3 h-3" />
-                      <span className="hidden sm:inline">Add guideline</span>
-                      <span className="sm:hidden">Add</span>
-                    </button>
-                  )}
+
                 </div>
               </>
             )}
@@ -1416,7 +1320,20 @@ Add a note from the entry to restore the audit trail.`
             "px-4 pt-3 pb-8 w-full",
             currentSection !== CATALOGUE_VIEW && "max-w-4xl"
           )}>
-            {currentSection === DUPLICATES_VIEW ? (
+            {currentSection === ADMIN_VIEW ? (
+              <section aria-label="Administration tools" className="bg-white border border-slate-300 rounded-lg p-4">
+                <h2 className="text-lg font-semibold">Administration</h2>
+                <p className="text-sm text-slate-600 my-2">These tools inspect candidates, review history and export the loaded catalogue. They do not certify clinical approval.</p>
+                <div className="flex flex-wrap items-center gap-3">
+                  {isSupabaseEnabled && WRITES_ENABLED && <EditorAuthControl session={session} />}
+                  <button type="button" onClick={() => { setCurrentSection(REVIEW_QUEUE_VIEW); window.location.hash = '#/admin/review'; }} className="flex gap-2 items-center p-3 border rounded text-sm"><ClipboardList className="w-4 h-4" />Review Staged Guidelines</button>
+                  <button type="button" onClick={() => { setCurrentSection(DUPLICATES_VIEW); window.location.hash = '#/admin/duplicates'; }} className="p-3 border rounded text-sm">Possible duplicates ({countGuidelinesWithDuplicates(duplicateCandidates)})</button>
+                  <button type="button" onClick={() => { setCurrentSection(CHANGELOG_VIEW); window.location.hash = '#/admin/history'; }} className="flex gap-2 items-center p-3 border rounded text-sm"><History className="w-4 h-4" />Changelog</button>
+                  <button type="button" onClick={handleExportJSON} className="flex gap-2 items-center p-3 border rounded text-sm"><Download className="w-4 h-4" />Export JSON</button>
+                  {WRITES_ENABLED && canEdit && <button type="button" onClick={handleAddNew} disabled={directWritesDisabled()} title="Direct creation is disabled; use a reviewed staged candidate." className="flex gap-2 items-center p-3 border rounded text-sm"><Plus className="w-4 h-4" />Add guideline</button>}
+                </div>
+              </section>
+            ) : currentSection === DUPLICATES_VIEW ? (
               <DuplicatesPanel
                 candidates={duplicateCandidates}
                 canEdit={canEdit && !directWritesDisabled()}
@@ -1470,9 +1387,12 @@ Add a note from the entry to restore the audit trail.`
                 return gapNote ? (
                   <div className="mt-3 border border-slate-200 bg-white rounded-md px-3.5 py-3 max-w-lg">
                     <p className="text-[12px] font-medium text-slate-800">
-                      No current UK guidance identified for this topic.
+                      No matching entry in this view.
                     </p>
                     <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">{gapNote}</p>
+                    <button type="button" onClick={clearFilters} className="underline p-2">Clear search and filters</button>
+                    <button type="button" onClick={() => document.getElementById('guideline-search')?.focus()} className="underline p-2">Edit search query</button>
+                    <a href={CATALOGUE_HASH} className="underline p-2">Return to full catalogue</a>
                   </div>
                 ) : (
                   <div className="mt-3 border border-slate-200 bg-white rounded-md px-3.5 py-3 max-w-lg">
@@ -1482,6 +1402,8 @@ Add a note from the entry to restore the audit trail.`
                     <p className="text-[11px] text-slate-600 mt-1 mb-0 leading-relaxed">
                       Try a broader or differently spelled term — for example the condition, the injury or the issuing body.
                     </p>
+                    <button type="button" onClick={() => document.getElementById('guideline-search')?.focus()} className="mt-2 underline p-2 text-[12px]">Edit search query</button>
+                    <button type="button" onClick={() => { window.location.hash = CATALOGUE_HASH; }} className="mt-2 underline p-2 text-[12px]">Return to full catalogue</button>
                     {filtersActive && (
                       <button
                         type="button"
@@ -1494,6 +1416,13 @@ Add a note from the entry to restore the audit trail.`
                   </div>
                 );
               })()
+            ) : isSearching ? (
+              <section data-search-results aria-label="Ranked search results">
+                <h2 className="text-sm font-semibold mb-2">Search results · ranked by relevance</h2>
+                <div className="space-y-2">
+                  {filteredData.map(item => <GuidelineCard key={item.id} item={item} sectionContext="" groupBy={groupBy} searchResult allGuidelines={guidelines} canEdit={canEdit && !directWritesDisabled()} onEdit={handleEdit} onQuickUpdate={handleQuickUpdate} />)}
+                </div>
+              </section>
             ) : (
               sortedSections.map(section => (
                 <SectionContainer
@@ -1790,12 +1719,12 @@ function CatalogueView({ guidelines }: { guidelines: Guideline[] }) {
                                           rel={NEW_TAB_REL}
                                           className="text-slate-600 hover:text-slate-900 underline underline-offset-2 inline-flex items-center gap-1"
                                         >
-                                          {v.label}
+                                          {editionLabel(v.label)}
                                           <ExternalLink className="w-2.5 h-2.5 shrink-0" />
                                           <NewTabCue />
                                         </a>
                                       ) : (
-                                        <span className="text-slate-500">{v.label}</span>
+                                        <span className="text-slate-500">{editionLabel(v.label)}</span>
                                       )}
                                       {v.date && <span className="text-slate-500 tabular-nums">{v.date}</span>}
                                     </div>
@@ -1899,10 +1828,11 @@ function SectionContainer({
 // ─── Guideline Card ───────────────────────────────────────────────────────────
 
 function GuidelineCard({
-  item, sectionContext, groupBy, allGuidelines, canEdit, onEdit, onQuickUpdate,
+  item, sectionContext, groupBy, searchResult = false, allGuidelines, canEdit, onEdit, onQuickUpdate,
 }: {
   item: Guideline;
   sectionContext: string;
+  searchResult?: boolean;
   groupBy: 'section' | 'provider';
   allGuidelines: Guideline[];
   canEdit: boolean;
@@ -1942,10 +1872,11 @@ function GuidelineCard({
   // target, so the action doesn't render rather than pointing nowhere.
   const primaryUrl = item.versions[0]?.url;
   const hasPrimaryLink = Boolean(primaryUrl && primaryUrl !== '#');
+  const shortcut = primarySourceShortcut(item);
   const bodyId = useId();
 
   return (
-    <div className="border border-slate-200 rounded-lg overflow-hidden bg-white">
+    <div data-guideline-id={item.id} className="border border-slate-200 rounded-lg overflow-hidden bg-white">
 
       {/* Collapsed row. The expand control is a real <button> on the title;
           its ::after overlay covers the whole row, so a click anywhere on the
@@ -2027,8 +1958,14 @@ function GuidelineCard({
               </>
             )}
           </div>
+          {searchResult && <div aria-label="Associated sections" className="flex flex-wrap gap-1 text-[10px] text-slate-600">{associatedSections(item).map(section => <span key={section} className="bg-slate-100 rounded px-1.5 py-0.5">{section}</span>)}</div>}
+          <div className="relative z-[1] flex flex-wrap items-center gap-2 mt-1">
+            {shortcut ? <a href={shortcut} target="_blank" rel={NEW_TAB_REL} aria-label={`Open source guidance: ${item.topic}`} className="inline-flex items-center gap-1 px-3 py-2 min-h-[44px] bg-slate-800 text-white rounded text-[12px] font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-600">Open source <ExternalLink aria-hidden="true" className="w-3 h-3" /><NewTabCue /></a>
+              : <button type="button" onClick={() => setIsExpanded(true)} className="underline px-2 py-2 min-h-[44px] text-[12px]">Review source links</button>}
+            <span className="text-[10px] text-slate-600">Recorded link status: {linkStatusLabel(linkStatus)} · {item.linkLastVerified || 'date not recorded'}. Not clinical verification.</span>
+          </div>
           {item.subGroup && (
-            <div className="text-[10px] text-slate-500">{item.subGroup}</div>
+            <div className="text-[10px] text-slate-500">{editionLabel(item.subGroup)}</div>
           )}
         </div>
         <ChevronDown
@@ -2057,10 +1994,7 @@ function GuidelineCard({
               Styled secondary, not primary, so the source link still leads for
               the clinical reader.
 
-              ⚠ This now renders for EVERY visitor to the deployed site, not
-              just a local editor: editing is public and unauthenticated (see
-              the WRITES_ENABLED comment at the top of this file and
-              SECURITY.md). Anyone reading a guideline can change it. */}
+              Existing editor permissions continue to gate editing. */}
           {(hasPrimaryLink || (WRITES_ENABLED && canEdit)) && (
             <div className="flex flex-wrap items-center gap-2 mb-2">
               {hasPrimaryLink && (
@@ -2112,7 +2046,7 @@ function GuidelineCard({
             <span className="text-slate-500 shrink-0">Scope:</span>
             {item.scopeNote
               ? <span className="text-slate-600">{item.scopeNote}</span>
-              : <span className="text-slate-500 italic">not specified by the source</span>}
+              : <span className="text-slate-500 italic">Scope not recorded in this entry</span>}
           </div>
 
           {item.summary && <AboutThisSource />}
@@ -2173,6 +2107,7 @@ function GuidelineCard({
                   )}
                 </div>
               </div>
+              <p className="text-[11px] text-slate-600 mb-2">{linkCheckContext(item)}</p>
               <div className="flex flex-col">
                 {item.versions.map((v, idx) => (
                   <div key={idx} className="flex justify-between items-center gap-2 flex-wrap border-b border-slate-100 last:border-0">
@@ -2189,12 +2124,12 @@ function GuidelineCard({
                         className="text-[11px] text-slate-600 hover:text-slate-900 hover:underline flex items-center gap-1 py-2"
                         onClick={e => e.stopPropagation()}
                       >
-                        {v.label}
+                        {editionLabel(v.label)}
                         <ExternalLink className="w-3 h-3 shrink-0 text-slate-500" />
                         <NewTabCue />
                       </a>
                     ) : (
-                      <span className="text-[11px] text-slate-500 py-2">{v.label}</span>
+                      <span className="text-[11px] text-slate-500 py-2">{editionLabel(v.label)}</span>
                     )}
                     {v.date && (
                       <span className="text-[10px] text-slate-500 ml-3 shrink-0">{v.date}</span>
@@ -2290,12 +2225,12 @@ function GuidelineCard({
               <div className="flex flex-col">
                 <dt className="text-[9px] text-slate-500 uppercase tracking-wide">Published</dt>
                 <dd className="text-[11px] text-slate-600">
-                  {item.subGroup || <span className="text-slate-500 italic">not stated</span>}
+                  {editionLabel(item.subGroup) || <span className="text-slate-500 italic">not stated</span>}
                 </dd>
               </div>
               <div className="flex flex-col">
-                <dt className="text-[9px] text-slate-500 uppercase tracking-wide" title="When a person last reviewed this entry.">
-                  Editorial review
+                <dt className="text-[9px] text-slate-500 uppercase tracking-wide" title="Stored metadata only; reviewer identity and supporting evidence are not shown here.">
+                  Recorded review date (unverified)
                 </dt>
                 <dd className="text-[11px] text-slate-600 tabular-nums">
                   {item.editorialReviewDate || <span className="text-slate-500 italic">not recorded</span>}
@@ -2944,7 +2879,7 @@ function EditModal({
               <div className="flex flex-col gap-1.5 mb-1.5">
                 {form.versions.map((v, idx) => (
                   <div key={idx} className="flex items-center gap-1.5">
-                    <input type="text" value={v.label}
+                    <input type="text" value={editionLabel(v.label)}
                       onChange={e => setVersion(idx, 'label', e.target.value)}
                       placeholder="Label"
                       className="flex-1 px-2 py-1 border border-slate-200 rounded text-[12px] bg-white focus:outline-none focus:ring-1 focus:ring-slate-300 min-w-0" />
@@ -3098,47 +3033,22 @@ function AboutView({ guidelines }: { guidelines: Guideline[] }) {
   const providers = new Set(guidelines.map(g => canonicalProvider(splitPublishers(g.source)[0] ?? g.source))).size;
   const h2 = "text-[13px] font-semibold text-slate-800 mt-5 mb-1.5";
   const p = "text-[12px] text-slate-600 leading-relaxed mb-2 max-w-2xl";
-  const li = "text-[12px] text-slate-600 leading-relaxed";
 
   return (
     <div className="mt-3 max-w-2xl">
       <h2 className="text-[15px] font-semibold text-slate-800">About this hub &amp; how it is maintained</h2>
-      <p className={p + " mt-1.5"}>
-        A reference index of published UK orthopaedic guidance — currently {total} entries
-        from {providers} publishing bodies. It helps you find the right source document.
-        It does not reproduce guidance, and it is not a clinical decision tool.
-      </p>
-
-      <div className="border-l-2 border-amber-300 bg-amber-50 px-3 py-2 my-3">
-        <p className="text-[12px] text-amber-900 leading-relaxed m-0">
-          <strong>A checked link is not an endorsement.</strong> The link-check badge records
-          one thing: whether an automated request to the URL got a response. It is not a
-          review of the content, not a statement that the guidance is current, and not a
-          recommendation to follow it. Those judgements are the guidance status badge, and
-          ultimately yours.
-        </p>
-      </div>
-
-      <h3 className={h2}>What is in scope</h3>
-      <ul className="list-disc pl-4 space-y-1 mb-2">
-        <li className={li}>Guidance published by UK national bodies (NICE, GIRFT, NHS England) and UK specialist societies.</li>
-        <li className={li}>A small number of international sources, labelled <em>Outside UK</em>, where no UK equivalent was found.</li>
-        <li className={li}>Entries are indexed with a summary and a link. The source document is always the authority.</li>
-      </ul>
-      <p className={p}>
-        <strong>Local PRUH content is not published here yet</strong>, pending local sign-off.
-        Where you see a Local Overlay section, it currently holds national material relevant
-        to local pathway work — not PRUH-authored guidance.
-      </p>
-
+      <p className={p + " mt-1.5"}>A searchable reference index with {total} loaded entries and {providers} publisher groups. It contains summaries and links to guidance and other reference resources. It is not a clinical decision tool or a complete inventory of available guidance.</p>
+      <div className="border-l-2 border-amber-300 bg-amber-50 px-3 py-2 my-3"><p className={p}><strong>A reachable link is not clinical verification.</strong> Recorded link checks describe past availability, not current recommendations, quality, licensing permission or approval to use guidance.</p></div>
+      <h3 className={h2}>Scope and sources</h3>
+      <p className={p}>The catalogue includes UK national bodies, specialist societies and some international resources. Inclusion does not establish that no UK alternative exists. Read the original source and follow local policy; labels and summaries may need review.</p>
+      <p className={p}>Section associations help discovery and do not establish local endorsement. A Local Overlay label does not mean that local clinical sign-off has occurred.</p>
       <h3 className={h2}>The two status badges, and why there are two</h3>
       <p className={p}>
-        They answer different questions and are produced by different things — a machine and
-        a person. Showing them as one badge is what made a withdrawn pathway look approved.
+        Guidance status and link status are separate stored metadata. Neither establishes a completed clinical review or publisher permission.
       </p>
       <div className="border border-slate-200 rounded-md divide-y divide-slate-100 mb-2">
         <div className="px-3 py-2">
-          <div className="text-[11px] font-semibold text-slate-700 mb-1">Guidance status — set by an editor</div>
+          <div className="text-[11px] font-semibold text-slate-700 mb-1">Recorded guidance status — confirm against the publisher</div>
           {GUIDANCE_STATUS_OPTIONS.map(o => (
             <div key={o.value} className="flex gap-2 items-baseline py-0.5">
               <span className={cn("text-[10px] px-1.5 py-px rounded border font-medium shrink-0", guidanceStatusBadgeClass(o.value))}>
@@ -3149,7 +3059,7 @@ function AboutView({ guidelines }: { guidelines: Guideline[] }) {
           ))}
         </div>
         <div className="px-3 py-2">
-          <div className="text-[11px] font-semibold text-slate-700 mb-1">Link check — set automatically, weekly</div>
+          <div className="text-[11px] font-semibold text-slate-700 mb-1">Recorded link check — not a live availability guarantee</div>
           {LINK_STATUS_OPTIONS.map(o => (
             <div key={o.value} className="flex gap-2 items-baseline py-0.5">
               <span className={cn("text-[10px] px-1.5 py-px rounded border font-medium shrink-0", linkStatusBadgeClass(o.value))}>
@@ -3160,41 +3070,13 @@ function AboutView({ guidelines }: { guidelines: Guideline[] }) {
           ))}
         </div>
       </div>
-      <p className={p}>
-        Two of those link states — <em>Withdrawn</em> and <em>Superseded</em> — are only ever
-        set by a person. The automated check reads an HTTP status and never downloads the
-        page, so it cannot tell a withdrawn document from a URL that simply stopped working.
-        Claiming otherwise would be a guess presented as a finding.
-      </p>
-
-      <h3 className={h2}>How entries are reviewed</h3>
-      <ul className="list-disc pl-4 space-y-1 mb-2">
-        <li className={li}><strong>Editorial review</strong> — a person checks the entry against the source. The date is shown on each card.</li>
-        <li className={li}><strong>Link check</strong> — an automated job runs weekly and reports failures. It never changes an entry on its own; a person applies any change.</li>
-        <li className={li}><strong>Every edit is recorded.</strong> There are no accounts, so a change cannot be traced to a person — instead a written note is required on every edit, and those notes cannot be altered or removed through this site.</li>
-        <li className={li}><strong>Nothing is deleted.</strong> Removing an entry archives it. The record is kept and can be restored.</li>
-      </ul>
-      <p className={p}>
-        The two dates on a card are deliberately separate. An entry can have a link that
-        responds perfectly while the guidance behind it has been withdrawn — so a recent
-        link check tells you nothing about a stale editorial review, and vice versa.
-      </p>
-
-      <h3 className={h2}>Gaps and what they mean</h3>
-      <p className={p}>
-        Where a topic has been searched and no published UK guidance was found, an editor
-        records that explicitly as <em>No source identified</em>, with the reason. An absent
-        topic means nobody has looked yet — not that nothing exists. The two are different,
-        and only the first is a finding.
-      </p>
-
-      <h3 className={h2}>Corrections and contact</h3>
-      <p className={p}>
-        If an entry is wrong, out of date, or missing, the quickest fix is to edit it here —
-        every card has an Edit control and asks for a note explaining the change. For
-        anything that needs a conversation rather than an edit, raise it with the PRUH
-        orthopaedic team, or open an issue on the project repository.
-      </p>
+      <p className={p}>Withdrawn or superseded guidance requires source interpretation; an HTTP response alone cannot establish either. Dates are stored metadata, not evidence that every linked version or recommendation was reviewed.</p>
+      <h3 className={h2}>Review and maintenance</h3>
+      <p className={p}>Recorded review dates are shown for transparency. Reviewer identity and supporting clinical evidence are not established by those dates alone. Missing scope means scope has not been recorded in this entry.</p>
+      <p className={p}>Search matches and ranks catalogue metadata. Search results show each guideline once with its section associations; category browsing may show the same entry under several sections. Offline use shows a cached copy and may omit later changes.</p>
+      <p className={p}>Administration contains existing review, history and export tools. Access to a control does not grant permission to write. Authentication and server-side permissions still apply; editorial production remains on hold. This page does not attest to the live system's jobs, grants or audit completeness.</p>
+      <h3 className={h2}>Gaps and corrections</h3>
+      <p className={p}>A missing search result does not prove that guidance does not exist. Try different terms, clear filters or browse the full catalogue. No missing-guideline submission route is provided here. Catalogue corrections require the project's approved review process.</p>
       <p className="text-[11px] text-slate-500 mb-2">
         National reference only. Not a substitute for clinical judgement or local trust policy.
       </p>

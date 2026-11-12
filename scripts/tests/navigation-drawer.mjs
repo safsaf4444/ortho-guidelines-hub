@@ -53,7 +53,9 @@ browser = await chromium.launch({ env: safeEnvironment(), channel: process.env.U
     await open();
     const controls = dialog.getByRole('button');
     const names = await controls.allTextContents();
-    assert.equal(names.length, 6, "names.length");
+    assert.equal(names.length, 5, "clinician navigation plus administration entry");
+    assert.equal(await dialog.getByRole('button', {name: 'Administration', exact: true}).count(), 1, "administration remains reachable");
+    assert.equal(await dialog.getByRole('button', {name: /Possible duplicates|Changelog/}).count(), 0, "maintenance controls moved out of clinician navigation");
     for (let index = 1; index < names.length; index++) {
       await page.keyboard.press('Tab'); assert.equal(await focused(controls.nth(index)), true, "await focused(controls.nth(index))");
     }
