@@ -26,7 +26,7 @@ try{
  for(let i=0;i<100;i++){try{if((await fetch(origin+'/ortho-guidelines-hub/')).ok)break;}catch{/* starting */}await new Promise(r=>setTimeout(r,100));}
  browser=await chromium.launch({headless:true});
  const context=await browser.newContext({serviceWorkers:'block',viewport:{width:1280,height:900}});
- const user={id:'00000000-0000-4000-8000-000000000001',email:'editor@example.invalid',aud:'authenticated',app_metadata:{provider:'email'},user_metadata:{},created_at:'2026-01-01T00:00:00Z'},exp=Math.floor(Date.now()/1000)+3600,token=[{alg:'HS256',typ:'JWT'},{sub:user.id,exp,role:'authenticated'}].map(x=>Buffer.from(JSON.stringify(x)).toString('base64url')).join('.')+'.SYNTHETIC';
+ const user={id:'00000000-0000-4000-8000-000000000001',email:'editor@example.invalid',aud:'authenticated',app_metadata:{provider:'email'},user_metadata:{},created_at:'2026-01-01T00:00:00Z'},exp=Math.floor(Date.now()/1000)+3600,token=[{alg:'HS256',typ:'JWT'},{sub:user.id,exp,role:'authenticated'}].map(x=>Buffer.from(JSON.stringify(x)).toString('base64url')).join('.')+'.c3ludGhldGlj';
  await context.addInitScript(session=>localStorage.setItem('sb-127-auth-token',JSON.stringify(session)),{user,access_token:token,refresh_token:'SYNTHETIC',expires_at:exp,expires_in:3600,token_type:'bearer'});
  await context.route('**/*',async route=>{const req=route.request(),u=new URL(req.url());if(u.origin===origin)return route.continue();if(u.origin!==api){blocked.push(u.hostname);return route.abort();}
   const cors={'access-control-allow-origin':'*','access-control-allow-headers':'*','access-control-allow-methods':'*'};if(req.method()==='OPTIONS')return route.fulfill({status:204,headers:cors});
@@ -47,14 +47,14 @@ try{
   if(u.pathname.startsWith('/rest/v1/'))return reply([]);
   return reply({message:'Unexpected synthetic path'},404);});
  const page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));page.on('dialog',onDialog);
- await page.goto(origin+'/ortho-guidelines-hub/');await page.getByRole('button',{name:'Administration',exact:true}).click();await page.getByRole('button',{name:'Review Staged Guidelines',exact:true}).waitFor();
+ await page.goto(origin+'/ortho-guidelines-hub/');await page.getByRole('button',{name:'Administration',exact:true}).waitFor();check('session controls stay out of clinician navigation',await page.getByRole('button',{name:/Sign out/i}).count()===0);await page.getByRole('button',{name:'Administration',exact:true}).click();await page.getByRole('button',{name:'Review Staged Guidelines',exact:true}).waitFor();
 
  // Unsupported direct maintenance stays closed in the same signed-in session.
  check('direct card editing remains unavailable',await page.getByRole('button',{name:/^Edit\b/}).count()===0);
  const add=page.getByRole('button',{name:/Add (Guideline|New)/i});check('direct create remains unavailable',await add.count()===0||await add.first().isDisabled());
 
  const open=async()=>{await page.getByRole('button',{name:/Review & publish/}).first().click();const d=page.getByRole('dialog',{name:'Review & Publish Candidate',exact:true});await d.waitFor();return d;};
- await page.getByRole('button',{name:'Review Staged Guidelines',exact:true}).click();
+ await page.getByRole('button',{name:'Review Staged Guidelines',exact:true}).click();check('session sign-out remains available in review administration',await page.getByRole('button',{name:/Sign out/i}).count()===1);
  let dialog=await open();const publish=dialog.getByRole('button',{name:'Publish Guideline',exact:true}),evidence=dialog.getByRole('group',{name:'Publication review evidence'});
  check('staged modal offers publication',await publish.count()===1);
  check('receipt controls are enabled',await evidence.isEnabled());
@@ -91,5 +91,6 @@ try{
  check('success reloads the confirmed catalogue',catalogueReads>reads);
  check('only the page font stylesheet was attempted, and it was aborted',blocked.every(host=>host==='fonts.googleapis.com'||host==='fonts.gstatic.com'));check('no browser runtime errors',errors.length===0);
  await page.screenshot({path:out+'/actual-app-after-publish.png',fullPage:false});
+ const recoveryPage=await context.newPage();await recoveryPage.goto(origin+'/ortho-guidelines-hub/#access_token='+token+'&refresh_token=SYNTHETIC&type=recovery');await recoveryPage.getByRole('dialog',{name:'Set your editor password',exact:true}).waitFor().catch(async error=>{fs.writeFileSync(out+'/recovery-diagnostic.txt',await recoveryPage.locator('body').innerText());throw error;});check('recovery dialog remains available outside administration',await recoveryPage.getByRole('dialog',{name:'Set your editor password',exact:true}).isVisible());
 }finally{await browser?.close();server.kill();fs.writeFileSync(out+'/actual-app-editor.json',JSON.stringify({passed,outcomes,calls:calls.map(c=>c.name),alerts,blocked,errors},null,2)+'\n');}
 console.log(passed+' passed, 0 failed');

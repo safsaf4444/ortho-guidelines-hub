@@ -1042,6 +1042,7 @@ Add a note from the entry to restore the audit trail.`
           </div>
 
 
+          {isSupabaseEnabled && WRITES_ENABLED && <EditorAuthControl session={session} controlsVisible={[ADMIN_VIEW, REVIEW_QUEUE_VIEW, DUPLICATES_VIEW, CHANGELOG_VIEW].includes(currentSection)} />}
         </div>
       </header>
 
@@ -1325,7 +1326,7 @@ Add a note from the entry to restore the audit trail.`
                 <h2 className="text-lg font-semibold">Administration</h2>
                 <p className="text-sm text-slate-600 my-2">These tools inspect candidates, review history and export the loaded catalogue. They do not certify clinical approval.</p>
                 <div className="flex flex-wrap items-center gap-3">
-                  {isSupabaseEnabled && WRITES_ENABLED && <EditorAuthControl session={session} />}
+
                   <button type="button" onClick={() => { setCurrentSection(REVIEW_QUEUE_VIEW); window.location.hash = '#/admin/review'; }} className="flex gap-2 items-center p-3 border rounded text-sm"><ClipboardList className="w-4 h-4" />Review Staged Guidelines</button>
                   <button type="button" onClick={() => { setCurrentSection(DUPLICATES_VIEW); window.location.hash = '#/admin/duplicates'; }} className="p-3 border rounded text-sm">Possible duplicates ({countGuidelinesWithDuplicates(duplicateCandidates)})</button>
                   <button type="button" onClick={() => { setCurrentSection(CHANGELOG_VIEW); window.location.hash = '#/admin/history'; }} className="flex gap-2 items-center p-3 border rounded text-sm"><History className="w-4 h-4" />Changelog</button>
@@ -2748,7 +2749,7 @@ function EditModal({
                 onChange={e => set('guidanceStatus', e.target.value as GuidanceStatus)}
                 className={inp}
               >
-                {GUIDANCE_STATUS_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                {GUIDANCE_STATUS_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.value === 'current' ? 'Current' : o.label}</option>)}
               </select>
             </div>
           </div>

@@ -30,7 +30,7 @@ import { cn } from '../lib/utils';
  * text label at a smaller breakpoint without re-measuring scrollWidth >
  * clientWidth at 798px.
  */
-export default function EditorAuthControl({ session }: { session: EditorSession }) {
+export default function EditorAuthControl({ session, controlsVisible = true }: { session: EditorSession; controlsVisible?: boolean }) {
   const recovery = useRecoveryFlow();
   const [open, setOpen] = useState(false);
   const [recoveryDismissed, setRecoveryDismissed] = useState(false);
@@ -55,14 +55,15 @@ export default function EditorAuthControl({ session }: { session: EditorSession 
       {rotating && !showRecoveryDialog && (
         <PasswordDialog mode="rotate" session={session} onDone={() => setRotating(false)} />
       )}
-      <HeaderControl
+      {/* Keep recovery handling mounted independently of administration navigation. */}
+      {(controlsVisible || recovery.status !== 'none') && <HeaderControl
         session={session}
         open={open}
         setOpen={setOpen}
         onChangePassword={() => setRotating(true)}
         recoveryError={recovery.status === 'error' ? recovery.message : null}
         recoveryWorking={recovery.status === 'working'}
-      />
+      />}
     </>
   );
 }
