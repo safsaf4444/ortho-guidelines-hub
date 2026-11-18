@@ -34,4 +34,30 @@
   body {
     @apply bg-background text-foreground;
   }
+  /* Default keyboard focus treatment for reader controls without a component-specific ring. */
+  :focus-visible {
+    outline: 2px solid #334155;
+    outline-offset: 2px;
+  }
+}
+
+.public-browse {
+  overflow-wrap: anywhere;
+}
+.public-browse input,
+.public-browse select {
+  min-height: 44px;
+  max-width: 100%;
+  font-size: 16px;
+}
+.public-browse .text-slate-500 {
+  color: #475569;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-pulse { animation: none; }
+}
+
+@media (max-height: 480px) {
+  .public-search { position: static; }
 }

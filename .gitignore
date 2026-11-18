@@ -56,3 +56,6 @@ scripts/.equivalence-baseline.ts
 scripts/tests/local-supabase/.work/
 scripts/tests/local-supabase/supabase/.temp/
 scripts/tests/local-supabase/supabase/.branches/
+
+# Separate local static-reader build output.
+dist-reader/
