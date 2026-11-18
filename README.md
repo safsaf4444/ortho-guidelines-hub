@@ -4,29 +4,20 @@
 
 **Live app: https://safsaf4444.github.io/ortho-guidelines-hub/**
 
-A curated, mobile-friendly directory of current orthopaedic guidance for doctors — combining national guidance, specialist society guidance, and local pathways. A navigation tool and quick-reference hub for ward, on-call, and clinic use; not a replacement for source guidance or clinical judgement.
+A curated index of orthopaedic guidance and reference resources. The bundled snapshot contains 231 entries generated on 10 September 2026, not 231 independently verified current guidelines. Consult original publishers and local policy; clinical, rights and institutional acceptance remain outstanding.
 
 Built with React + TypeScript + Vite, backed by Supabase (with automatic fallback to bundled static data when no database is configured).
 
-## Supabase setup
+## Local acceptance work
 
-The app works without a database (falls back to static data), but to enable database mode:
+Use isolated worktrees and credential-free local tests. Do not run seed, export, upsert or migration commands as part of preview preparation. Those commands contact or change databases and require separate authorisation. Never place service-role keys in frontend configuration.
 
-1. Copy `.env.example` to `.env.local`.
-2. In [Supabase](https://app.supabase.com) → your project → **Project Settings → API**, copy:
-   - **Project URL** (the base URL, e.g. `https://abcdefgh.supabase.co` — not the `/rest/v1/...` endpoint) → `VITE_SUPABASE_URL`
-   - **anon / publishable key** → `VITE_SUPABASE_ANON_KEY`
-   - **service_role key** (keep secret, never in browser code) → `SUPABASE_SERVICE_ROLE_KEY`
-3. Run the schema in the Supabase SQL editor: paste the contents of `supabase-schema.sql` and execute.
-4. Seed the database: `npm run seed`
-5. Start the app: `npm run dev`
-
-`VITE_*` variables are exposed to the frontend bundle — only put the anon key there, never the service role key. `SUPABASE_SERVICE_ROLE_KEY` is read by `scripts/*.ts` and — when present — by `npm run dev` to enable local editing. It is never included in a build; see [SECURITY.md](SECURITY.md).
+The existing static-preview configuration disables database use, but the application still imports editorial modules. It is NOT the separate reader-only import boundary requested for release. `vite.reader-boundary.config.ts` deliberately fails until that boundary is extracted. See STATIC-READER-PLAN.md. No public deployment is authorised.
 
 ## Security — current status
 
 **Status: guideline content is editable only by named editor accounts.**
-Verified live on 11 October 2026 — there is no anonymous write policy on any
+Historical verification claim dated 11 October 2026 (not reverified for the current target) — there is no anonymous write policy on any
 table.
 
 Read [SECURITY.md](SECURITY.md) before changing anything in this area.
@@ -111,7 +102,7 @@ The app is installable as a PWA. A service worker (via `vite-plugin-pwa`) caches
 - **Android (Chrome):** browser menu → *Install app* / *Add to Home screen*.
 - **iPhone / iPad (Safari):** there is no automatic prompt — tap the **Share** button, then *Add to Home Screen*.
 
-**How updates propagate:** the service worker uses `autoUpdate`. Each successful deploy produces newly hashed assets; when an installed or open app next loads, the new version is fetched and activated automatically in the background. Users get the latest content on their next visit or reload — there is no manual update step and no update prompt.
+**How updates propagate:** the service worker uses prompt mode. A newly waiting worker triggers a refresh prompt; accepting it activates the update and reloads. Offline caching does not make publisher documents available offline or certify their currency.
 
 Currently, two official plugins are available:
 

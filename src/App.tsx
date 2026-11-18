@@ -33,6 +33,7 @@ import { findGapNote } from './lib/gap-detection'
 import { buildCatalogue, catalogueRowCount } from './lib/catalogue'
 import { filterGuidelinesOutcome, hasActiveFilters, resultCountText, emptyResultText, NEW_TAB_REL } from './lib/guideline-filter'
 import { editionLabel, uniqueRankedResults, associatedSections, primarySourceShortcut, linkCheckContext, sortSections } from './lib/public-presentation'
+import { filterPresentation } from './lib/reader-filters'
 import { usePwaUpdate } from './lib/pwa-update'
 import { prepareChangeNote, isValidChangeNote, archiveNote, linkStatusNote, mergeNote, MAX_NOTE_LENGTH } from './lib/change-note'
 
@@ -77,7 +78,7 @@ const WRITES_ENABLED: boolean = import.meta.env.VITE_STATIC_PREVIEW !== 'true';
 // Axis 2 — GUIDANCE STATUS. Is the guidance itself current? An editor decides.
 
 const LINK_STATUS_OPTIONS: { value: NonNullable<Guideline['linkVerificationStatus']>; label: string; hint: string }[] = [
-  { value: 'unchecked',    label: 'Not checked',    hint: 'No automated check has run against this link yet.' },
+  { value: 'unchecked',    label: 'Not checked',    hint: 'No link-check result is recorded for this entry.' },
   { value: 'verified',     label: 'Reachable',      hint: 'Recorded as reachable at the stored check date. Not a clinical review; this may not cover every version link.' },
   { value: 'moved',        label: 'Moved',          hint: 'The link still works but now redirects to a different document.' },
   { value: 'needs-review', label: 'Check failed',   hint: 'The server errored or timed out. May be temporary — worth re-checking.' },
@@ -332,6 +333,10 @@ export default function App() {
   const [currentSection, setCurrentSection] = useState(initialSectionFromHash);
   const [searchQuery, setSearchQuery] = useState('');
   const [linkStatusFilter, setLinkStatusFilter] = useState('All');
+  const [publisherFilter, setPublisherFilter] = useState('All');
+  const [specialtyFilter, setSpecialtyFilter] = useState('All');
+  const publisherOptions = [...new Set(guidelines.map(g => canonicalProvider(g.source)))].sort();
+  const specialtyOptions = sortSections([...new Set(guidelines.flatMap(associatedSections))]);
   // This toggle only changes how cards are grouped/labelled in the main panel —
   // same underlying data, no schema change, just a different lens on it.
   const [groupBy, setGroupBy] = useState<'section' | 'provider'>('section');
@@ -413,16 +418,19 @@ export default function App() {
   const activeFilter = { section: currentSection, linkStatus: linkStatusFilter, query: searchQuery };
   const searchOutcome = filterGuidelinesOutcome(guidelines, activeFilter);
   const isSearching = searchQuery.trim().length > 0;
-  const filteredData = isSearching ? uniqueRankedResults(searchOutcome.ordered) : searchOutcome.ordered;
+  const presentationResults = filterPresentation(searchOutcome.ordered, publisherFilter, specialtyFilter);
+  const filteredData = isSearching ? uniqueRankedResults(presentationResults) : presentationResults;
 
   // Phase 4 item E — "Clear filters" is shown only when something is actually
   // narrowing the list: free-text search, the link-check filter, or a
   // section chosen from the sidebar.
-  const filtersActive = hasActiveFilters(activeFilter);
+  const filtersActive = hasActiveFilters(activeFilter) || publisherFilter !== 'All' || specialtyFilter !== 'All';
 
   const clearFilters = () => {
     setSearchQuery('');
     setLinkStatusFilter('All');
+    setPublisherFilter('All');
+    setSpecialtyFilter('All');
     setCurrentSection('All');
     // The button that was pressed disappears with the filters; put focus
     // somewhere useful rather than letting it fall to <body>.
@@ -1137,7 +1145,7 @@ Add a note from the entry to restore the audit trail.`
         </NavigationDrawer>
 
         {/* Main */}
-        <main id="main-content" tabIndex={-1} className={cn("min-w-0 flex-1 flex flex-col bg-[#F8FAFC] overflow-y-auto relative focus:outline-none",
+        <main id="main-content" tabIndex={0} className={cn("min-w-0 flex-1 flex flex-col bg-[#F8FAFC] overflow-y-auto relative focus:outline-none",
           // Reading-surface sizing and wrapping from the public UI review (browse views only).
           ![ADMIN_VIEW, DUPLICATES_VIEW, CHANGELOG_VIEW, REVIEW_QUEUE_VIEW, CATALOGUE_VIEW, ABOUT_VIEW].includes(currentSection) && "public-browse")}>
 
@@ -1149,6 +1157,9 @@ Add a note from the entry to restore the audit trail.`
             </div>
           )}
 
+          <p className="px-4 py-2 text-xs text-slate-700 bg-white border-b border-slate-200">
+            Independent student-built index; no NHS or Trust endorsement is established. Entries include guidance and other resources, not individually verified current guidelines. Descriptions are finding aids, not instructions: consult the original publisher and local policy. Completeness and currency are not guaranteed.
+          </p>
           {/* Keep the snapshot disclosure in the reading flow: a fixed notice
               can cover every focused control in a short, highly zoomed viewport.
               It remains present until live data returns, never timed out or hidden. */}
@@ -1277,6 +1288,18 @@ Add a note from the entry to restore the audit trail.`
                     <option value="All">All link-check statuses</option>
                     {LINK_STATUS_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
                   </select>
+                  <label className="text-xs text-slate-700 flex flex-col gap-1 max-w-full">Publisher group
+                    <select aria-label="Filter by publisher group" value={publisherFilter} onChange={e => setPublisherFilter(e.target.value)} className="min-h-11 max-w-full border border-slate-300 rounded bg-white px-2">
+                      <option value="All">All publisher groups</option>
+                      {publisherOptions.map(p => <option key={p} value={p}>{p}</option>)}
+                    </select>
+                  </label>
+                  <label className="text-xs text-slate-700 flex flex-col gap-1 max-w-full">Specialty (including cross-listings)
+                    <select aria-label="Filter by specialty" value={specialtyFilter} onChange={e => setSpecialtyFilter(e.target.value)} className="min-h-11 max-w-full border border-slate-300 rounded bg-white px-2">
+                      <option value="All">All specialties</option>
+                      {specialtyOptions.map(p => <option key={p} value={p}>{p}</option>)}
+                    </select>
+                  </label>
                   {isSearching && <span className="text-[11px] text-slate-600">Search stays ranked; browse layout:</span>}
                   {/* Group-by toggle: same filtered data, different lens on the main panel.
                       Sidebar section filtering is untouched — this only changes how the
@@ -3073,7 +3096,7 @@ function AboutView({ guidelines }: { guidelines: Guideline[] }) {
       </div>
       <p className={p}>Withdrawn or superseded guidance requires source interpretation; an HTTP response alone cannot establish either. Dates are stored metadata, not evidence that every linked version or recommendation was reviewed.</p>
       <h3 className={h2}>Review and maintenance</h3>
-      <p className={p}>Recorded review dates are shown for transparency. Reviewer identity and supporting clinical evidence are not established by those dates alone. Missing scope means scope has not been recorded in this entry.</p>
+      <p className={p}>The weekly link checker produces a reachability report; it does not automatically update these badges. Stored link dates may originate from imports and do not establish how a check was performed. Recorded review dates are shown for transparency. Reviewer identity and supporting clinical evidence are not established by those dates alone. Missing scope means scope has not been recorded in this entry.</p>
       <p className={p}>Search matches and ranks catalogue metadata. Search results show each guideline once with its section associations; category browsing may show the same entry under several sections. Offline use shows a cached copy and may omit later changes.</p>
       <p className={p}>Administration contains existing review, history and export tools. Access to a control does not grant permission to write. Authentication and server-side permissions still apply; editorial production remains on hold. This page does not attest to the live system's jobs, grants or audit completeness.</p>
       <h3 className={h2}>Gaps and corrections</h3>

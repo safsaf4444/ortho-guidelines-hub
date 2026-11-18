@@ -19,5 +19,5 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["vite.config.ts", "vite.static-preview.config.ts"]
+  "include": ["vite.config.ts", "vite.static-preview.config.ts", "vite.reader-boundary.config.ts"]
 }

@@ -1,3 +1,4 @@
+import { filterPresentation } from '../../src/lib/reader-filters';
 import fs from 'node:fs';import assert from 'node:assert/strict';
 import {GUIDELINES_DATA as data} from '../../src/data/guidelines-data';
 import {applySearchToCatalogue} from '../../src/lib/search/app-adapter';
@@ -13,7 +14,7 @@ const sections=[...new Set(data.flatMap(g=>[g.section,...(g.crossListedIn??[])])
 for(const status of ['broken','withdrawn','superseded'] as const)assert.equal(primarySourceShortcut({...data[0],linkVerificationStatus:status}),undefined);
 for(const url of ['#','','javascript:alert(1)','data:text/html,test'])assert.equal(primarySourceShortcut({...data[0],versions:[{url,label:'test'}]}),undefined);
 assert.equal(primarySourceShortcut({...data[0],versions:[{url:'https://example.test/source',label:'test'}],linkVerificationStatus:'blocked'}),'https://example.test/source');
-fs.mkdirSync('reports/ux-model',{recursive:true});fs.writeFileSync('reports/ux-model/expected.json',JSON.stringify({queries:results},null,2));
+fs.mkdirSync('reports/ux-model',{recursive:true});fs.writeFileSync('reports/ux-model/expected.json',JSON.stringify({queries:results,readerFacets:{hip:hip.map(g=>g.id),niceTrauma:filterPresentation(data,'NICE','Trauma').map(g=>g.id)}},null,2));
 console.log('PASS 64 benchmark and 16 held-out presentation orders; unique IDs; filters; associations; deterministic sections; safe source shortcuts.');console.log('hip fracture: '+hip.length+' unique results; category placements '+hip.reduce((n,g)=>n+1+(g.crossListedIn?.length??0),0));
 
 console.log(results.length + ' passed, 0 failed');
