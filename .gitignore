@@ -67,3 +67,6 @@ scripts/tests/local-supabase/supabase/.branches/
 /FINAL-HANDOFF.md
 /final-integration.patch
 /final-integration.patch.sha256
+
+# Separate local reader build
+dist-reader/

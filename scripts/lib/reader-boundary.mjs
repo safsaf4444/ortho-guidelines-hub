@@ -10,7 +10,8 @@ export function readerBoundary() {
       const modules = [...this.getModuleIds()].sort();
       const forbidden = forbiddenReaderModules(modules);
       if (forbidden.length) this.error('READER ISOLATION BLOCKED: ' + forbidden.join('\n'));
-      this.emitFile({type:'asset', fileName:'reader-module-manifest.json', source:JSON.stringify({modules, forbidden},null,2)});
+      const safeModules = modules.map(id => { const normalized=id.replaceAll('\\','/'); const local=normalized.indexOf('/src/')>=0 ? normalized.slice(normalized.indexOf('/src/')+1) : normalized.indexOf('/reader/')>=0 ? normalized.slice(normalized.indexOf('/reader/')+1) : normalized.indexOf('/node_modules/')>=0 ? normalized.slice(normalized.indexOf('/node_modules/')+1) : normalized; return local; });
+      this.emitFile({type:'asset', fileName:'reader-module-manifest.json', source:JSON.stringify({modules:safeModules, forbidden},null,2)});
     },
   };
 }

@@ -12,7 +12,7 @@ Built with React + TypeScript + Vite, backed by Supabase (with automatic fallbac
 
 Use isolated worktrees and credential-free local tests. Do not run seed, export, upsert or migration commands as part of preview preparation. Those commands contact or change databases and require separate authorisation. Never place service-role keys in frontend configuration.
 
-The existing static-preview configuration disables database use, but the application still imports editorial modules. It is NOT the separate reader-only import boundary requested for release. `vite.reader-boundary.config.ts` deliberately fails until that boundary is extracted. See STATIC-READER-PLAN.md. No public deployment is authorised.
+The legacy static-preview configuration still imports editorial modules. For a separate local reader build use `npm run build:reader` followed by `npm run check:reader-boundary`. The reader entry is `reader/index.html`; the boundary check audits source modules and emitted assets. The editor app remains a separate build and production editorial remains on HOLD. A passing local reader build does not authorise publication. No public deployment is authorised.
 
 ## Security — current status
 
