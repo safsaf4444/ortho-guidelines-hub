@@ -897,14 +897,12 @@ Add a note from the entry to restore the audit trail.`
 
   return (
     <DraftOwnerContext.Provider value={draftOwner}>
-    <div className="flex flex-col h-screen overflow-hidden bg-white font-sans text-slate-800">
+    <div className="flex h-dvh flex-col overflow-hidden bg-white font-sans text-slate-800">
 
       {/* Header */}
       <header className="h-[56px] bg-white border-b border-slate-200 flex items-center justify-between px-5 shrink-0 z-50">
-        {/* min-w-0 lets the title's `truncate` actually engage; without it
-            this group kept its full width and overflowed the header by 1px
-            at 375px. */}
-        <div className="flex items-center gap-3 min-w-0">
+        {/* Let the brand wrap within the space left by the header actions. */}
+        <div className="flex min-w-0 items-center gap-2 sm:gap-3">
           {/* Icon-only, so it needs a name. The name says what a tap will do
               and aria-expanded reports the drawer's state. w-11/h-11 is a 44px
               tap target; -mx-3 cancels the extra 24px so the header lays out
@@ -920,11 +918,11 @@ Add a note from the entry to restore the audit trail.`
           >
             <Menu className="w-5 h-5" aria-hidden="true" />
           </button>
-          <div className="bg-[#0F172A] text-white w-7 h-7 rounded flex items-center justify-center font-semibold text-sm shrink-0">
+          <div className="hidden size-7 shrink-0 items-center justify-center rounded bg-[#0F172A] text-sm font-semibold text-white sm:flex">
             O
           </div>
           <div className="flex flex-col leading-none min-w-0">
-            <span className="font-serif text-[1rem] text-slate-900 leading-tight truncate">Orthopaedic Guidelines Hub</span>
+            <span className="break-words font-serif text-base leading-tight text-slate-900">Orthopaedic Guidelines Hub</span>
             {/* md: not sm: — deliberately matches the hamburger's own
                 `md:hidden` breakpoint below. Between 640-767px, sm: would
                 show this alongside the still-visible mobile hamburger and
@@ -939,7 +937,7 @@ Add a note from the entry to restore the audit trail.`
           </div>
         </div>
 
-        <div className="flex items-center gap-3 shrink-0">
+        <div className="flex shrink-0 items-center gap-1 sm:gap-3">
           {/* Supabase connection badge.
               lg: not md: — at md (768px) this badge, the since-removed
               "Editor sign in" control, and both button text labels together
@@ -1029,7 +1027,7 @@ Add a note from the entry to restore the audit trail.`
       )}
 
       {/* Body */}
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex min-h-0 flex-1 overflow-hidden">
 
         {isSidebarOpen && (
           <div
@@ -1040,7 +1038,7 @@ Add a note from the entry to restore the audit trail.`
 
         {/* Sidebar */}
         <aside id="sections-drawer" aria-label="Sections" className={cn(
-          "w-[240px] bg-white border-r border-slate-200 flex flex-col justify-between overflow-y-auto shrink-0 transition-transform duration-300 z-40",
+          "w-[240px] max-w-full bg-white border-r border-slate-200 flex flex-col justify-between overflow-y-auto shrink-0 transition-transform duration-300 z-40",
           "fixed md:relative top-[56px] md:top-0 bottom-0 left-0",
           isSidebarOpen ? "translate-x-0" : "-translate-x-full md:translate-x-0"
         )}>
@@ -1147,7 +1145,7 @@ Add a note from the entry to restore the audit trail.`
         </aside>
 
         {/* Main */}
-        <main className="flex-1 flex flex-col bg-[#F8FAFC] overflow-y-auto relative">
+        <main className="relative flex min-w-0 flex-1 flex-col overflow-y-auto bg-[#F8FAFC] [overflow-wrap:anywhere]">
 
           {/* Search hero. Sticky within `main`'s own scroll area (main is the
               nearest scrolling ancestor, so top-0 here means "top of the
@@ -1183,7 +1181,7 @@ Add a note from the entry to restore the audit trail.`
           )}
 
           {/* Toolbar */}
-          {currentSection !== ABOUT_VIEW && <div className="px-5 py-1.5 flex justify-between items-center gap-2 border-b border-slate-100 bg-white shrink-0">
+          {currentSection !== ABOUT_VIEW && <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-slate-100 bg-white px-4 py-1.5 sm:px-5">
             {currentSection === DUPLICATES_VIEW ? (
               <span className="text-[11px] text-slate-500">
                 Heuristic matches only — nothing is merged or deleted automatically.
@@ -1206,17 +1204,17 @@ Add a note from the entry to restore the audit trail.`
               </span>
             ) : (
               <>
-                <span className="text-[11px] text-slate-500 hidden md:block">
+                <span className="hidden text-[11px] text-slate-500 lg:block">
                   Tap a card to expand sources and versions.
                 </span>
-                <div className="flex items-center gap-2 w-full md:w-auto">
+                <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
                   {/* Search input lives in the sticky hero above (see "Search
                       hero + quick-access chips") — one searchQuery input, not
                       two. */}
                   <select
                     value={linkStatusFilter}
                     onChange={e => setLinkStatusFilter(e.target.value)}
-                    className="px-2.5 py-2 border border-slate-200 rounded text-[12px] bg-white focus:outline-none focus:ring-1 focus:ring-slate-300 shrink-0"
+                    className="min-w-0 max-w-full rounded border border-slate-200 bg-white px-2.5 py-2 text-xs focus:outline-none focus:ring-1 focus:ring-slate-300"
                   >
                     <option value="All">All link-check statuses</option>
                     {LINK_STATUS_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
@@ -1224,7 +1222,7 @@ Add a note from the entry to restore the audit trail.`
                   {/* Group-by toggle: same filtered data, different lens on the main panel.
                       Sidebar section filtering is untouched — this only changes how the
                       resulting cards are bucketed and labelled below. */}
-                  <div className="hidden md:flex items-center border border-slate-200 rounded overflow-hidden shrink-0">
+                  <div className="flex max-w-full items-center overflow-hidden rounded border border-slate-200">
                     <button
                       onClick={() => setGroupBy('section')}
                       title="Group cards by clinical section"
@@ -1464,11 +1462,11 @@ function CatalogueView({ guidelines }: { guidelines: Guideline[] }) {
 
   // Shared column widths so the header and every row stay aligned.
   const COL = {
-    type: 'w-[150px]',
-    status: 'w-[104px]',
-    date: 'w-[92px]',
-    flags: 'w-[38px]',
-    source: 'w-[74px]',
+    type: 'xl:w-[150px]',
+    status: 'xl:w-[104px]',
+    date: 'xl:w-[92px]',
+    flags: 'xl:w-[38px]',
+    source: 'xl:w-[74px]',
   };
 
   return (
@@ -1479,13 +1477,8 @@ function CatalogueView({ guidelines }: { guidelines: Guideline[] }) {
         </span>
       </div>
 
-      {/* Horizontal scroll is confined to this wrapper rather than the page:
-          this is a dense table, and letting the columns collapse would
-          defeat its purpose. */}
-      <div className="overflow-x-auto">
-        <div className="min-w-[880px]">
-
-          <div className="flex items-center gap-2 px-3 py-1.5 border-b border-slate-200 bg-slate-50 text-[9px] font-semibold text-slate-500 uppercase tracking-widest sticky top-0 z-10">
+      <div>
+          <div className="sticky top-0 z-10 hidden items-center gap-2 border-b border-slate-200 bg-slate-50 px-3 py-1.5 text-[9px] font-semibold uppercase tracking-widest text-slate-500 xl:flex">
             <span className="flex-1 min-w-0">Topic</span>
             <span className={COL.type}>Type</span>
             <span className={COL.status}>Link check</span>
@@ -1532,13 +1525,13 @@ function CatalogueView({ guidelines }: { guidelines: Guideline[] }) {
                             }
                           }}
                           className={cn(
-                            "flex items-center gap-2 px-3 py-1.5 text-[11px] cursor-pointer hover:bg-slate-50 transition-colors",
+                            "flex flex-wrap items-baseline gap-x-3 gap-y-1 px-3 py-2 text-xs cursor-pointer hover:bg-slate-50 transition-colors xl:flex-nowrap xl:items-center xl:gap-2 xl:py-1.5",
                             "focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-slate-400",
                             isOpen && "bg-slate-50"
                           )}
                         >
-                          <span className="flex-1 min-w-0 flex items-center gap-1.5">
-                            <span className="min-w-0 truncate text-slate-800" title={item.topic}>
+                          <span className="flex min-w-0 basis-full flex-wrap items-center gap-1.5 xl:flex-1">
+                            <span className="min-w-0 font-medium text-slate-800" title={item.topic}>
                               {item.topic}
                             </span>
                             {/* Only non-current statuses are shown: the Link check
@@ -1556,10 +1549,11 @@ function CatalogueView({ guidelines }: { guidelines: Guideline[] }) {
                               </span>
                             )}
                           </span>
-                          <span className={cn(COL.type, "shrink-0 truncate text-slate-500")} title={item.type}>
+                          <span className={cn(COL.type, "min-w-0 text-slate-500 xl:shrink-0")}>
                             {item.type}
                           </span>
-                          <span className={cn(COL.status, "shrink-0")}>
+                          <span className={cn(COL.status, "min-w-0 xl:shrink-0")}>
+                            <span className="mr-1 text-slate-500 xl:sr-only">Link check</span>
                             <span className={cn(
                               "inline-block px-1.5 py-px rounded border text-[10px] font-medium",
                               linkStatusBadgeClass(status)
@@ -1567,10 +1561,11 @@ function CatalogueView({ guidelines }: { guidelines: Guideline[] }) {
                               {LINK_STATUS_OPTIONS.find(o => o.value === status)?.label}
                             </span>
                           </span>
-                          <span className={cn(COL.date, "shrink-0 text-slate-500 tabular-nums")}>
+                          <span className={cn(COL.date, "min-w-0 text-slate-500 tabular-nums xl:shrink-0")}>
+                            <span className="mr-1 xl:sr-only">Last checked</span>
                             {item.linkLastVerified ?? '—'}
                           </span>
-                          <span className={cn(COL.flags, "shrink-0")}>
+                          <span className={cn(COL.flags, "empty:hidden xl:block xl:shrink-0")}>
                             {item.regionalVariation && (
                               <span
                                 title="Regional variation — check local trust protocol"
@@ -1580,7 +1575,7 @@ function CatalogueView({ guidelines }: { guidelines: Guideline[] }) {
                               </span>
                             )}
                           </span>
-                          <span className={cn(COL.source, "shrink-0")}>
+                          <span className={cn(COL.source, "ml-auto xl:ml-0 xl:shrink-0")}>
                             {hasPrimary ? (
                               <a
                                 href={primaryUrl}
@@ -1590,7 +1585,7 @@ function CatalogueView({ guidelines }: { guidelines: Guideline[] }) {
                                 title="Open source guidance in a new tab"
                                 className="inline-flex items-center gap-1 text-slate-600 hover:text-slate-900 underline underline-offset-2"
                               >
-                                Open
+                                <span>Open<span className="xl:sr-only"> source</span></span>
                                 <ExternalLink className="w-3 h-3 shrink-0" />
                               </a>
                             ) : (
@@ -1633,15 +1628,15 @@ function CatalogueView({ guidelines }: { guidelines: Guideline[] }) {
                                 </div>
                                 <div className="flex flex-col">
                                   {item.versions.map((v, i) => (
-                                    <div key={i} className="flex items-center gap-2 py-0.5">
+                                    <div key={i} className="flex flex-wrap items-center gap-x-2 gap-y-1 py-0.5">
                                       {v.url && v.url !== '#' ? (
                                         <a
                                           href={v.url}
                                           target="_blank"
                                           rel="noopener noreferrer"
-                                          className="text-slate-600 hover:text-slate-900 underline underline-offset-2 inline-flex items-center gap-1"
+                                          className="inline-flex min-w-0 items-center gap-1 text-slate-600 underline underline-offset-2 hover:text-slate-900"
                                         >
-                                          {v.label}
+                                          <span className="min-w-0">{v.label}</span>
                                           <ExternalLink className="w-2.5 h-2.5 shrink-0" />
                                         </a>
                                       ) : (
@@ -1678,7 +1673,6 @@ function CatalogueView({ guidelines }: { guidelines: Guideline[] }) {
               ))}
             </section>
           ))}
-        </div>
       </div>
     </div>
   );
@@ -2022,10 +2016,10 @@ function GuidelineCard({
                         // closer to a real touch target on a phone. Label
                         // wraps rather than truncates — it can carry real
                         // content (edition/date), not just chrome.
-                        className="text-[11px] text-slate-600 hover:text-slate-900 hover:underline flex items-center gap-1 py-2"
+                        className="flex min-w-0 items-center gap-1 py-2 text-[11px] text-slate-600 hover:text-slate-900 hover:underline"
                         onClick={e => e.stopPropagation()}
                       >
-                        {v.label}
+                        <span className="min-w-0">{v.label}</span>
                         <ExternalLink className="w-3 h-3 shrink-0 text-slate-500" />
                       </a>
                     ) : (
@@ -2435,7 +2429,7 @@ function EditModal({
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-3" onClick={onClose}>
       <div
-        className="bg-white rounded-lg w-full max-w-[500px] max-h-[88vh] flex flex-col shadow-xl"
+        className="flex max-h-[calc(100dvh-1.5rem)] w-full max-w-[500px] flex-col rounded-lg bg-white shadow-xl [overflow-wrap:anywhere]"
         onClick={e => e.stopPropagation()}
       >
         {/* Header */}

@@ -427,8 +427,8 @@ function HeaderControl({
           ref={panelRef}
           role="dialog"
           aria-label="Editor sign in"
-          className="absolute right-0 top-[calc(100%+6px)] z-50 w-[280px] rounded-md border border-slate-200
-                     bg-white shadow-lg p-3"
+          className="fixed inset-x-3 top-16 z-50 max-h-[calc(100dvh-5rem)] overflow-y-auto rounded-md border border-slate-200
+                     bg-white p-3 shadow-lg [overflow-wrap:anywhere] sm:absolute sm:left-auto sm:right-0 sm:top-[calc(100%+6px)] sm:w-[280px]"
         >
           {recoveryError && (
             <p role="alert" className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded px-2 py-1.5 mb-2">
