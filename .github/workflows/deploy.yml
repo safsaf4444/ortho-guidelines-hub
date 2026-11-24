@@ -77,10 +77,54 @@ jobs:
         uses: actions/configure-pages@v5
 
       - name: Upload artifact
+        id: upload
         uses: actions/upload-pages-artifact@v4
         with:
           path: './dist'
 
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          PAGES_ARTIFACT_ID: ${{ steps.upload.outputs.artifact_id }}
+        with:
+          script: |
+            // Use the uploaded ID because the runner-side list can miss the artifact.
+            const artifact_id = Number(process.env.PAGES_ARTIFACT_ID);
+            if (!Number.isSafeInteger(artifact_id) || artifact_id <= 0) {
+              throw new Error('Pages upload did not return a valid artifact ID.');
+            }
+            const oidc_token = await core.getIDToken();
+            core.setSecret(oidc_token);
+            let deployment;
+            try {
+              ({ data: deployment } = await github.request('POST /repos/{owner}/{repo}/pages/deployments', {
+                ...context.repo,
+                artifact_id,
+                pages_build_version: context.sha,
+                oidc_token,
+              }));
+            } catch (error) {
+              throw new Error(`Cannot create Pages deployment (HTTP ${error.status ?? 'unknown'}).`);
+            }
+            const pages_deployment_id = deployment.id ?? deployment.status_url?.split('/').pop() ?? context.sha;
+            const deadline = Date.now() + 600_000;
+            const failures = new Set([
+              'deployment_failed', 'deployment_perms_error', 'deployment_content_failed',
+              'deployment_cancelled', 'deployment_lost',
+            ]);
+            while (Date.now() < deadline) {
+              const { data } = await github.request('GET /repos/{owner}/{repo}/pages/deployments/{pages_deployment_id}', {
+                ...context.repo,
+                pages_deployment_id,
+              });
+              if (data.status === 'succeed') {
+                core.setOutput('page_url', deployment.page_url);
+                return;
+              }
+              if (failures.has(data.status)) {
+                throw new Error(`Pages deployment ended with status ${data.status}.`);
+              }
+              await new Promise(resolve => setTimeout(resolve, 5_000));
+            }
+            throw new Error('Timed out waiting for Pages deployment.');
