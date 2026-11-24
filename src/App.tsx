@@ -9,6 +9,7 @@ import { computeMerge } from './lib/dedupe'
 import { cn } from './lib/utils'
 import ReviewDashboard from './components/ReviewDashboard'
 import EditorAuthControl from './components/EditorAuthControl'
+import AboutHub from './components/AboutHub'
 import { useEditorSession } from './lib/editor-session'
 import { draftOwnerKey, DraftOwnerContext } from './lib/draft-owner'
 import { stagedService } from './lib/staged-service'
@@ -1182,7 +1183,7 @@ Add a note from the entry to restore the audit trail.`
           )}
 
           {/* Toolbar */}
-          <div className="px-5 py-1.5 flex justify-between items-center gap-2 border-b border-slate-100 bg-white shrink-0">
+          {currentSection !== ABOUT_VIEW && <div className="px-5 py-1.5 flex justify-between items-center gap-2 border-b border-slate-100 bg-white shrink-0">
             {currentSection === DUPLICATES_VIEW ? (
               <span className="text-[11px] text-slate-500">
                 Heuristic matches only — nothing is merged or deleted automatically.
@@ -1194,10 +1195,6 @@ Add a note from the entry to restore the audit trail.`
                     guideline cascades to its notes. "Can't be edited or deleted"
                     full stop would be untrue. */}
                 Full edit history across all guidelines, newest first. Append-only — notes can't be edited or deleted through this site.
-              </span>
-            ) : currentSection === ABOUT_VIEW ? (
-              <span className="text-[11px] text-slate-500">
-                What this hub covers, how entries are reviewed, and what the status badges do and don't mean.
               </span>
             ) : currentSection === REVIEW_QUEUE_VIEW ? (
               <span className="text-[11px] text-slate-500">
@@ -1262,14 +1259,13 @@ Add a note from the entry to restore the audit trail.`
                 </div>
               </>
             )}
-          </div>
+          </div>}
 
           {/* Cards */}
-          {/* The catalogue is a wide dense table and needs the full panel
-              width; every other view keeps the readable max-w-4xl measure. */}
+          {/* The catalogue and About page use the full available panel. */}
           <div className={cn(
             "px-4 pt-3 pb-8 w-full",
-            currentSection !== CATALOGUE_VIEW && "max-w-4xl"
+            currentSection !== CATALOGUE_VIEW && currentSection !== ABOUT_VIEW && "max-w-4xl"
           )}>
             {currentSection === DUPLICATES_VIEW ? (
               <DuplicatesPanel
@@ -1297,7 +1293,7 @@ Add a note from the entry to restore the audit trail.`
             ) : currentSection === CATALOGUE_VIEW ? (
               <CatalogueView guidelines={guidelines} />
             ) : currentSection === ABOUT_VIEW ? (
-              <AboutView guidelines={guidelines} />
+              <AboutHub />
             ) : dataState === 'loading' ? (
               /* Loading is its own state, checked BEFORE the zero-result branch.
                  Without this, an empty list mid-fetch fell through to
@@ -2836,120 +2832,6 @@ This archives the entry rather than deleting it: it disappears from the site, bu
           </div>
         </div>
       </div>
-    </div>
-  );
-}
-
-// ─── About / methodology ──────────────────────────────────────────────────────
-// The page the status badges link to. It exists because two things on a card
-// are easy to misread: an automated link check looks like a review, and an
-// entry's presence looks like a recommendation. Both are stated plainly here.
-
-function AboutView({ guidelines }: { guidelines: Guideline[] }) {
-  const total = guidelines.length;
-  const providers = new Set(guidelines.map(g => canonicalProvider(splitPublishers(g.source)[0] ?? g.source))).size;
-  const h2 = "text-[13px] font-semibold text-slate-800 mt-5 mb-1.5";
-  const p = "text-[12px] text-slate-600 leading-relaxed mb-2 max-w-2xl";
-  const li = "text-[12px] text-slate-600 leading-relaxed";
-
-  return (
-    <div className="mt-3 max-w-2xl">
-      <h2 className="text-[15px] font-semibold text-slate-800">About this hub &amp; how it is maintained</h2>
-      <p className={p + " mt-1.5"}>
-        A reference index of published UK orthopaedic guidance — currently {total} entries
-        from {providers} publishing bodies. It helps you find the right source document.
-        It does not reproduce guidance, and it is not a clinical decision tool.
-      </p>
-
-      <div className="border-l-2 border-amber-300 bg-amber-50 px-3 py-2 my-3">
-        <p className="text-[12px] text-amber-900 leading-relaxed m-0">
-          <strong>A checked link is not an endorsement.</strong> The link-check badge records
-          one thing: whether an automated request to the URL got a response. It is not a
-          review of the content, not a statement that the guidance is current, and not a
-          recommendation to follow it. Those judgements are the guidance status badge, and
-          ultimately yours.
-        </p>
-      </div>
-
-      <h3 className={h2}>What is in scope</h3>
-      <ul className="list-disc pl-4 space-y-1 mb-2">
-        <li className={li}>Guidance published by UK national bodies (NICE, GIRFT, NHS England) and UK specialist societies.</li>
-        <li className={li}>A small number of international sources, labelled <em>Outside UK</em>, where no UK equivalent was found.</li>
-        <li className={li}>Entries are indexed with a summary and a link. The source document is always the authority.</li>
-      </ul>
-      <p className={p}>
-        <strong>Local PRUH content is not published here yet</strong>, pending local sign-off.
-        Where you see a Local Overlay section, it currently holds national material relevant
-        to local pathway work — not PRUH-authored guidance.
-      </p>
-
-      <h3 className={h2}>The two status badges, and why there are two</h3>
-      <p className={p}>
-        They answer different questions and are produced by different things — a machine and
-        a person. Showing them as one badge is what made a withdrawn pathway look approved.
-      </p>
-      <div className="border border-slate-200 rounded-md divide-y divide-slate-100 mb-2">
-        <div className="px-3 py-2">
-          <div className="text-[11px] font-semibold text-slate-700 mb-1">Guidance status — set by an editor</div>
-          {GUIDANCE_STATUS_OPTIONS.map(o => (
-            <div key={o.value} className="flex gap-2 items-baseline py-0.5">
-              <span className={cn("text-[10px] px-1.5 py-px rounded border font-medium shrink-0", guidanceStatusBadgeClass(o.value))}>
-                {o.label}
-              </span>
-              <span className="text-[11px] text-slate-600">{o.hint}</span>
-            </div>
-          ))}
-        </div>
-        <div className="px-3 py-2">
-          <div className="text-[11px] font-semibold text-slate-700 mb-1">Link check — set automatically, weekly</div>
-          {LINK_STATUS_OPTIONS.map(o => (
-            <div key={o.value} className="flex gap-2 items-baseline py-0.5">
-              <span className={cn("text-[10px] px-1.5 py-px rounded border font-medium shrink-0", linkStatusBadgeClass(o.value))}>
-                {o.label}
-              </span>
-              <span className="text-[11px] text-slate-600">{o.hint}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-      <p className={p}>
-        Two of those link states — <em>Withdrawn</em> and <em>Superseded</em> — are only ever
-        set by a person. The automated check reads an HTTP status and never downloads the
-        page, so it cannot tell a withdrawn document from a URL that simply stopped working.
-        Claiming otherwise would be a guess presented as a finding.
-      </p>
-
-      <h3 className={h2}>How entries are reviewed</h3>
-      <ul className="list-disc pl-4 space-y-1 mb-2">
-        <li className={li}><strong>Editorial review</strong> — a person checks the entry against the source. The date is shown on each card.</li>
-        <li className={li}><strong>Link check</strong> — an automated job runs weekly and reports failures. It never changes an entry on its own; a person applies any change.</li>
-        <li className={li}><strong>Every edit is recorded.</strong> There are no accounts, so a change cannot be traced to a person — instead a written note is required on every edit, and those notes cannot be altered or removed through this site.</li>
-        <li className={li}><strong>Nothing is deleted.</strong> Removing an entry archives it. The record is kept and can be restored.</li>
-      </ul>
-      <p className={p}>
-        The two dates on a card are deliberately separate. An entry can have a link that
-        responds perfectly while the guidance behind it has been withdrawn — so a recent
-        link check tells you nothing about a stale editorial review, and vice versa.
-      </p>
-
-      <h3 className={h2}>Gaps and what they mean</h3>
-      <p className={p}>
-        Where a topic has been searched and no published UK guidance was found, an editor
-        records that explicitly as <em>No source identified</em>, with the reason. An absent
-        topic means nobody has looked yet — not that nothing exists. The two are different,
-        and only the first is a finding.
-      </p>
-
-      <h3 className={h2}>Corrections and contact</h3>
-      <p className={p}>
-        If an entry is wrong, out of date, or missing, the quickest fix is to edit it here —
-        every card has an Edit control and asks for a note explaining the change. For
-        anything that needs a conversation rather than an edit, raise it with the PRUH
-        orthopaedic team, or open an issue on the project repository.
-      </p>
-      <p className="text-[11px] text-slate-500 mb-2">
-        National reference only. Not a substitute for clinical judgement or local trust policy.
-      </p>
     </div>
   );
 }
