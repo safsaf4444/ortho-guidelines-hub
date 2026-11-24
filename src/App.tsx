@@ -10,6 +10,7 @@ import { cn } from './lib/utils'
 import ReviewDashboard from './components/ReviewDashboard'
 import EditorAuthControl from './components/EditorAuthControl'
 import NavigationDrawer from './components/NavigationDrawer'
+import AboutHub from './components/AboutHub'
 import { useEditorSession } from './lib/editor-session'
 import { draftOwnerKey, DraftOwnerContext } from './lib/draft-owner'
 import { stagedService } from './lib/staged-service'
@@ -1157,13 +1158,12 @@ Add a note from the entry to restore the audit trail.`
             </div>
           )}
 
-          <p className="px-4 py-2 text-xs text-slate-700 bg-white border-b border-slate-200">
+          {currentSection !== ABOUT_VIEW && <p className="px-4 py-2 text-xs text-slate-700 bg-white border-b border-slate-200">
             Independent student-built index; no NHS or Trust endorsement is established. Entries include guidance and other resources, not individually verified current guidelines. Descriptions are finding aids, not instructions: consult the original publisher and local policy. Completeness and currency are not guaranteed.
-          </p>
+          </p>}
           {/* Keep the snapshot disclosure in the reading flow: a fixed notice
-              can cover every focused control in a short, highly zoomed viewport.
-              It remains present until live data returns, never timed out or hidden. */}
-          {dataState === 'fallback' && (
+              can cover every focused control in a short, highly zoomed viewport. */}
+          {dataState === 'fallback' && currentSection !== ABOUT_VIEW && (
             <div
               role="status"
               className="shrink-0 bg-amber-50 border-b border-amber-200 px-4 py-2"
@@ -1241,7 +1241,7 @@ Add a note from the entry to restore the audit trail.`
           )}
 
           {/* Toolbar */}
-          <div className="px-5 py-1.5 flex justify-between items-center gap-2 border-b border-slate-100 bg-white shrink-0">
+          {currentSection !== ABOUT_VIEW && <div className="px-5 py-1.5 flex justify-between items-center gap-2 border-b border-slate-100 bg-white shrink-0">
             {currentSection === REVIEW_QUEUE_VIEW && <GovernanceReviewInbox enabled={canEdit} />}
             {currentSection === ADMIN_VIEW ? (<span className="text-[12px] text-slate-600">Existing permissions still apply. Production editorial remains on hold.</span>) : currentSection === DUPLICATES_VIEW ? (
               <span className="text-[11px] text-slate-500">
@@ -1254,10 +1254,6 @@ Add a note from the entry to restore the audit trail.`
                     guideline cascades to its notes. "Can't be edited or deleted"
                     full stop would be untrue. */}
                 Full edit history across all guidelines, newest first. Append-only — notes can't be edited or deleted through this site.
-              </span>
-            ) : currentSection === ABOUT_VIEW ? (
-              <span className="text-[11px] text-slate-500">
-                What this hub covers, how entries are reviewed, and what the status badges do and don't mean.
               </span>
             ) : currentSection === REVIEW_QUEUE_VIEW ? (
               <span className="text-[11px] text-slate-500">
@@ -1335,14 +1331,13 @@ Add a note from the entry to restore the audit trail.`
                 </div>
               </>
             )}
-          </div>
+          </div>}
 
           {/* Cards */}
-          {/* The catalogue is a wide dense table and needs the full panel
-              width; every other view keeps the readable max-w-4xl measure. */}
+          {/* The catalogue and About page use the full available panel. */}
           <div className={cn(
             "px-4 pt-3 pb-8 w-full",
-            currentSection !== CATALOGUE_VIEW && "max-w-4xl"
+            currentSection !== CATALOGUE_VIEW && currentSection !== ABOUT_VIEW && "max-w-4xl"
           )}>
             {currentSection === ADMIN_VIEW ? (
               <section aria-label="Administration tools" className="bg-white border border-slate-300 rounded-lg p-4">
@@ -1384,7 +1379,7 @@ Add a note from the entry to restore the audit trail.`
             ) : currentSection === CATALOGUE_VIEW ? (
               <CatalogueView guidelines={guidelines} />
             ) : currentSection === ABOUT_VIEW ? (
-              <AboutView guidelines={guidelines} />
+              <AboutHub headingLevel={2} />
             ) : dataState === 'loading' ? (
               /* Loading is its own state, checked BEFORE the zero-result branch.
                  Without this, an empty list mid-fetch fell through to
@@ -3043,67 +3038,6 @@ This archives the entry rather than deleting it: it disappears from the site, bu
           </div>
         </div>
       </div>
-    </div>
-  );
-}
-
-// ─── About / methodology ──────────────────────────────────────────────────────
-// The page the status badges link to. It exists because two things on a card
-// are easy to misread: an automated link check looks like a review, and an
-// entry's presence looks like a recommendation. Both are stated plainly here.
-
-function AboutView({ guidelines }: { guidelines: Guideline[] }) {
-  const total = guidelines.length;
-  const providers = new Set(guidelines.map(g => canonicalProvider(splitPublishers(g.source)[0] ?? g.source))).size;
-  const h2 = "text-[13px] font-semibold text-slate-800 mt-5 mb-1.5";
-  const p = "text-[12px] text-slate-600 leading-relaxed mb-2 max-w-2xl";
-
-  return (
-    <div className="mt-3 max-w-2xl">
-      <h2 className="text-[15px] font-semibold text-slate-800">About this hub &amp; how it is maintained</h2>
-      <p className={p + " mt-1.5"}>A searchable reference index with {total} loaded entries and {providers} publisher groups. It contains summaries and links to guidance and other reference resources. It is not a clinical decision tool or a complete inventory of available guidance.</p>
-      <div className="border-l-2 border-amber-300 bg-amber-50 px-3 py-2 my-3"><p className={p}><strong>A reachable link is not clinical verification.</strong> Recorded link checks describe past availability, not current recommendations, quality, licensing permission or approval to use guidance.</p></div>
-      <h3 className={h2}>Scope and sources</h3>
-      <p className={p}>The catalogue includes UK national bodies, specialist societies and some international resources. Inclusion does not establish that no UK alternative exists. Read the original source and follow local policy; labels and summaries may need review.</p>
-      <p className={p}>Section associations help discovery and do not establish local endorsement. A Local Overlay label does not mean that local clinical sign-off has occurred.</p>
-      <h3 className={h2}>The two status badges, and why there are two</h3>
-      <p className={p}>
-        Guidance status and link status are separate stored metadata. Neither establishes a completed clinical review or publisher permission.
-      </p>
-      <div className="border border-slate-200 rounded-md divide-y divide-slate-100 mb-2">
-        <div className="px-3 py-2">
-          <div className="text-[11px] font-semibold text-slate-700 mb-1">Recorded guidance status — confirm against the publisher</div>
-          {GUIDANCE_STATUS_OPTIONS.map(o => (
-            <div key={o.value} className="flex gap-2 items-baseline py-0.5">
-              <span className={cn("text-[10px] px-1.5 py-px rounded border font-medium shrink-0", guidanceStatusBadgeClass(o.value))}>
-                {o.label}
-              </span>
-              <span className="text-[11px] text-slate-600">{o.hint}</span>
-            </div>
-          ))}
-        </div>
-        <div className="px-3 py-2">
-          <div className="text-[11px] font-semibold text-slate-700 mb-1">Recorded link check — not a live availability guarantee</div>
-          {LINK_STATUS_OPTIONS.map(o => (
-            <div key={o.value} className="flex gap-2 items-baseline py-0.5">
-              <span className={cn("text-[10px] px-1.5 py-px rounded border font-medium shrink-0", linkStatusBadgeClass(o.value))}>
-                {o.label}
-              </span>
-              <span className="text-[11px] text-slate-600">{o.hint}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-      <p className={p}>Withdrawn or superseded guidance requires source interpretation; an HTTP response alone cannot establish either. Dates are stored metadata, not evidence that every linked version or recommendation was reviewed.</p>
-      <h3 className={h2}>Review and maintenance</h3>
-      <p className={p}>The weekly link checker produces a reachability report; it does not automatically update these badges. Stored link dates may originate from imports and do not establish how a check was performed. Recorded review dates are shown for transparency. Reviewer identity and supporting clinical evidence are not established by those dates alone. Missing scope means scope has not been recorded in this entry.</p>
-      <p className={p}>Search matches and ranks catalogue metadata. Search results show each guideline once with its section associations; category browsing may show the same entry under several sections. Offline use shows a cached copy and may omit later changes.</p>
-      <p className={p}>Administration contains existing review, history and export tools. Access to a control does not grant permission to write. Authentication and server-side permissions still apply; editorial production remains on hold. This page does not attest to the live system's jobs, grants or audit completeness.</p>
-      <h3 className={h2}>Gaps and corrections</h3>
-      <p className={p}>A missing search result does not prove that guidance does not exist. Try different terms, clear filters or browse the full catalogue. No missing-guideline submission route is provided here. Catalogue corrections require the project's approved review process.</p>
-      <p className="text-[11px] text-slate-500 mb-2">
-        National reference only. Not a substitute for clinical judgement or local trust policy.
-      </p>
     </div>
   );
 }
